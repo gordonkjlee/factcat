@@ -84,8 +84,31 @@ modelling decision, not something a vendor should have made for you.
 ## What it is not
 
 Factcat does not ship a tracking SDK, does not ingest, and never copies your data. It
-generates SQL and runs it against tables you already have - ideally dbt marts, not a raw
-event stream. If you need event collection, keep using whatever you use.
+generates SQL. You run that SQL on your warehouse - there is no Factcat login to BigQuery
+or Snowflake. If you need event collection, keep using whatever you use.
+
+## Recommended warehouse shape
+
+The library accepts **any relation**. A payments fact with `status` and `subscription_id`
+is a valid source. You do not have to have an events table.
+
+For clickstream-style product analytics, this shape works well (it is a recommendation,
+not a requirement):
+
+1. **Events** - one table. At least an event name, a timestamp, and an entity id.
+   Other fields are real columns, not a JSON blob. Different event types may share the
+   table; unused columns are null, which is fine.
+2. **Identity mapping** - source system id plus a type, resolved to one canonical entity
+   id. Do that in the warehouse (dbt). Factcat does not merge anonymous and logged-in ids.
+3. **Entity dimension** - current attributes (country, plan) as columns, joined when you
+   want a breakdown.
+
+Extra grains (booking, account, subscription) are extra **id columns on the events table**,
+not "any property". A report that counts bookings simply ignores rows where that id is
+null.
+
+A PostHog or Amplitude export with JSON properties should be flattened into columns in
+dbt before you point Factcat at it.
 
 ## Supported warehouses
 
@@ -99,6 +122,12 @@ integers for the period grid - and it lives in
 surface area.
 
 ## Install
+
+```bash
+pip install factcat
+```
+
+To hack on the library:
 
 ```bash
 pip install -e "packages/engine[dev]"
