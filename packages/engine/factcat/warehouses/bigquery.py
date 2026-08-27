@@ -1,8 +1,9 @@
 """BigQuery execute adapter.
 
-Auth, project, location, and the scan cap live on this class. They are not
-part of ``Warehouse``. Official ``google-cloud-bigquery`` client; not the
-``bq`` CLI. The extra is ``pip install factcat[bigquery]``.
+Pushes SQL into the caller's BigQuery project. Auth, project, location, and
+the scan cap live on this class, not on ``Adapter``. Official
+``google-cloud-bigquery`` client; not the ``bq`` CLI. Extra:
+``pip install factcat[bigquery]``.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from . import BytesCapError, QueryResult, WarehouseError
+from . import AdapterError, BytesCapError, QueryResult
 
 DEFAULT_MAXIMUM_BYTES_BILLED = 10 * 1024**3  # 10 GiB
 DEFAULT_TIMEOUT = 600.0
@@ -57,7 +58,7 @@ def _wrap_google_error(
     *,
     maximum_bytes_billed: int | None,
     timeout: float,
-) -> WarehouseError:
+) -> AdapterError:
     message = str(exc)
     if _looks_like_bytes_cap(message):
         return BytesCapError(
@@ -65,20 +66,20 @@ def _wrap_google_error(
             maximum_bytes_billed=maximum_bytes_billed,
         )
     if _looks_like_adc(exc, message):
-        return WarehouseError(
+        return AdapterError(
             "BigQuery credentials not found. Run "
             "`gcloud auth application-default login` "
             "or pass a service-account JSON path as credentials."
         )
     name = type(exc).__name__
     if name in {"TimeoutError", "FuturesTimeoutError"} or "timed out" in message.lower():
-        return WarehouseError(f"BigQuery job timed out after {timeout}s")
-    return WarehouseError(message)
+        return AdapterError(f"BigQuery job timed out after {timeout}s")
+    return AdapterError(message)
 
 
 @dataclass(frozen=True)
-class BigQueryWarehouse:
-    """Run SQL on BigQuery.
+class BigQueryAdapter:
+    """Run SQL in the caller's BigQuery project.
 
     ``project`` and ``location`` are required so we never guess ADC quota
     project or BigQuery's US default. ``credentials`` is ADC when omitted, a
@@ -152,7 +153,7 @@ class BigQueryWarehouse:
             rows = [dict(row) for row in result]
             processed = _optional_int(getattr(job, "total_bytes_processed", processed))
             billed = _optional_int(getattr(job, "total_bytes_billed", billed))
-        except (WarehouseError, ImportError):
+        except (AdapterError, ImportError):
             raise
         except Exception as exc:
             raise _wrap_google_error(
@@ -176,11 +177,11 @@ class BigQueryWarehouse:
                     self.credentials
                 )
             except FileNotFoundError as exc:
-                raise WarehouseError(
+                raise AdapterError(
                     f"service-account JSON not found: {self.credentials}"
                 ) from exc
             except Exception as exc:
-                raise WarehouseError(
+                raise AdapterError(
                     f"could not load service-account JSON at {self.credentials}"
                 ) from exc
         return self.credentials

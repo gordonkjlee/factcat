@@ -1,4 +1,4 @@
-"""Execute-adapter protocol: no Google, no warehouse identity on Warehouse."""
+"""Execute-adapter protocol: no Google, no caller-warehouse identity on Adapter."""
 
 from __future__ import annotations
 
@@ -11,16 +11,16 @@ from factcat import RetentionSpec, __file__ as factcat_init, retention_sql
 from factcat.dialects import SUPPORTED
 from factcat.warehouses import (
     ADAPTERS,
+    Adapter,
+    AdapterError,
     DryRunNotSupported,
     QueryResult,
-    Warehouse,
-    WarehouseError,
     connect,
 )
 from factcat.warehouses import __file__ as warehouses_init
 
 
-class FakeWarehouse:
+class FakeAdapter:
     """Second adapter shape: no project, no location, no bytes cap."""
 
     dialect = "duckdb"
@@ -30,7 +30,7 @@ class FakeWarehouse:
 
     def run(self, sql: str, *, dry_run: bool = False) -> QueryResult:
         if dry_run:
-            raise DryRunNotSupported("fake warehouse cannot dry-run")
+            raise DryRunNotSupported("fake adapter cannot dry-run")
         self.executed.append(sql)
         return QueryResult(rows=[{"ok": True}])
 
@@ -48,32 +48,32 @@ def _spec() -> RetentionSpec:
 
 
 def test_fake_has_no_bigquery_fields():
-    """If project/location leak onto Warehouse, the app-shaped fake breaks."""
-    wh = FakeWarehouse()
-    assert not hasattr(wh, "project")
-    assert not hasattr(wh, "location")
-    assert not hasattr(wh, "maximum_bytes_billed")
-    hints = getattr(Warehouse, "__annotations__", {})
+    """If project/location leak onto Adapter, the generate-then-run fake breaks."""
+    fake = FakeAdapter()
+    assert not hasattr(fake, "project")
+    assert not hasattr(fake, "location")
+    assert not hasattr(fake, "maximum_bytes_billed")
+    hints = getattr(Adapter, "__annotations__", {})
     assert "project" not in hints
     assert "location" not in hints
     assert "maximum_bytes_billed" not in hints
 
 
 def test_app_shaped_generate_then_run():
-    fake = FakeWarehouse()
-    warehouse: Warehouse = fake
-    sql = retention_sql(_spec(), dialect=warehouse.dialect)
-    result = warehouse.run(sql)
+    fake = FakeAdapter()
+    adapter: Adapter = fake
+    sql = retention_sql(_spec(), dialect=adapter.dialect)
+    result = adapter.run(sql)
     assert "period_index" in sql
     assert result.rows == [{"ok": True}]
     assert fake.executed == [sql]
 
 
 def test_fake_dry_run_does_not_execute():
-    wh = FakeWarehouse()
+    fake = FakeAdapter()
     with pytest.raises(DryRunNotSupported):
-        wh.run("SELECT 1", dry_run=True)
-    assert wh.executed == []
+        fake.run("SELECT 1", dry_run=True)
+    assert fake.executed == []
 
 
 def test_connect_unknown_sql_dialect():
@@ -92,13 +92,13 @@ def test_connect_unknown_even_to_sql():
 
 
 def test_connect_bigquery_constructs_without_google():
-    warehouse = connect("bigquery", project="my-proj", location="EU")
-    assert warehouse.dialect == "bigquery"
+    adapter = connect("bigquery", project="my-proj", location="EU")
+    assert adapter.dialect == "bigquery"
 
 
 def test_adapters_lists_bigquery_only():
     assert dict(ADAPTERS) == {
-        "bigquery": "factcat.warehouses.bigquery:BigQueryWarehouse"
+        "bigquery": "factcat.warehouses.bigquery:BigQueryAdapter"
     }
 
 
@@ -124,6 +124,6 @@ def test_google_is_optional_extra_not_a_core_dependency():
     assert "google-cloud-bigquery" in extras
 
 
-def test_warehouse_error_hierarchy():
-    assert issubclass(DryRunNotSupported, WarehouseError)
-    assert inspect.isclass(Warehouse)
+def test_adapter_error_hierarchy():
+    assert issubclass(DryRunNotSupported, AdapterError)
+    assert inspect.isclass(Adapter)

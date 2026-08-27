@@ -28,18 +28,18 @@ print(retention_sql(spec, dialect="snowflake"))
 Generates SQL and queries in place. No SDK, no ingestion, no copy of your data.
 
 SQL generation supports DuckDB, Postgres, BigQuery, Snowflake, Databricks, Spark, Trino,
-Presto, ClickHouse and Redshift. Execute adapters run that SQL through the official
-warehouse client. BigQuery ships today (`pip install factcat[bigquery]`); the adapter
-contract is `dialect` plus `run(sql)`, which is the same shape Snowflake and Databricks
-will use.
+Presto, ClickHouse and Redshift. Execute adapters push that SQL into the caller's
+warehouse. Factcat has no warehouse of its own. BigQuery ships today
+(`pip install factcat[bigquery]`); the adapter contract is `dialect` plus `run(sql)`,
+which is the same shape Snowflake and Databricks will use.
 
 ```python
 from factcat import RetentionSpec, retention_sql
 from factcat.warehouses import connect
 
 sql = retention_sql(spec, dialect="bigquery")
-warehouse = connect("bigquery", project="my-proj", location="EU")
-result = warehouse.run(sql)
+bq = connect("bigquery", project="my-proj", location="EU")
+result = bq.run(sql)
 ```
 
 Application-default credentials by default (`gcloud auth application-default login`), or

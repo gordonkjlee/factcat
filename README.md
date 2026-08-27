@@ -120,19 +120,20 @@ hand-written backends. Exactly one construct needs per-dialect SQL - generating 
 integers for the period grid - and it lives in
 [`dialects.py`](packages/engine/factcat/dialects.py).
 
-**Execute adapters** run that SQL through the warehouse's official client. BigQuery ships
-today. The contract is `dialect` plus `run(sql)` - identity, auth, and cost knobs stay on
-the concrete class so Snowflake does not inherit `project` / `location` /
-`maximum_bytes_billed`. Adding an adapter is a module, an optional extra, and one line in
-the registry; see the docstring on `factcat.warehouses`.
+**Execute adapters** push that SQL into the caller's warehouse through its official
+client. Factcat has no warehouse of its own. BigQuery ships today. The contract is
+`dialect` plus `run(sql)` - identity, auth, and cost knobs stay on the concrete class so
+Snowflake does not inherit `project` / `location` / `maximum_bytes_billed`. Adding an
+adapter is a module, an optional extra, and one line in the registry; see the docstring
+on `factcat.warehouses`.
 
 ```python
 from factcat import RetentionSpec, retention_sql
 from factcat.warehouses import connect
 
 sql = retention_sql(spec, dialect="bigquery")
-warehouse = connect("bigquery", project="my-proj", location="EU")
-result = warehouse.run(sql)
+bq = connect("bigquery", project="my-proj", location="EU")
+result = bq.run(sql)
 ```
 
 Application-default credentials by default (`gcloud auth application-default login`), or

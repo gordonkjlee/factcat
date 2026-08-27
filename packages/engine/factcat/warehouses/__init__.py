@@ -1,14 +1,17 @@
-"""Execute adapters: run generated SQL on a warehouse.
+"""Execute adapters: push SQL into the caller's warehouse.
 
-SQL generation is a separate layer (``dialects.py`` + sqlglot). This package
-only **runs** SQL. An adapter does not emit SQL, rewrite caller SQL, or know
-about ``RetentionSpec``.
+Factcat has no warehouse and never takes a copy of the data. SQL generation
+is a separate layer (``dialects.py`` + sqlglot). This package only **runs**
+that SQL where the caller already stores events, the same way Lightdash
+does. An adapter does not emit SQL, rewrite caller SQL, or know about
+``RetentionSpec``.
 
-The later app holds a ``Warehouse`` and does::
+The app stores connection settings (type, project, location, credentials)
+and asks the adapter to run SQL on *their* warehouse::
 
-    warehouse = connect("bigquery", project="my-proj", location="EU")
-    sql = retention_sql(spec, dialect=warehouse.dialect)
-    result = warehouse.run(sql)
+    bq = connect("bigquery", project="my-proj", location="EU")
+    sql = retention_sql(spec, dialect=bq.dialect)
+    result = bq.run(sql)
 
 Adding an adapter (Snowflake, Databricks, …)
 --------------------------------------------
@@ -16,8 +19,9 @@ Adding an adapter (Snowflake, Databricks, …)
 1. New module ``factcat/warehouses/<kind>.py`` with a frozen dataclass,
    ``dialect: ClassVar[str] = "<kind>"``, and
    ``run(self, sql, *, dry_run=False) -> QueryResult``.
-2. Constructor takes **that** warehouse's identity and auth. Do not add those
-   fields to ``Warehouse`` — BigQuery has project/location; Snowflake does not.
+2. Constructor takes **that** warehouse's identity and auth (the caller's
+   project, account, host, …). Do not add those fields to ``Adapter`` —
+   BigQuery has project/location; Snowflake does not.
 3. Lazy-import the official driver. Optional extra ``factcat[<kind>]``.
 4. One line in ``_ADAPTERS`` below.
 5. Mock the vendor client in tests. No live warehouse in CI.
@@ -38,7 +42,7 @@ from ..dialects import SUPPORTED
 
 # kind -> "module:Class". Edit this dict to ship a new adapter. Not a plugin hook.
 _ADAPTERS: dict[str, str] = {
-    "bigquery": "factcat.warehouses.bigquery:BigQueryWarehouse",
+    "bigquery": "factcat.warehouses.bigquery:BigQueryAdapter",
 }
 
 ADAPTERS = MappingProxyType(_ADAPTERS)
@@ -46,7 +50,7 @@ ADAPTERS = MappingProxyType(_ADAPTERS)
 
 @dataclass(frozen=True)
 class QueryResult:
-    """Rows from a warehouse, plus cost fields when the warehouse reports them.
+    """Rows from the caller's warehouse, plus cost fields when it reports them.
 
     ``bytes_processed`` / ``bytes_billed`` stay ``None`` when the warehouse has
     no such number (credits, DBUs). Do not stuff those into bytes.
@@ -58,8 +62,8 @@ class QueryResult:
     job_id: str | None = None
 
 
-class Warehouse(Protocol):
-    """The whole execute API.
+class Adapter(Protocol):
+    """Connection to the caller's warehouse.
 
     ``dialect`` is the sqlglot name, the same string ``retention_sql`` takes.
     Identity, auth, and cost knobs live on the concrete class, not here.
@@ -68,23 +72,23 @@ class Warehouse(Protocol):
     dialect: str
 
     def run(self, sql: str, *, dry_run: bool = False) -> QueryResult:
-        """Execute ``sql``. Dry-run estimates cost and must not fetch rows.
+        """Execute ``sql`` in the caller's warehouse.
 
-        Adapters that cannot dry-run raise ``DryRunNotSupported``. They must
-        not silently execute.
+        Dry-run estimates cost and must not fetch rows. Adapters that cannot
+        dry-run raise ``DryRunNotSupported``. They must not silently execute.
         """
         ...
 
 
-class WarehouseError(Exception):
-    """A warehouse job or connection failed."""
+class AdapterError(Exception):
+    """The caller's warehouse rejected the job or the connection failed."""
 
 
-class DryRunNotSupported(WarehouseError):
+class DryRunNotSupported(AdapterError):
     """This adapter cannot estimate cost without executing."""
 
 
-class BytesCapError(WarehouseError):
+class BytesCapError(AdapterError):
     """The query exceeded (or would exceed) a scan cap."""
 
     def __init__(
@@ -99,12 +103,13 @@ class BytesCapError(WarehouseError):
         self.maximum_bytes_billed = maximum_bytes_billed
 
 
-def connect(kind: str, **kwargs: Any) -> Warehouse:
-    """Construct an execute adapter by sqlglot dialect name.
+def connect(kind: str, **kwargs: Any) -> Adapter:
+    """Connect to the caller's warehouse by sqlglot dialect name.
 
     ``kind`` is the same string the caller already passes to
     ``retention_sql(..., dialect=)``. Keyword arguments are that adapter's
-    constructor fields, not a shared connection schema.
+    constructor fields (their project, location, key file, …), not a shared
+    connection schema.
     """
     target = _ADAPTERS.get(kind)
     if target is None:
@@ -121,10 +126,10 @@ def connect(kind: str, **kwargs: Any) -> Warehouse:
 
 __all__ = [
     "ADAPTERS",
+    "Adapter",
+    "AdapterError",
     "BytesCapError",
     "DryRunNotSupported",
     "QueryResult",
-    "Warehouse",
-    "WarehouseError",
     "connect",
 ]
