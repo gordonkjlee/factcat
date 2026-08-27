@@ -1,0 +1,217 @@
+name: Publish to PyPI
+
+on:
+  workflow_run:
+    # Must match the `name:` in release-please.yml exactly
+    workflows: ["Release Please"]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: publish-pypi
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write   # trusted publishing (OIDC) - no API token is stored
+    environment: pypi
+    outputs:
+      found: ${{ steps.release.outputs.found }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Find unpublished release
+        id: release
+        run: |
+          # GraphQL, not `gh api repos/.../releases/latest`. The REST call cannot
+          # distinguish "no releases exist" from "could not ask": both yield an
+          # empty string, and an empty string read as "nothing to publish" makes
+          # a skipped release look like a green run.
+          #
+          # A null latestRelease is a real answer. A failed query is not an
+          # answer, and must stop the workflow rather than be read as "nothing
+          # to do".
+          if ! RESPONSE=$(gh api graphql -f query='
+            query($owner:String!,$name:String!){
+              repository(owner:$owner,name:$name){ latestRelease{ tagName } }
+            }' -F owner="${{ github.repository_owner }}" -F name="${GITHUB_REPOSITORY#*/}" 2>&1); then
+            echo "::error::Could not query the latest release: ${RESPONSE}. Refusing to assume there is nothing to publish."
+            exit 1
+          fi
+          TAG=$(echo "$RESPONSE" | jq -r '.data.repository.latestRelease.tagName // ""')
+          if [ -z "$TAG" ]; then
+            echo "No releases exist yet - nothing to publish."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # PyPI has no publish-time scanning window, so a 404 here really does
+          # mean "not published" - unlike npm, which 404s while it scans.
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/factcat/${VERSION}/json")
+          if [ "$CODE" = "200" ]; then
+            echo "$TAG already on PyPI"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          elif [ "$CODE" = "404" ]; then
+            echo "$TAG not on PyPI - publishing"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::PyPI returned ${CODE} for factcat ${VERSION}. Refusing to guess whether it is published."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - if: steps.release.outputs.found == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - if: steps.release.outputs.found == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - if: steps.release.outputs.found == 'true'
+        name: Run tests before publishing
+        run: |
+          pip install -e "packages/engine[dev]"
+          cd packages/engine && python -m pytest
+
+      - if: steps.release.outputs.found == 'true'
+        name: Build
+        run: |
+          pip install build
+          cd packages/engine && python -m build
+
+      - if: steps.release.outputs.found == 'true'
+        name: Publish ${{ steps.release.outputs.tag }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/engine/dist
+
+  # Did the release actually reach users, and does it work?
+  #
+  # This runs even when `publish` fails or is skipped - that is the entire point.
+  # A publish step exiting 0 is a claim; resolving the package from PyPI and
+  # running it is evidence. A tagged release that never reached the registry
+  # looks identical to a successful one from inside the workflow.
+  verify:
+    needs: publish
+    if: always() && needs.publish.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Which version should be live?
+        id: expected
+        run: |
+          # Same reasoning as the publish job: a query that fails is not a
+          # licence to skip the check. This guard exists to catch a release that
+          # silently never shipped, so it must never pass by failing to look.
+          if ! RESPONSE=$(gh api graphql -f query='
+            query($owner:String!,$name:String!){
+              repository(owner:$owner,name:$name){ latestRelease{ tagName } }
+            }' -F owner="${{ github.repository_owner }}" -F name="${GITHUB_REPOSITORY#*/}" 2>&1); then
+            echo "::error::Could not query the latest release: ${RESPONSE}. Refusing to report a release verified when it was never checked."
+            exit 1
+          fi
+          TAG=$(echo "$RESPONSE" | jq -r '.data.repository.latestRelease.tagName // ""')
+          if [ -z "$TAG" ]; then
+            echo "No releases exist yet - nothing to verify."
+            echo "check=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "check=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - if: steps.expected.outputs.check == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - if: steps.expected.outputs.check == 'true'
+        name: Is ${{ steps.expected.outputs.tag }} installable from PyPI?
+        id: smoke
+        run: |
+          VERSION="${{ steps.expected.outputs.version }}"
+          # CDN propagation is seconds to a minute, not npm's 5-15 minute scan.
+          DEADLINE=$((SECONDS + 300))
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            if curl -sf -o /dev/null "https://pypi.org/pypi/factcat/${VERSION}/json"; then
+              echo "factcat ${VERSION} is on PyPI after ${SECONDS}s."
+              break
+            fi
+            echo "not resolvable after ${SECONDS}s, waiting..."
+            sleep 20
+          done
+          if ! curl -sf -o /dev/null "https://pypi.org/pypi/factcat/${VERSION}/json"; then
+            echo "::error::factcat ${VERSION} is not on PyPI after ${SECONDS}s."
+            exit 1
+          fi
+
+          # Resolving proves the metadata is there. It does not prove the
+          # package works. Install it the way a user would, in a clean venv,
+          # and make it generate SQL.
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet "factcat==${VERSION}"
+          /tmp/smoke/bin/python - <<'EOF'
+          from factcat import RetentionSpec, retention_sql
+          spec = RetentionSpec(
+              table="payments", entity="subscription_id", entity_time="sub_start",
+              event_time="paid_at", period_days=35, n_periods=2,
+              retained="status = 'collected' AND within_period_offset <= 5",
+          )
+          sql = retention_sql(spec, dialect="snowflake")
+          assert "factcat_period_grid" in sql, "period grid missing from generated SQL"
+          assert "DATEDIFF" in sql.upper(), "date arithmetic did not transpile to Snowflake"
+          print("Smoke test passed: installed from PyPI and generated Snowflake SQL.")
+          EOF
+
+      - name: Open an issue if the release never landed
+        if: failure() && steps.expected.outputs.check == 'true'
+        run: |
+          TAG="${{ steps.expected.outputs.tag }}"
+          VERSION="${{ steps.expected.outputs.version }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          BODY_FILE="${RUNNER_TEMP}/issue-body.md"
+          {
+            echo "The GitHub release **${TAG}** exists, but factcat ${VERSION} either never reached PyPI or does not work when installed from it."
+            echo
+            echo "Publish job result: ${{ needs.publish.result }}."
+            echo
+            echo "Run that failed: ${RUN_URL}"
+            echo
+            echo "Check, in order:"
+            echo "1. Did the publish job reach the upload step, or fail earlier (tests, build, OIDC)?"
+            echo "2. Is the Trusted Publisher still configured on PyPI for this repo and workflow?"
+            echo "3. Is https://pypi.org/pypi/factcat/${VERSION}/json resolvable now?"
+          } > "$BODY_FILE"
+
+          # One issue per broken release, not one per re-run.
+          EXISTING=$(gh issue list --repo ${{ github.repository }} --state open \
+            --search "${TAG} in:title" --json number,title \
+            --jq '[.[] | select(.title | test("did not reach PyPI")) | .number] | .[0] // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "Issue #${EXISTING} already open for this release."
+            exit 0
+          fi
+          gh issue create --repo ${{ github.repository }} \
+            --title "Release ${TAG} did not reach PyPI" \
+            --assignee gordonkjlee \
+            --body-file "$BODY_FILE"
+        env:
+          GH_TOKEN: ${{ github.token }}

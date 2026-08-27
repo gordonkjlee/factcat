@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "factcat"
+version = "0.1.0"
+description = "Product analytics on the event model already in your warehouse"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Gordon Lee" }]
+keywords = ["analytics", "retention", "funnel", "warehouse", "sql", "dbt"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Database",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = ["sqlglot>=25.0.0"]
+
+[project.optional-dependencies]
+# DuckDB is the reference dialect and the engine the test suite executes against.
+dev = ["duckdb>=1.0.0", "pytest>=8.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/gordonkjlee/factcat"
+Source = "https://github.com/gordonkjlee/factcat"
+
+[tool.hatch.build.targets.wheel]
+packages = ["factcat"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
