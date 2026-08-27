@@ -71,7 +71,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - if: steps.release.outputs.found == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.release.outputs.tag }}
 
