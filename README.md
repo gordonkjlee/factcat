@@ -83,9 +83,9 @@ modelling decision, not something a vendor should have made for you.
 
 ## What it is not
 
-Factcat does not ship a tracking SDK, does not ingest, and never copies your data. It
-generates SQL. You run that SQL on your warehouse - there is no Factcat login to BigQuery
-or Snowflake. If you need event collection, keep using whatever you use.
+Factcat does not ship a tracking SDK, does not ingest, and never copies your data. There
+is no Factcat-hosted warehouse. You bring credentials to your own BigQuery (or, later,
+Snowflake). If you need event collection, keep using whatever you use.
 
 ## Recommended warehouse shape
 
@@ -112,19 +112,39 @@ dbt before you point Factcat at it.
 
 ## Supported warehouses
 
-DuckDB, Postgres, BigQuery, Snowflake, Databricks, Spark, Trino, Presto, ClickHouse and
-Redshift.
+**SQL generation:** DuckDB, Postgres, BigQuery, Snowflake, Databricks, Spark, Trino,
+Presto, ClickHouse and Redshift.
 
 Portability comes from [sqlglot](https://github.com/tobymao/sqlglot) rather than from ten
-hand-written backends. Exactly one construct needs per-dialect code - generating a series of
+hand-written backends. Exactly one construct needs per-dialect SQL - generating a series of
 integers for the period grid - and it lives in
-[`dialects.py`](packages/engine/factcat/dialects.py). That file is the entire per-warehouse
-surface area.
+[`dialects.py`](packages/engine/factcat/dialects.py).
+
+**Execute adapters** run that SQL through the warehouse's official client. BigQuery ships
+today. The contract is `dialect` plus `run(sql)` - identity, auth, and cost knobs stay on
+the concrete class so Snowflake does not inherit `project` / `location` /
+`maximum_bytes_billed`. Adding an adapter is a module, an optional extra, and one line in
+the registry; see the docstring on `factcat.warehouses`.
+
+```python
+from factcat import RetentionSpec, retention_sql
+from factcat.warehouses import connect
+
+sql = retention_sql(spec, dialect="bigquery")
+warehouse = connect("bigquery", project="my-proj", location="EU")
+result = warehouse.run(sql)
+```
+
+Application-default credentials by default (`gcloud auth application-default login`), or
+pass a service-account JSON path as `credentials`. Queries are capped at 10 GiB scanned
+unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` and
+`location` are required.
 
 ## Install
 
 ```bash
 pip install factcat
+pip install factcat[bigquery]   # to run SQL on BigQuery
 ```
 
 To hack on the library:
