@@ -76,7 +76,7 @@ jobs:
           ref: ${{ steps.release.outputs.tag }}
 
       - if: steps.release.outputs.found == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -139,7 +139,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - if: steps.expected.outputs.check == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
