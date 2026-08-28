@@ -8,6 +8,15 @@ document as much as the code is.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+On = Literal["events", "property"]
+Measure = Literal["total", "uniques", "average", "sum", "median", "distinct"]
+
+# UI labels live in the README. Two families so "Average" is not two APIs.
+EVENT_MEASURES: tuple[Measure, ...] = ("total", "uniques", "average")
+PROPERTY_MEASURES: tuple[Measure, ...] = ("sum", "average", "median", "distinct")
+ONS: tuple[On, ...] = ("events", "property")
 
 
 @dataclass(frozen=True)
@@ -100,3 +109,71 @@ class FunnelSpec:
         if self.step_labels is not None:
             return self.step_labels
         return tuple(f"step_{i}" for i in range(len(self.steps)))
+
+
+@dataclass(frozen=True)
+class EventsSpec:
+    """A time-series of event counts or of a property.
+
+    Two families, because "Average" is two different questions:
+
+    * ``on="events"`` — Total (``COUNT(*)``), Uniques (``COUNT DISTINCT``
+      of ``entity``), Average (Total / Uniques: events per unique entity).
+    * ``on="property"`` — Sum / Average / Median of ``of``, or Distinct:
+      mean number of distinct ``of`` values per entity.
+
+    Uniques is never a column called ``user_id``. Min/max of a property are
+    not measures here.
+
+    The x-axis is ``bucket``, a SQL expression. Day/week/month buttons in a
+    later UI fill ``date_trunc(...)``. There is no ``period: day|week|month``
+    field.
+
+    Attributes:
+        table:      source relation.
+        entity:     grain for Uniques and for distinct-per-entity. Caller-supplied.
+        event_time: observation instant; also used in the default day bucket.
+        measure:    see ``EVENT_MEASURES`` / ``PROPERTY_MEASURES``.
+        on:         ``events`` (default) or ``property``.
+        of:         SQL expression. Required for ``on="property"``; forbidden
+                    for ``on="events"``.
+        bucket:     SQL time-axis expression. Default ``date_trunc('day', {event_time})``.
+        where:      optional filter on the source relation.
+        exact:      False (default) uses approx NDV / approx median where the
+                    dialect has them. True is COUNT DISTINCT / PERCENTILE_CONT.
+                    A later chart toggle sets this; Total/Sum/AVG are unchanged.
+    """
+
+    table: str
+    entity: str
+    event_time: str
+    measure: Measure
+    on: On = "events"
+    of: str | None = None
+    bucket: str | None = None
+    where: str | None = None
+    exact: bool = False
+
+    def __post_init__(self) -> None:
+        if self.on not in ONS:
+            raise ValueError("on must be 'events' or 'property'")
+        allowed = EVENT_MEASURES if self.on == "events" else PROPERTY_MEASURES
+        if self.measure not in allowed:
+            raise ValueError(f"on={self.on!r} allows measures {allowed}")
+        of_set = self.of is not None and bool(self.of.strip())
+        if self.on == "property":
+            if not of_set:
+                raise ValueError("property measures require of= a SQL expression")
+        elif of_set:
+            raise ValueError("event measures do not take of=")
+        if not self.entity.strip():
+            raise ValueError("entity is required")
+        if not self.event_time.strip():
+            raise ValueError("event_time is required")
+        if self.bucket is not None and not self.bucket.strip():
+            raise ValueError("bucket must be a SQL expression if set")
+
+    def bucket_sql(self) -> str:
+        if self.bucket is not None:
+            return self.bucket
+        return f"date_trunc('day', {self.event_time})"

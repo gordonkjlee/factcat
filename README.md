@@ -68,6 +68,31 @@ spec = FunnelSpec(
 )
 ```
 
+The everyday report is a time series. **Total**, **Uniques**, and **Average**
+(Total / Uniques: events per unique entity). Uniques is `COUNT DISTINCT` of your
+entity, not of users. On a numeric column: **Sum**, **Average**, **Median**, and
+**Distinct** (mean distinct values per entity). Not min/max.
+
+```python
+from factcat import EventsSpec, events_sql
+
+spec = EventsSpec(
+    table="analytics.fct_events",
+    entity="subscription_id",
+    event_time="occurred_at",
+    measure="uniques",
+    where="event_name = 'paid'",
+)
+print(events_sql(spec, dialect="bigquery"))
+```
+
+Uniques, Distinct, and Median default to **approx** (`exact=False`):
+`APPROX_COUNT_DISTINCT` / `APPROX_QUANTILES` on BigQuery. A later chart toggle
+sets `exact=True` for `COUNT DISTINCT` / `PERCENTILE_CONT`. Total, Sum, and
+property Average stay exact either way.
+
+Day/week/month in a later UI fill a `bucket` expression such as `date_trunc('week', occurred_at)`. There is no `period: day|week|month` field.
+
 ## Why the entity matters
 
 The same table, the same predicate, two grains, two different answers:

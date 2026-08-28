@@ -1,15 +1,17 @@
 """Per-dialect SQL that cannot be transpiled.
 
 sqlglot handles almost everything: date arithmetic, casting, string functions,
-window functions. Measured across the retention query, exactly one construct
-does not survive transpilation cleanly - **generating a series of integers**.
+window functions. Two constructs do not survive cleanly:
 
-    duckdb      UNNEST(GENERATE_SERIES(0, n))
-    snowflake   renders as a double FLATTEN over ARRAY_GENERATE_RANGE
-    redshift    fails outright: "Unsupported EXPLODE() function"
+1. **Generating a series of integers** (the retention period grid).
+   DuckDB ``UNNEST(GENERATE_SERIES)``; Redshift has no reachable generator.
+2. **Median and approx NDV.** sqlglot emits aggregate ``MEDIAN(x)`` (invalid
+   on BigQuery) and will not turn ``COUNT DISTINCT`` into
+   ``APPROX_COUNT_DISTINCT``. Exact BigQuery median is
+   ``PERCENTILE_CONT(x, 0.5) OVER (PARTITION BY ...)``. Approx is
+   ``APPROX_QUANTILES``. Runners execute SQL; they do not translate it.
 
-So the period grid is written by hand per dialect, and that is the entire
-per-warehouse surface area of this engine. Everything else is one emitter.
+Everything else is one emitter.
 """
 
 from __future__ import annotations
@@ -35,6 +37,77 @@ def _union_all_grid(n: int) -> str:
     which has no row generator reachable without a system table.
     """
     return " UNION ALL ".join(f"SELECT {i} AS period_index" for i in range(n + 1))
+
+
+def count_distinct(expr: str, dialect: str, *, exact: bool) -> str:
+    """NDV of ``expr``. Approx is HyperLogLog-style; Postgres has none and
+    falls back to ``COUNT DISTINCT``.
+    """
+    if exact:
+        return f"COUNT(DISTINCT {expr})"
+    if dialect == "bigquery":
+        return f"APPROX_COUNT_DISTINCT({expr})"
+    if dialect == "snowflake":
+        return f"APPROX_COUNT_DISTINCT({expr})"
+    if dialect == "duckdb":
+        return f"approx_count_distinct({expr})"
+    if dialect in ("databricks", "spark"):
+        return f"approx_count_distinct({expr})"
+    if dialect in ("trino", "presto"):
+        return f"approx_distinct({expr})"
+    if dialect == "clickhouse":
+        return f"uniq({expr})"
+    if dialect == "redshift":
+        return f"APPROXIMATE COUNT(DISTINCT {expr})"
+    return f"COUNT(DISTINCT {expr})"
+
+
+def median_select_from_base(dialect: str, *, exact: bool) -> str:
+    """``SELECT bucket, value`` from ``base`` (columns ``fc_bucket``, ``fc_of``).
+
+    Exact BigQuery: ``PERCENTILE_CONT(fc_of, 0.5)`` window. Approx BigQuery:
+    ``APPROX_QUANTILES``. Elsewhere exact is ``median``; approx is
+    ``approx_quantile`` where it exists, else exact.
+    """
+    if dialect == "bigquery":
+        if exact:
+            return """SELECT
+        fc_bucket AS bucket,
+        MIN(fc_p) AS value
+    FROM (
+        SELECT
+            fc_bucket,
+            PERCENTILE_CONT(fc_of, 0.5 IGNORE NULLS) OVER (
+                PARTITION BY fc_bucket
+            ) AS fc_p
+        FROM base
+    )
+    GROUP BY 1
+    ORDER BY 1"""
+        return """SELECT
+        fc_bucket AS bucket,
+        APPROX_QUANTILES(fc_of, 100)[OFFSET(50)] AS value
+    FROM base
+    GROUP BY 1
+    ORDER BY 1"""
+    if exact or dialect == "postgres":
+        agg = "median(fc_of)"
+    elif dialect == "duckdb":
+        agg = "approx_quantile(fc_of, 0.5)"
+    elif dialect == "snowflake":
+        agg = "approx_percentile(fc_of, 0.5)"
+    elif dialect in ("databricks", "spark"):
+        agg = "approx_percentile(fc_of, 0.5)"
+    elif dialect in ("trino", "presto"):
+        agg = "approx_percentile(fc_of, 0.5)"
+    else:
+        agg = "median(fc_of)"
+    return f"""SELECT
+        fc_bucket AS bucket,
+        {agg} AS value
+    FROM base
+    GROUP BY 1
+    ORDER BY 1"""
 
 
 def period_grid(n_periods: int, dialect: str) -> str:

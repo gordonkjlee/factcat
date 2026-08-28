@@ -12,7 +12,15 @@ import logging
 
 import pytest
 
-from factcat import SUPPORTED, FunnelSpec, RetentionSpec, funnel_sql, retention_sql
+from factcat import (
+    SUPPORTED,
+    EventsSpec,
+    FunnelSpec,
+    RetentionSpec,
+    events_sql,
+    funnel_sql,
+    retention_sql,
+)
 from factcat._emit import GRID_RELATION, transpile_with_grid
 
 RETENTION = RetentionSpec(
@@ -31,6 +39,59 @@ FUNNEL = FunnelSpec(
     event_time="occurred_at",
     steps=("event_name = 'view'", "event_name = 'cart'"),
     within_days=7,
+)
+
+EVENTS = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="uniques",
+    where="event_name = 'view'",
+)
+
+EVENTS_AVG = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="average",
+    of="amount",
+)
+
+EVENTS_MEDIAN = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="median",
+    of="amount",
+)
+
+EVENTS_MEDIAN_EXACT = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="median",
+    of="amount",
+    exact=True,
+)
+
+EVENTS_UNIQUES_EXACT = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="uniques",
+    exact=True,
+)
+
+EVENTS_DISTINCT = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="distinct",
+    of="country",
 )
 
 
@@ -70,6 +131,55 @@ def test_funnel_emits_without_warnings(dialect, sqlglot_warnings):
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
     )
+
+
+@pytest.mark.parametrize("dialect", SUPPORTED)
+def test_events_emits_without_warnings(dialect, sqlglot_warnings):
+    events_sql(EVENTS, dialect=dialect)
+    events_sql(EVENTS_AVG, dialect=dialect)
+    events_sql(EVENTS_MEDIAN, dialect=dialect)
+    events_sql(EVENTS_MEDIAN_EXACT, dialect=dialect)
+    events_sql(EVENTS_DISTINCT, dialect=dialect)
+    events_sql(EVENTS_UNIQUES_EXACT, dialect=dialect)
+
+    assert sqlglot_warnings.messages == [], (
+        f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
+    )
+
+
+def test_bigquery_exact_median_uses_percentile_cont():
+    sql = events_sql(EVENTS_MEDIAN_EXACT, dialect="bigquery")
+    assert "PERCENTILE_CONT" in sql.upper()
+    assert "OVER" in sql.upper()
+    assert "APPROX_QUANTILES" not in sql.upper()
+
+
+def test_bigquery_approx_median_uses_approx_quantiles():
+    sql = events_sql(EVENTS_MEDIAN, dialect="bigquery")
+    assert "APPROX_QUANTILES" in sql.upper()
+    assert "PERCENTILE_CONT" not in sql.upper()
+
+
+def test_bigquery_approx_uniques_uses_approx_count_distinct():
+    sql = events_sql(EVENTS, dialect="bigquery")
+    assert "APPROX_COUNT_DISTINCT" in sql.upper()
+    assert "COUNT(DISTINCT" not in sql.upper().replace("APPROX_COUNT_DISTINCT", "")
+
+
+def test_bigquery_exact_uniques_uses_count_distinct():
+    sql = events_sql(EVENTS_UNIQUES_EXACT, dialect="bigquery")
+    assert "COUNT(DISTINCT" in sql.upper()
+    assert "APPROX_COUNT_DISTINCT" not in sql.upper()
+
+
+def test_postgres_approx_uniques_falls_back_to_count_distinct():
+    sql = events_sql(EVENTS, dialect="postgres")
+    assert "COUNT(DISTINCT" in sql.upper()
+
+
+def test_duckdb_exact_median_uses_median():
+    sql = events_sql(EVENTS_MEDIAN_EXACT, dialect="duckdb")
+    assert "median(fc_of)" in sql.lower()
 
 
 @pytest.mark.parametrize("dialect", SUPPORTED)
