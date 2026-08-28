@@ -11,6 +11,12 @@ from fastapi.templating import Jinja2Templates
 from factcat import events_sql
 from factcat.warehouses import AdapterError, connect
 
+from .catalog import (
+    bootstrap_project,
+    columns_from_form,
+    datasets_from_form,
+    tables_from_form,
+)
 from .config import load, save
 from .query import connection_from_form, spec_from_form
 
@@ -22,7 +28,44 @@ app = FastAPI(title="Factcat")
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "index.html", {"config": load()})
+    cfg = load()
+    if not cfg.get("project"):
+        cfg["project"] = bootstrap_project()
+    return templates.TemplateResponse(request, "index.html", {"config": cfg})
+
+
+def _catalog_error(exc: Exception) -> JSONResponse:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@app.post("/api/datasets")
+async def api_datasets(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        datasets = datasets_from_form(form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc)
+    return JSONResponse({"ok": True, "datasets": datasets})
+
+
+@app.post("/api/tables")
+async def api_tables(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        payload = tables_from_form(form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc)
+    return JSONResponse({"ok": True, **payload})
+
+
+@app.post("/api/columns")
+async def api_columns(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        payload = columns_from_form(form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc)
+    return JSONResponse({"ok": True, **payload})
 
 
 @app.post("/api/save")

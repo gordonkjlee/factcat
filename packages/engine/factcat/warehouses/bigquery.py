@@ -20,6 +20,18 @@ DEFAULT_TIMEOUT = 600.0
 _EXTRA = "pip install factcat[bigquery]"
 
 
+def adc_quota_project() -> str:
+    """Billing/quota project from ADC, or empty if ADC is missing."""
+    env = __import__("os").environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+    try:
+        google_auth = importlib.import_module("google.auth")
+        creds, project = google_auth.default()
+    except Exception:
+        return env
+    quota = getattr(creds, "quota_project_id", None)
+    return (quota or project or env or "").strip()
+
+
 def _load_google() -> tuple[Any, Any]:
     try:
         bigquery = importlib.import_module("google.cloud.bigquery")
@@ -169,22 +181,103 @@ class BigQueryAdapter:
         )
 
     def _credentials(self, service_account: Any) -> Any:
-        if self.credentials is None:
-            return None
-        if isinstance(self.credentials, str):
-            try:
-                return service_account.Credentials.from_service_account_file(
-                    self.credentials
-                )
-            except FileNotFoundError as exc:
-                raise AdapterError(
-                    f"service-account JSON not found: {self.credentials}"
-                ) from exc
-            except Exception as exc:
-                raise AdapterError(
-                    f"could not load service-account JSON at {self.credentials}"
-                ) from exc
-        return self.credentials
+        return _resolve_credentials(self.credentials, service_account)
+
+
+def _resolve_credentials(credentials: object | None, service_account: Any) -> Any:
+    if credentials is None:
+        return None
+    if isinstance(credentials, str):
+        try:
+            return service_account.Credentials.from_service_account_file(credentials)
+        except FileNotFoundError as exc:
+            raise AdapterError(
+                f"service-account JSON not found: {credentials}"
+            ) from exc
+        except Exception as exc:
+            raise AdapterError(
+                f"could not load service-account JSON at {credentials}"
+            ) from exc
+    return credentials
+
+
+def _make_client(project: str, credentials: object | None = None) -> Any:
+    project = (project or "").strip()
+    if not project:
+        raise ValueError("project is required")
+    bigquery, service_account = _load_google()
+    return bigquery.Client(
+        project=project,
+        credentials=_resolve_credentials(credentials, service_account),
+    )
+
+
+def list_datasets(
+    *, project: str, credentials: object | None = None
+) -> list[dict[str, str]]:
+    """Dataset ids in ``project``. Metadata API — no query bytes."""
+    try:
+        client = _make_client(project, credentials)
+        ids = [item.dataset_id for item in client.list_datasets()]
+    except (ValueError, AdapterError, ImportError):
+        raise
+    except Exception as exc:
+        raise _wrap_google_error(
+            exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
+        ) from exc
+    return [{"id": name} for name in sorted(ids)]
+
+
+def list_tables(
+    *, project: str, dataset: str, credentials: object | None = None
+) -> dict[str, Any]:
+    """Tables in ``project.dataset``, plus the dataset location."""
+    dataset = (dataset or "").strip()
+    if not dataset:
+        raise ValueError("dataset is required")
+    try:
+        client = _make_client(project, credentials)
+        ds = client.get_dataset(dataset)
+        tables = [item.table_id for item in client.list_tables(ds)]
+        location = getattr(ds, "location", None) or ""
+    except (ValueError, AdapterError, ImportError):
+        raise
+    except Exception as exc:
+        raise _wrap_google_error(
+            exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
+        ) from exc
+    return {"location": location, "tables": sorted(tables)}
+
+
+def list_columns(
+    *,
+    project: str,
+    dataset: str,
+    table: str,
+    credentials: object | None = None,
+) -> dict[str, Any]:
+    """Column names and types for ``project.dataset.table``."""
+    dataset = (dataset or "").strip()
+    table = (table or "").strip()
+    if not dataset:
+        raise ValueError("dataset is required")
+    if not table:
+        raise ValueError("table is required")
+    try:
+        client = _make_client(project, credentials)
+        tbl = client.get_table(f"{project}.{dataset}.{table}")
+        columns = [
+            {"name": field.name, "type": getattr(field, "field_type", "")}
+            for field in (tbl.schema or [])
+        ]
+        location = getattr(tbl, "location", None) or ""
+    except (ValueError, AdapterError, ImportError):
+        raise
+    except Exception as exc:
+        raise _wrap_google_error(
+            exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
+        ) from exc
+    return {"location": location, "columns": columns}
 
 
 def _optional_int(value: Any) -> int | None:
