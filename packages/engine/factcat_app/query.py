@@ -6,10 +6,12 @@ import re
 from typing import Any
 
 from factcat import EVENT_MEASURES, EventsSpec
+from factcat._emit import transpile
 
 _TABLE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_]+)+$")
 _COLUMN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _GRAINS = ("day", "week", "month")
+EVENT_VALUE_LIMIT = 1000
 
 
 def _ident_table(value: str, label: str) -> str:
@@ -34,6 +36,19 @@ def _sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
+def _lookback_days(form: dict[str, Any]) -> int:
+    raw_lookback = form.get("lookback_days", 30)
+    if raw_lookback in (None, ""):
+        raw_lookback = 30
+    try:
+        lookback = int(raw_lookback)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("lookback_days must be an integer") from exc
+    if lookback < 1 or lookback > 3650:
+        raise ValueError("lookback_days must be between 1 and 3650")
+    return lookback
+
+
 def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     table = _ident_table(str(form.get("table") or ""), "table")
     entity = (form.get("entity") or "").strip()
@@ -47,15 +62,7 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     grain = str(form.get("grain") or "day")
     if grain not in _GRAINS:
         raise ValueError("grain must be day, week, or month")
-    raw_lookback = form.get("lookback_days", 30)
-    if raw_lookback in (None, ""):
-        raw_lookback = 30
-    try:
-        lookback = int(raw_lookback)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("lookback_days must be an integer") from exc
-    if lookback < 1 or lookback > 3650:
-        raise ValueError("lookback_days must be between 1 and 3650")
+    lookback = _lookback_days(form)
 
     exact_raw = form.get("exact")
     exact = exact_raw in (True, "true", "on", "1", 1)
@@ -65,9 +72,9 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     clauses = [f"{event_time} >= current_date - {lookback}"]
     event_column = (form.get("event_column") or "").strip()
     event_value = (form.get("event_value") or "").strip()
-    if event_column or event_value:
-        if not event_column or not event_value:
-            raise ValueError("event column and event name must be set together")
+    if event_value and not event_column:
+        raise ValueError("event name requires an event column")
+    if event_column and event_value:
         event_column = _ident_column(event_column, "event_column")
         clauses.append(f"{event_column} = {_sql_string(event_value)}")
 
@@ -81,6 +88,23 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
         where=" AND ".join(clauses),
         exact=exact,
     )
+
+
+def event_values_sql(form: dict[str, Any]) -> str:
+    """DISTINCT event names in the lookback window. Identifiers only."""
+    table = _ident_table(str(form.get("table") or ""), "table")
+    event_column = _ident_column(str(form.get("event_column") or ""), "event_column")
+    event_time = _ident_column(str(form.get("event_time") or ""), "event_time")
+    lookback = _lookback_days(form)
+    sql = (
+        f"SELECT DISTINCT {event_column} AS fc_value "
+        f"FROM {table} "
+        f"WHERE {event_column} IS NOT NULL "
+        f"AND {event_time} >= current_date - {lookback} "
+        f"ORDER BY 1 "
+        f"LIMIT {EVENT_VALUE_LIMIT}"
+    )
+    return transpile(sql, "bigquery")
 
 
 def connection_from_form(form: dict[str, Any]) -> dict[str, str]:

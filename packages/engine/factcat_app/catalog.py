@@ -57,12 +57,16 @@ def columns_from_form(form: dict[str, Any]) -> dict[str, Any]:
     table = (form.get("table_name") or "").strip()
     if not project:
         raise ValueError("project is required")
-    return list_columns(
+    payload = list_columns(
         project=project,
         dataset=dataset,
         table=table,
         credentials=_creds(form),
     )
+    columns = list(payload.get("columns") or [])
+    columns.sort(key=lambda c: str(c.get("name") or "").lower())
+    payload["columns"] = columns
+    return payload
 
 
 def bootstrap_project() -> str:

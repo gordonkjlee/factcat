@@ -215,9 +215,10 @@ Open http://127.0.0.1:8000. The billing project is filled from ADC when possible
 Dataset, table, and column lists load when the project (then each parent
 field) is set. Entity lists string and integer columns; timestamp lists
 TIMESTAMP / DATETIME / DATE. Optional event-name column is STRING only;
-**Only this event** keeps rows where that column equals a name such as
-`paid`. Location is taken from the dataset (do not guess `US`). Advanced
-is only if you use a key file instead of ADC.
+**Only this event** is a DISTINCT of that column in the lookback window
+(blank = every event). Catalog dropdowns are alphabetical. Location is
+taken from the dataset (do not guess `US`). Advanced is only if you use a
+key file instead of ADC.
 
 If the table lives in another GCP project (billing in `dev`, data in `prod`), set
 **Project that holds the table** before loading datasets.

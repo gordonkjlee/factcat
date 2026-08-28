@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from factcat import events_sql
-from factcat_app.query import spec_from_form
+from factcat_app.query import EVENT_VALUE_LIMIT, event_values_sql, spec_from_form
 
 
 def _form(**overrides):
@@ -93,9 +93,14 @@ def test_lookback_too_large_is_rejected():
         spec_from_form(_form(lookback_days=3651))
 
 
-def test_event_column_without_value_is_rejected():
-    with pytest.raises(ValueError, match="together"):
-        spec_from_form(_form(event_column="event_name", event_value=""))
+def test_event_column_without_value_is_no_filter():
+    spec = spec_from_form(_form(event_column="event_name", event_value=""))
+    assert "event_name =" not in spec.where
+
+
+def test_event_value_without_column_is_rejected():
+    with pytest.raises(ValueError, match="event column"):
+        spec_from_form(_form(event_column="", event_value="paid"))
 
 
 def test_month_bucket_is_date_trunc_sugar():
@@ -109,6 +114,47 @@ def test_plain_table_transpiles():
     assert "analytics" in sql
     assert "events" in sql
     assert "INTERVAL" not in sql.upper()
+
+
+def test_event_values_sql_is_distinct_ordered_lookback():
+    sql = event_values_sql(
+        _form(
+            table="my-gcp.analytics.events",
+            event_column="event_name",
+            event_time="occurred_at",
+            lookback_days=7,
+        )
+    )
+    compact = " ".join(sql.split())
+    upper = compact.upper()
+    assert "DISTINCT" in upper
+    assert "ORDER BY" in upper
+    assert f"LIMIT {EVENT_VALUE_LIMIT}" in upper
+    assert "INTERVAL" not in upper
+    assert "CURRENT_DATE - 7" in compact.upper().replace("CURRENT_DATE()", "CURRENT_DATE")
+    assert "`my-gcp`" in sql or "`MY-GCP`" in sql.upper()
+    assert "fc_value" in sql.lower()
+    assert "event_name" in sql
+
+
+def test_event_values_sql_rejects_injection():
+    with pytest.raises(ValueError, match="table"):
+        event_values_sql(_form(table="events; drop table x", event_column="event_name"))
+    with pytest.raises(ValueError, match="column"):
+        event_values_sql(
+            _form(event_column="event_name; drop", event_time="occurred_at")
+        )
+
+
+def test_event_values_sql_transpiles_without_sqlglot_warning(caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING, logger="sqlglot")
+    event_values_sql(
+        _form(event_column="event_name", event_time="occurred_at")
+    )
+    warned = [r for r in caplog.records if r.name.startswith("sqlglot")]
+    assert warned == []
 
 
 def test_exact_uniques_is_count_distinct():

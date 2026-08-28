@@ -21,7 +21,7 @@ from .catalog import (
     tables_from_form,
 )
 from .config import load, save
-from .query import connection_from_form, spec_from_form
+from .query import connection_from_form, event_values_sql, spec_from_form
 
 APP_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
@@ -78,6 +78,33 @@ async def api_columns(request: Request) -> JSONResponse:
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc)
     return JSONResponse({"ok": True, **payload})
+
+
+def _event_value_text(row: dict) -> str | None:
+    raw = row.get("fc_value")
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+@app.post("/api/event_values")
+async def api_event_values(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        sql = event_values_sql(form)
+        conn = connection_from_form(form)
+        warehouse = connect("bigquery", **conn)
+        result = warehouse.run(sql)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc)
+    seen: set[str] = set()
+    for row in result.rows:
+        text = _event_value_text(row)
+        if text:
+            seen.add(text)
+    values = sorted(seen, key=str.lower)
+    return JSONResponse({"ok": True, "sql": sql, "values": values})
 
 
 @app.post("/api/save")

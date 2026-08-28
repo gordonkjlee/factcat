@@ -38,6 +38,8 @@ def test_index_renders(monkeypatch, tmp_path):
     assert "@keyframes spin" in res.text
     assert "Event name value" not in res.text
     assert "Only this event" in res.text
+    assert "/api/event_values" in res.text
+    assert 'id="event_value-loading"' in res.text
     assert 'value="adc-project"' in res.text
 
 
@@ -240,6 +242,70 @@ def test_tables_return_location(monkeypatch, tmp_path):
     body = res.json()
     assert body["location"] == "EU"
     assert "customer_events" in body["tables"]
+
+
+def test_columns_are_sorted_alphabetically(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr(
+        "factcat_app.catalog.list_columns",
+        lambda **kw: {
+            "location": "EU",
+            "columns": [
+                {"name": "zeta", "type": "STRING"},
+                {"name": "alpha", "type": "STRING"},
+            ],
+        },
+    )
+    client = TestClient(app)
+    res = client.post(
+        "/api/columns",
+        json={"project": "p", "dataset": "analytics", "table_name": "events"},
+    )
+    names = [c["name"] for c in res.json()["columns"]]
+    assert names == ["alpha", "zeta"]
+
+
+def test_event_values_run_distinct_and_sort(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(
+        rows=[
+            {"fc_value": "paid"},
+            {"fc_value": None},
+            {"fc_value": "opened"},
+            {"fc_value": "  "},
+        ]
+    )
+    captured: dict = {}
+
+    def fake_connect(kind, **kw):
+        captured["kind"] = kind
+        captured.update(kw)
+        return warehouse
+
+    monkeypatch.setattr("factcat_app.main.connect", fake_connect)
+    client = TestClient(app)
+    res = client.post(
+        "/api/event_values",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "event_column": "event_name",
+            "event_time": "occurred_at",
+            "lookback_days": 7,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["values"] == ["opened", "paid"]
+    sql = warehouse.run.call_args.args[0].upper()
+    assert "DISTINCT" in sql
+    assert "ORDER BY" in sql
+    assert captured["kind"] == "bigquery"
+    assert captured["project"] == "p"
+    assert captured["location"] == "EU"
 
 
 def test_columns_list_names(monkeypatch, tmp_path):

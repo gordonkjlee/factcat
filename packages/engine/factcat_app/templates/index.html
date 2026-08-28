@@ -69,10 +69,10 @@
     <select id="event_time" name="event_time" required hidden></select>
     <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="event_column" name="event_column" hidden></select>
-    <div id="event_value-wrap" {% if not config.event_column %}hidden{% endif %}>
-      <label for="event_value">Only this event</label>
-      <span class="hint">Keeps rows where that column equals this name, e.g. paid.</span>
-      <input id="event_value" name="event_value" autocomplete="off" value="{{ config.event_value }}">
+    <div id="event_value-wrap" hidden>
+      <label for="event_value">Only this event <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span></label>
+      <span class="hint">DISTINCT names in that column in the lookback window. Blank = every event.</span>
+      <select id="event_value" name="event_value" hidden></select>
     </div>
 
     <h2>4. Chart</h2>
@@ -89,7 +89,7 @@
       <option value="month" {% if config.grain == "month" %}selected{% endif %}>Month</option>
     </select>
     <label>Lookback (days)</label>
-    <input name="lookback_days" type="number" min="1" max="3650" value="{{ config.lookback_days }}">
+    <input id="lookback_days" name="lookback_days" type="number" min="1" max="3650" value="{{ config.lookback_days }}">
     <div class="row">
       <input name="exact" type="checkbox" id="exact" {% if config.exact %}checked{% endif %} style="width:auto">
       <label for="exact" style="margin:0">Exact (off = approx Uniques)</label>
@@ -122,6 +122,7 @@ const saved = {
   entity: {{ config.entity|tojson }},
   event_time: {{ config.event_time|tojson }},
   event_column: {{ config.event_column|tojson }},
+  event_value: {{ config.event_value|tojson }},
 };
 const form = document.getElementById("f");
 // HTMLElement.dataset is data-* attributes. Access the BigQuery dataset
@@ -138,6 +139,7 @@ const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
 const eventValueEl = document.getElementById("event_value");
 const eventValueWrap = document.getElementById("event_value-wrap");
+const lookbackEl = document.getElementById("lookback_days");
 const ENTITY_TYPES = new Set({{ entity_types|tojson }});
 const TIME_TYPES = new Set({{ time_types|tojson }});
 const EVENT_NAME_TYPES = new Set({{ event_name_types|tojson }});
@@ -145,6 +147,7 @@ let chart;
 let dsGen = 0;
 let tblGen = 0;
 let colGen = 0;
+let valGen = 0;
 
 function debounce(fn, ms) {
   let t;
@@ -173,10 +176,36 @@ function typedOptions(cols, allowed) {
       label: c.type ? c.name + " (" + c.type + ")" : c.name,
     }));
 }
-function syncEventValue() {
-  const on = Boolean(eventColumnEl.value);
-  eventValueWrap.hidden = !on;
-  if (!on) eventValueEl.value = "";
+async function loadEventValues() {
+  const gen = ++valGen;
+  if (!eventColumnEl.value) {
+    hideSelect(eventValueEl);
+    eventValueWrap.hidden = true;
+    return;
+  }
+  eventValueWrap.hidden = false;
+  if (!eventTimeEl.value || !combinedTable() || !locationEl.value) {
+    hideSelect(eventValueEl);
+    return;
+  }
+  hideSelect(eventValueEl);
+  setLoading(eventValueEl, true);
+  const data = await post("/api/event_values", {
+    ...authBody(),
+    table: combinedTable(),
+    location: locationEl.value,
+    event_column: eventColumnEl.value,
+    event_time: eventTimeEl.value,
+    lookback_days: Number(lookbackEl.value),
+  });
+  if (gen !== valGen) return;
+  setLoading(eventValueEl, false);
+  if (!data.ok) {
+    hideSelect(eventValueEl);
+    setError(data.error || "Could not list event names");
+    return;
+  }
+  fillSelect(eventValueEl, data.values || [], saved.event_value);
 }
 function fillSelect(sel, items, selected) {
   const cur = selected || sel.value;
@@ -185,10 +214,17 @@ function fillSelect(sel, items, selected) {
     sel.hidden = true;
     return;
   }
+  const ranked = [...items].sort((a, b) => {
+    const ka = String(typeof a === "string" ? a : a.value).toLowerCase();
+    const kb = String(typeof b === "string" ? b : b.value).toLowerCase();
+    if (ka < kb) return -1;
+    if (ka > kb) return 1;
+    return 0;
+  });
   const blank = document.createElement("option");
   blank.value = "";
   sel.appendChild(blank);
-  for (const item of items) {
+  for (const item of ranked) {
     const opt = document.createElement("option");
     if (typeof item === "string") {
       opt.value = item;
@@ -226,7 +262,9 @@ function clearColumns() {
   hideSelect(eventTimeEl);
   hideSelect(eventColumnEl);
   tableEl.value = "";
-  syncEventValue();
+  valGen++;
+  hideSelect(eventValueEl);
+  eventValueWrap.hidden = true;
 }
 async function post(url, body) {
   const res = await fetch(url, {
@@ -285,6 +323,7 @@ async function loadTables() {
 }
 async function loadColumns() {
   const gen = ++colGen;
+  valGen++;
   setError("");
   if (!datasetEl.value || !tableNameEl.value) {
     clearColumns();
@@ -316,17 +355,21 @@ async function loadColumns() {
   fillSelect(eventTimeEl, typedOptions(cols, TIME_TYPES), saved.event_time);
   fillSelect(eventColumnEl, typedOptions(cols, EVENT_NAME_TYPES), saved.event_column);
   tableEl.value = combinedTable();
-  syncEventValue();
+  await loadEventValues();
 }
 
 datasetEl.addEventListener("change", loadTables);
 tableNameEl.addEventListener("change", loadColumns);
-eventColumnEl.addEventListener("change", syncEventValue);
+eventColumnEl.addEventListener("change", loadEventValues);
+eventTimeEl.addEventListener("change", loadEventValues);
 const scheduleDatasets = debounce(loadDatasets, 400);
+const scheduleEventValues = debounce(loadEventValues, 400);
 [projectEl, dataProjectEl, credentialsEl].forEach((el) => {
   el.addEventListener("input", scheduleDatasets);
   el.addEventListener("change", scheduleDatasets);
 });
+lookbackEl.addEventListener("input", scheduleEventValues);
+lookbackEl.addEventListener("change", scheduleEventValues);
 if (catalogProject()) loadDatasets();
 
 function payload() {
