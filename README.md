@@ -227,12 +227,12 @@ columns; timestamp lists TIMESTAMP / DATETIME.
 If the table lives in another GCP project (billing in `dev`, data in `prod`), set
 **Project that holds the table** before loading datasets.
 
-There is no `user_id` default. **Volume** is row count, **Unique entities** is
-distinct of the mapped id, **Average per entity** is Volume / Unique entities
-(hover the measure names). You can give that grain a display name (customer,
-subscription, …) — that is a label, not a default column. Day/week/month
-buckets are dates, not timestamps. The mapping pane and the chart scroll
-separately.
+There is no `user_id` default. **Entity name** on Setup is a display label
+(default User; Other is free text). It does not pick the id column.
+**Volume** is row count, **Unique User** (or Unique Customer, …) is distinct
+of the mapped id, **Average per User** is Volume / that unique count (hover
+the measure names). Day/week/month buckets are dates, not timestamps. The
+filter pane and the chart scroll separately.
 
 Click **Run**. The mapping is written to `.factcat.json` in the directory where you started
 `factcat-app`, so the next start is already filled in. Add `.factcat.json` to that repo’s

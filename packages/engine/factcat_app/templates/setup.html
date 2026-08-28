@@ -25,15 +25,20 @@
   <h2>Grain</h2>
   <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="entity" name="entity" required hidden></select>
-  <label for="entity_label">This grain is called</label>
-  <input id="entity_label" name="entity_label" list="entity-label-suggestions" autocomplete="off" value="{{ config.entity_label }}">
-  <datalist id="entity-label-suggestions">
-    <option value="customer">
-    <option value="user">
-    <option value="subscription">
-    <option value="account">
-  </datalist>
-  <span class="hint">Display name only. Does not default the id column. Blank = entity.</span>
+  <label for="entity_label_choice">Entity name</label>
+  <select id="entity_label_choice">
+    <option value="User">User</option>
+    <option value="Customer">Customer</option>
+    <option value="Account">Account</option>
+    <option value="Subscription">Subscription</option>
+    <option value="__other__">Other</option>
+  </select>
+  <div id="entity_label_other_wrap" hidden>
+    <label for="entity_label_other">Custom entity name</label>
+    <input id="entity_label_other" autocomplete="off">
+  </div>
+  <input type="hidden" name="entity_label" id="entity_label" value="{{ config.entity_label or 'User' }}">
+  <span class="hint">Display only. Does not choose the id column.</span>
   <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="event_time" name="event_time" required hidden></select>
 
@@ -271,13 +276,48 @@ seedSelect(entityEl, saved.entity);
 seedSelect(eventTimeEl, saved.event_time);
 tableEl.value = combinedTable();
 
+const ENTITY_NAME_PRESETS = ["User", "Customer", "Account", "Subscription"];
+const labelChoiceEl = document.getElementById("entity_label_choice");
+const labelOtherWrap = document.getElementById("entity_label_other_wrap");
+const labelOtherEl = document.getElementById("entity_label_other");
+const labelEl = document.getElementById("entity_label");
+function syncEntityName() {
+  if (labelChoiceEl.value === "__other__") {
+    labelOtherWrap.hidden = false;
+    labelEl.value = labelOtherEl.value.trim();
+  } else {
+    labelOtherWrap.hidden = true;
+    labelEl.value = labelChoiceEl.value;
+  }
+}
+function seedEntityName() {
+  const raw = (labelEl.value || "").trim() || "User";
+  const preset = ENTITY_NAME_PRESETS.find((p) => p.toLowerCase() === raw.toLowerCase());
+  if (preset) {
+    labelChoiceEl.value = preset;
+    labelOtherEl.value = "";
+  } else {
+    labelChoiceEl.value = "__other__";
+    labelOtherEl.value = raw;
+  }
+  syncEntityName();
+}
+labelChoiceEl.addEventListener("change", syncEntityName);
+labelOtherEl.addEventListener("input", syncEntityName);
+seedEntityName();
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   setError("");
+  syncEntityName();
   tableEl.value = combinedTable();
   const body = Object.fromEntries(new FormData(form).entries());
   if (!body.table || !body.entity || !body.event_time || !body.project || !body.location) {
     setError("Pick a table, entity id, and timestamp. Location comes from the dataset.");
+    return;
+  }
+  if (!body.entity_label) {
+    setError("Pick an entity name, or Other and type one.");
     return;
   }
   const data = await post("/api/save", body);

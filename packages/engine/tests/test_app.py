@@ -46,7 +46,10 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert res.status_code == 200
     assert "Project setup" in res.text
     assert "Entity id" in res.text
-    assert "This grain is called" in res.text
+    assert "This grain is called" not in res.text
+    assert "Entity name" in res.text
+    assert ">Other<" in res.text
+    assert 'value="User"' in res.text
     assert "Volume" not in res.text
     assert 'value="user_id"' not in res.text
     assert "/path/to/key.json" not in res.text
@@ -71,8 +74,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     res = client.get("/")
     assert res.status_code == 200
     assert "Volume" in res.text
-    assert "Unique entities" in res.text
-    assert "Average per entity" in res.text
+    assert "Unique User" in res.text
+    assert "Average per User" in res.text
     assert ">Uniques<" not in res.text
     assert "Only this event" in res.text
     assert "/api/event_values" in res.text

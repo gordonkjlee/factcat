@@ -20,7 +20,7 @@
     <h1>Events</h1>
     <p class="summary">
       {{ config.table }}
-      · {{ config.entity_label or "entity" }}
+      · {{ config.entity_label or "User" }}
       ({{ config.entity }})
       · {{ config.event_time }}
     </p>
@@ -47,8 +47,8 @@
     <label>Measure</label>
     <select name="measure" id="measure">
       <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>Volume</option>
-      <option value="uniques" title="Count distinct of the mapped entity id" {% if config.measure == "uniques" %}selected{% endif %}>Unique entities</option>
-      <option value="average" title="Volume divided by unique entities" {% if config.measure == "average" %}selected{% endif %}>Average per entity</option>
+      <option value="uniques" title="Count distinct of the mapped entity id" {% if config.measure == "uniques" %}selected{% endif %}>Unique {{ config.entity_label or "User" }}</option>
+      <option value="average" title="Volume divided by unique entities" {% if config.measure == "average" %}selected{% endif %}>Average per {{ config.entity_label or "User" }}</option>
     </select>
     <label>Bucket</label>
     <select name="grain">
@@ -231,9 +231,9 @@ function bucketLabel(raw) {
   return m ? m[1] : s;
 }
 function relabelMeasures() {
-  const w = (document.getElementById("entity_label").value || "").trim();
-  const unique = w ? "Unique " + w : "Unique entities";
-  const avg = w ? "Average per " + w : "Average per entity";
+  const w = (document.getElementById("entity_label").value || "").trim() || "User";
+  const unique = "Unique " + w;
+  const avg = "Average per " + w;
   for (const o of form.measure.options) {
     if (o.value === "total") {
       o.textContent = "Volume";

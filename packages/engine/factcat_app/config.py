@@ -18,7 +18,7 @@ DEFAULTS: dict[str, Any] = {
     "table_name": "",
     "table": "",
     "entity": "",
-    "entity_label": "",
+    "entity_label": "User",
     "event_time": "",
     "event_column": "",
     "event_value": "",
