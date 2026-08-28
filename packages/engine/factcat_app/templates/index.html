@@ -10,7 +10,7 @@
       flex: 1;
       min-height: 0;
     }
-    .filters { background: #fff; padding: 1.25rem; border-right: 1px solid #e4e4e7; overflow-y: auto; min-height: 0; }
+    .filters { background: var(--fc-snow); padding: 1.25rem; border-right: 1px solid var(--fc-line); overflow-y: auto; min-height: 0; }
     .results {
       display: flex;
       flex-direction: column;
@@ -18,11 +18,11 @@
       padding: 0.5rem;
       min-height: 0;
       overflow: hidden;
-      background: #ececee;
+      background: var(--fc-paper);
     }
     .pane {
-      background: #fff;
-      border: 1px solid #e4e4e7;
+      background: var(--fc-snow);
+      border: 1px solid var(--fc-line);
       display: flex;
       flex-direction: column;
       min-height: 0;
@@ -30,7 +30,7 @@
     .pane h2 {
       margin: 0;
       padding: 0.45rem 0.75rem;
-      border-bottom: 1px solid #e4e4e7;
+      border-bottom: 1px solid var(--fc-line);
       font-size: 0.7rem;
     }
     .pane-body { flex: 1; overflow: auto; padding: 0.75rem; min-height: 0; }
@@ -38,11 +38,24 @@
     .pane-table { flex: 1; min-height: 8rem; }
     .pane-sql { flex: 0 1 9rem; min-height: 7rem; }
     .pane-sql .pane-body { padding: 0; }
-    .empty { color: #a1a1aa; font-size: 0.85rem; margin: 0; }
+    .empty { color: var(--fc-slate); font-size: 0.85rem; margin: 0; }
     .chart-body { position: relative; }
     .chart-body canvas { width: 100% !important; height: 100% !important; }
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 16rem;
+      color: var(--fc-slate);
+      font-size: 0.9rem;
+      text-align: center;
+      margin: 0;
+    }
+    .empty-state[hidden], canvas[hidden] { display: none; }
+    .empty-state img { width: 10rem; height: 10rem; object-fit: contain; margin-bottom: 0.75rem; }
     #sql { margin: 0; min-height: 100%; box-sizing: border-box; }
-    .summary { font-size: 0.75rem; color: #52525b; margin: 0 0 0.75rem; }
+    .summary { font-size: 0.75rem; color: var(--fc-slate); margin: 0 0 0.75rem; }
     .pane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding-right: 0.5rem; }
     .pane-head h2 { border-bottom: none; padding: 0.45rem 0.75rem; }
     .pane-actions { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
@@ -50,33 +63,33 @@
     .pane-actions label { margin: 0; font-weight: 400; display: flex; align-items: center; gap: 0.25rem; }
     .chart-title {
       flex: 1; min-width: 8rem; margin: 0; padding: 0.35rem 0.75rem;
-      border: none; border-bottom: 1px solid #e4e4e7; font-size: 0.8rem;
+      border: none; border-bottom: 1px solid var(--fc-line); font-size: 0.8rem;
       font-weight: 600; background: transparent;
     }
     #exact-wrap[hidden] { display: none !important; }
     #run-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; flex-wrap: wrap; }
     #run-row button { margin-top: 0; }
-    #run-status, #run-estimate { font-size: 0.8rem; color: #52525b; }
+    #run-status, #run-estimate { font-size: 0.8rem; color: var(--fc-slate); }
     #run-estimate-wrap { display: inline-flex; align-items: center; gap: 0.4rem; }
     #run-estimate-wrap[hidden] { display: none !important; }
     #run-estimate-bar {
       display: inline-block; width: 3.2rem; height: 0.45rem;
-      background: #e4e4e7; border-radius: 2px; overflow: hidden; vertical-align: middle;
+      background: var(--fc-line); border-radius: 2px; overflow: hidden; vertical-align: middle;
     }
-    #run-estimate-fill { display: block; height: 100%; width: 0; background: #22c55e; }
-    #run-estimate-wrap.warn #run-estimate-fill { background: #eab308; }
-    #run-estimate-wrap.hot #run-estimate-fill, #run-estimate-wrap.over-cap #run-estimate-fill { background: #ef4444; }
-    #run-estimate-wrap.over-cap #run-estimate { color: #b91c1c; font-weight: 600; }
+    #run-estimate-fill { display: block; height: 100%; width: 0; background: var(--fc-ok); }
+    #run-estimate-wrap.warn #run-estimate-fill { background: var(--fc-ochre); }
+    #run-estimate-wrap.hot #run-estimate-fill, #run-estimate-wrap.over-cap #run-estimate-fill { background: var(--fc-alert); }
+    #run-estimate-wrap.over-cap #run-estimate { color: var(--fc-alert); font-weight: 600; }
     .format-pop { position: relative; font-size: 0.7rem; }
     .format-pop > summary {
       cursor: pointer; list-style: none; padding: 0.2rem 0.5rem;
-      border: 1px solid #e4e4e7; border-radius: 0.2rem;
+      border: 1px solid var(--fc-line); border-radius: 0.2rem;
     }
     .format-pop > summary::-webkit-details-marker { display: none; }
     .format-pop[open] > .format-body {
       position: absolute; right: 0; top: calc(100% + 0.2rem); z-index: 8;
-      background: #fff; border: 1px solid #e4e4e7; padding: 0.65rem 0.75rem;
-      min-width: 14rem; box-shadow: 0 4px 14px rgba(0,0,0,.08);
+      background: var(--fc-snow); border: 1px solid var(--fc-line); padding: 0.65rem 0.75rem;
+      min-width: 14rem; box-shadow: 0 4px 14px rgba(28, 25, 23, .08);
     }
     .format-body label {
       display: flex; justify-content: space-between; align-items: center;
@@ -86,41 +99,41 @@
     .icon-btn {
       display: inline-flex; align-items: center; justify-content: center;
       width: 1.75rem; height: 1.75rem; padding: 0; margin: 0;
-      background: #fff; border: 1px solid #e4e4e7; border-radius: 0.25rem;
-      cursor: pointer; color: #52525b;
+      background: var(--fc-snow); border: 1px solid var(--fc-line); border-radius: 0.25rem;
+      cursor: pointer; color: var(--fc-slate);
     }
     .icon-btn svg { width: 0.95rem; height: 0.95rem; display: block; }
-    .icon-btn:hover { color: #111; border-color: #a1a1aa; }
-    .icon-btn.copied { color: #166534; border-color: #86efac; }
+    .icon-btn:hover { color: var(--fc-ink); border-color: var(--fc-ochre); }
+    .icon-btn.copied { color: var(--fc-ok); border-color: var(--fc-ok); }
     .format-pop > summary.icon-btn { list-style: none; }
     .format-pop > summary.icon-btn::-webkit-details-marker { display: none; }
     .pane-limit {
       display: flex; align-items: center; gap: 0.3rem; margin: 0;
-      font-size: 0.7rem; font-weight: 400; color: #52525b;
+      font-size: 0.7rem; font-weight: 400; color: var(--fc-slate);
     }
     .pane-limit input { width: 3.5rem; padding: 0.15rem 0.3rem; font-size: 0.7rem; }
     #cap-override {
       display: flex; align-items: center; gap: 0.35rem;
-      font-size: 0.75rem; color: #b91c1c;
+      font-size: 0.75rem; color: var(--fc-alert);
     }
     #cap-override[hidden] { display: none !important; }
     #cap-override input[type="number"] { width: 4rem; padding: 0.15rem 0.3rem; }
     #result-table { table-layout: fixed; width: 100%; }
     #result-table th {
       position: relative; cursor: pointer; user-select: none; min-width: 4rem;
-      border-right: 1px solid #d4d4d8; padding-right: 0.9rem;
+      border-right: 1px solid var(--fc-line); padding-right: 0.9rem;
     }
     #result-table th .sort {
-      font-size: 0.65rem; color: #a1a1aa; margin-left: 0.25rem;
+      font-size: 0.65rem; color: var(--fc-slate); margin-left: 0.25rem;
     }
-    #result-table th.sorted .sort { color: #111; }
+    #result-table th.sorted .sort { color: var(--fc-ink); }
     #result-table th .grip {
       position: absolute; right: 0; top: 0; width: 8px; height: 100%;
-      cursor: col-resize; background: #d4d4d8;
-      background: linear-gradient(to right, transparent 2px, #a1a1aa 2px, #a1a1aa 3px, transparent 3px);
+      cursor: col-resize;
+      background: linear-gradient(to right, transparent 2px, var(--fc-slate) 2px, var(--fc-slate) 3px, transparent 3px);
     }
     #result-table th .grip:hover {
-      background: #3b82f6;
+      background: var(--fc-ochre);
     }
     #custom-range label { display: inline-block; width: auto; margin-right: 0.35rem; }
     #custom-range input { width: auto; }
@@ -131,12 +144,12 @@
     #breakdown-extra[hidden] { display: none !important; }
     #breakdown-extra .range-row { margin-top: 0.5rem; }
     #top_n { width: 4.5rem; }
-    .incomplete-note { font-size: 0.75rem; color: #52525b; margin: 0.35rem 0 0; }
-    #result-table tr.incomplete td { color: #71717a; font-style: italic; }
+    .incomplete-note { font-size: 0.75rem; color: var(--fc-slate); margin: 0.35rem 0 0; }
+    #result-table tr.incomplete td { color: var(--fc-slate); font-style: italic; }
     #custom-snap-hint { margin: 0.35rem 0 0; }
     .linkish {
       background: none; border: none; padding: 0; margin-left: 0.5rem;
-      color: #52525b; text-decoration: underline; font-size: 0.75rem;
+      color: var(--fc-ochre-deep); text-decoration: underline; font-size: 0.75rem;
       font-weight: 400; cursor: pointer;
     }
 {% endblock %}
@@ -323,7 +336,10 @@
         </span>
       </div>
       <div class="pane-body chart-body">
-        <p class="empty" id="chart-empty">Run to plot.</p>
+        <div id="chart-empty" class="empty-state">
+          <img src="/static/waiting.jpg" width="160" height="160" alt="">
+          <p id="empty-copy">No rows yet. The cat is waiting.</p>
+        </div>
         <canvas id="chart" hidden></canvas>
         <p id="incomplete-note" class="incomplete-note" hidden></p>
       </div>
@@ -1118,7 +1134,22 @@ function seriesFromRow(row) {
   if (v == null || v === "") return "(null)";
   return String(v);
 }
-const SERIES_COLORS = ["#3b82f6", "#c4841d", "#5c6b73", "#059669", "#7c3aed", "#db2777", "#0e7490", "#b42318", "#a1a1aa"];
+function cssToken(name, fallback) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+const SERIES_COLORS = [
+  cssToken("--fc-ochre", "#C4841D"),
+  cssToken("--fc-slate", "#5C6B73"),
+  cssToken("--fc-ink", "#1C1917"),
+  cssToken("--fc-ok", "#3F6B4B"),
+  cssToken("--fc-alert", "#B42318"),
+  "#7c3aed",
+  "#0e7490",
+  "#db2777",
+];
+const MUTED = cssToken("--fc-slate", "#5C6B73");
+const PAPER = cssToken("--fc-paper", "#F4EFE6");
+const LINE = cssToken("--fc-line", "#E6DCCF");
 function seriesNames() {
   const names = [];
   const seen = new Set();
@@ -1181,13 +1212,13 @@ function drawChart() {
   const showX = document.getElementById("chart_axis_x").checked;
   const showY = document.getElementById("chart_axis_y").checked;
   const datasets = names.map((name, i) => {
-    const color = name === "(other)" ? "#a1a1aa" : SERIES_COLORS[i % SERIES_COLORS.length];
+    const color = name === "(other)" ? MUTED : SERIES_COLORS[i % SERIES_COLORS.length];
     const byBucket = {};
     for (const r of shown) {
       if ((r.series || "") === name) byBucket[r.bucket] = r;
     }
     const data = labels.map((b) => (byBucket[b] ? byBucket[b].value : null));
-    const pointColors = labels.map((b) => (byBucket[b] && byBucket[b].incomplete ? "#a1a1aa" : color));
+    const pointColors = labels.map((b) => (byBucket[b] && byBucket[b].incomplete ? MUTED : color));
     return {
       label: name || measureLabel,
       data,
@@ -1215,7 +1246,7 @@ function drawChart() {
           ticks: { display: showX, maxRotation: 0, autoSkip: true },
           grid: {
             display: gridMode !== "off",
-            color: (c) => (gridMode === "minor" && c.index % 2 ? "#f4f4f5" : "#e4e4e7"),
+            color: (c) => (gridMode === "minor" && c.index % 2 ? PAPER : LINE),
           },
         },
         y: {
@@ -1227,7 +1258,7 @@ function drawChart() {
           },
           grid: {
             display: gridMode !== "off",
-            color: (c) => (gridMode === "minor" && c.index % 2 ? "#f4f4f5" : "#e4e4e7"),
+            color: (c) => (gridMode === "minor" && c.index % 2 ? PAPER : LINE),
           },
         },
       },
@@ -1249,7 +1280,7 @@ function drawChart() {
         const { ctx: g } = c;
         const meta = c.getDatasetMeta(0);
         g.save();
-        g.fillStyle = "#52525b";
+        g.fillStyle = MUTED;
         g.font = "11px ui-sans-serif, system-ui, sans-serif";
         g.textAlign = "center";
         meta.data.forEach((el, i) => {
@@ -1336,11 +1367,13 @@ form.addEventListener("submit", async (e) => {
   const runLoad = document.getElementById("run-loading");
   const runStatus = document.getElementById("run-status");
   const empty = document.getElementById("chart-empty");
+  const emptyCopy = document.getElementById("empty-copy");
   runBtn.disabled = true;
   runBtn.textContent = "Running…";
   runLoad.hidden = false;
   runStatus.textContent = "Querying…";
-  empty.textContent = "Running…";
+  empty.hidden = false;
+  emptyCopy.textContent = "Running…";
   try {
     const res = await fetch("/api/run", {
       method: "POST",
@@ -1351,7 +1384,7 @@ form.addEventListener("submit", async (e) => {
     if (!data.ok) {
       setError(data.error || res.statusText);
       runStatus.textContent = "";
-      empty.textContent = "Run to plot.";
+      emptyCopy.textContent = "The cat is waiting.";
       return;
     }
     if (titleLockedEl.value !== "true") titleEl.value = body.chart_title || defaultTitle();
@@ -1377,7 +1410,7 @@ form.addEventListener("submit", async (e) => {
     runBtn.disabled = false;
     runBtn.textContent = "Run";
     runLoad.hidden = true;
-    if (!tableRows.length) empty.textContent = "Run to plot.";
+    if (!tableRows.length) emptyCopy.textContent = "Nothing to `cat`.";
   }
 });
 scheduleEstimate();

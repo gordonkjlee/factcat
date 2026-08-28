@@ -1,5 +1,7 @@
 # Factcat
 
+<img src="packages/engine/factcat_app/static/logo.svg" width="48" height="48" alt="Factcat">
+
 Product analytics on the event model already in your warehouse. Your grain, your periods,
 your definitions.
 

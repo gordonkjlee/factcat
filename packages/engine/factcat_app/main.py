@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from factcat.warehouses import AdapterError, BytesCapError, connect
@@ -30,9 +31,15 @@ from .query import (
 )
 
 APP_DIR = Path(__file__).resolve().parent
+STATIC_DIR = APP_DIR / "static"
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 app = FastAPI(title="Factcat")
+
+
+@app.get("/favicon.ico")
+def favicon() -> FileResponse:
+    return FileResponse(STATIC_DIR / "favicon.ico", media_type="image/x-icon")
 
 
 def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLResponse:
@@ -200,3 +207,6 @@ async def api_run(request: Request) -> JSONResponse:
         "truncated": len(rows) >= limit,
         "limit": limit,
     })
+
+
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
