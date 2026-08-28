@@ -53,7 +53,18 @@ def load() -> dict[str, Any]:
     return data
 
 
+def mapping_ready(cfg: dict[str, Any] | None = None) -> bool:
+    data = cfg if cfg is not None else load()
+    return all(
+        str(data.get(key) or "").strip()
+        for key in ("project", "location", "table", "entity", "event_time")
+    )
+
+
 def save(data: dict[str, Any]) -> None:
-    merged = _merge(data)
+    merged = load()
+    for key in DEFAULTS:
+        if key in data and data[key] is not None:
+            merged[key] = data[key]
     path = config_path()
     path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")

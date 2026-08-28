@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from factcat import events_sql
@@ -20,7 +20,7 @@ from .catalog import (
     datasets_from_form,
     tables_from_form,
 )
-from .config import load, save
+from .config import load, mapping_ready, save
 from .query import connection_from_form, event_values_sql, spec_from_form
 
 APP_DIR = Path(__file__).resolve().parent
@@ -29,21 +29,34 @@ templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 app = FastAPI(title="Factcat")
 
 
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request) -> HTMLResponse:
-    cfg = load()
-    if not cfg.get("project"):
-        cfg["project"] = bootstrap_project()
+def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
-        "index.html",
+        template,
         {
             "config": cfg,
+            "screen": screen,
             "entity_types": sorted(ENTITY_TYPES),
             "time_types": sorted(TIME_TYPES),
             "event_name_types": sorted(EVENT_NAME_TYPES),
         },
     )
+
+
+@app.get("/")
+def index(request: Request):
+    cfg = load()
+    if not mapping_ready(cfg):
+        return RedirectResponse("/setup", status_code=303)
+    return _page(request, "index.html", "events", cfg)
+
+
+@app.get("/setup", response_class=HTMLResponse)
+def setup(request: Request) -> HTMLResponse:
+    cfg = load()
+    if not cfg.get("project"):
+        cfg["project"] = bootstrap_project()
+    return _page(request, "setup.html", "setup", cfg)
 
 
 def _catalog_error(exc: Exception) -> JSONResponse:

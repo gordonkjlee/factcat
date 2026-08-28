@@ -1,87 +1,41 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Factcat</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+{% extends "base.html" %}
+{% block title %}Factcat — Events{% endblock %}
+{% block extra_head %}
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <style>
-    :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #111; }
-    html, body { height: 100%; overflow: hidden; }
-    body { margin: 0; background: #f4f4f5; }
-    main {
+{% endblock %}
+{% block extra_css %}
+    main.workspace {
       display: grid;
-      grid-template-columns: 24rem 1fr;
-      height: 100vh;
+      grid-template-columns: 22rem 1fr;
+      flex: 1;
       min-height: 0;
     }
-    form { background: #fff; padding: 1.25rem; border-right: 1px solid #e4e4e7; overflow-y: auto; min-height: 0; }
-    h1 { font-size: 1.1rem; margin: 0 0 0.35rem; }
-    h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; margin: 1.1rem 0 0.4rem; }
-    .lede { font-size: 0.8rem; color: #52525b; margin: 0 0 0.75rem; }
-    label { display: block; font-size: 0.75rem; font-weight: 600; margin: 0.65rem 0 0.2rem; }
-    input, select { width: 100%; box-sizing: border-box; padding: 0.4rem 0.5rem; }
-    .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
-    button { margin-top: 0.75rem; padding: 0.5rem 0.9rem; }
+    .filters { background: #fff; padding: 1.25rem; border-right: 1px solid #e4e4e7; overflow-y: auto; min-height: 0; }
     #chart-wrap { padding: 1.25rem; overflow: auto; min-height: 0; }
-    #error { color: #b91c1c; white-space: pre-wrap; font-size: 0.85rem; }
-    .hint { display: block; font-weight: 400; color: #71717a; font-size: 0.7rem; margin: 0.15rem 0 0.35rem; }
-    .loading {
-      display: inline-block;
-      width: 0.7em;
-      height: 0.7em;
-      margin-left: 0.45rem;
-      border: 2px solid #e4e4e7;
-      border-top-color: #52525b;
-      border-radius: 50%;
-      vertical-align: -0.1em;
-      animation: spin 0.35s linear infinite;
-    }
-    .loading[hidden], select[hidden], #event_value-wrap[hidden] { display: none !important; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) {
-      .loading { animation: none; border-top-color: #52525b; }
-    }
-    table { border-collapse: collapse; margin-top: 1rem; font-size: 0.85rem; }
-    td, th { border-bottom: 1px solid #e4e4e7; padding: 0.25rem 0.75rem 0.25rem 0; text-align: left; }
-    details { margin-top: 0.75rem; font-size: 0.75rem; }
-    pre { overflow: auto; background: #fff; padding: 0.75rem; }
-  </style>
-</head>
-<body>
-<main>
-  <form id="f">
-    <h1>Factcat — Events</h1>
-    <p class="lede">Runs in <em>your</em> BigQuery. Uses application-default credentials unless you open Advanced. Mapping is saved to <code>.factcat.json</code>.</p>
+    .summary { font-size: 0.75rem; color: #52525b; margin: 0 0 0.75rem; }
+{% endblock %}
+{% block body %}
+<main class="workspace">
+  <form id="f" class="filters">
+    <h1>Events</h1>
+    <p class="summary">
+      {{ config.table }}
+      · {{ config.entity_label or "entity" }}
+      ({{ config.entity }})
+      · {{ config.event_time }}
+    </p>
 
-    <h2>1. Project</h2>
-    <label for="project">GCP project that runs the query (billing)</label>
-    <input id="project" name="project" required autocomplete="off" value="{{ config.project }}">
-    <label for="data_project">Project that holds the table (blank = same as billing)</label>
-    <input id="data_project" name="data_project" autocomplete="off" value="{{ config.data_project }}">
+    <input type="hidden" name="project" id="project" value="{{ config.project }}">
+    <input type="hidden" name="data_project" id="data_project" value="{{ config.data_project }}">
     <input type="hidden" name="location" id="location" value="{{ config.location }}">
+    <input type="hidden" name="credentials" id="credentials" value="{{ config.credentials }}">
     <input type="hidden" name="table" id="table" value="{{ config.table }}">
+    <input type="hidden" name="dataset" id="dataset" value="{{ config.dataset }}">
+    <input type="hidden" name="table_name" id="table_name" value="{{ config.table_name }}">
+    <input type="hidden" name="entity" id="entity" value="{{ config.entity }}">
+    <input type="hidden" name="entity_label" id="entity_label" value="{{ config.entity_label }}">
+    <input type="hidden" name="event_time" id="event_time" value="{{ config.event_time }}">
 
-    <h2>2. Table</h2>
-    <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="dataset" name="dataset" hidden></select>
-    <label for="table_name">Table <span id="table_name-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="table_name" name="table_name" hidden></select>
-
-    <h2>3. Columns</h2>
-    <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="entity" name="entity" required hidden></select>
-    <label for="entity_label">This grain is called</label>
-    <input id="entity_label" name="entity_label" list="entity-label-suggestions" autocomplete="off" value="{{ config.entity_label }}">
-    <datalist id="entity-label-suggestions">
-      <option value="customer">
-      <option value="user">
-      <option value="subscription">
-      <option value="account">
-    </datalist>
-    <span class="hint">Display name only. Does not default the id column. Blank = entity.</span>
-    <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="event_time" name="event_time" required hidden></select>
     <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="event_column" name="event_column" hidden></select>
     <div id="event_value-wrap" hidden>
@@ -90,7 +44,6 @@
       <select id="event_value" name="event_value" hidden></select>
     </div>
 
-    <h2>4. Chart</h2>
     <label>Measure</label>
     <select name="measure" id="measure">
       <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>Volume</option>
@@ -111,12 +64,6 @@
     </div>
     <button type="submit">Run</button>
     <p id="error"></p>
-
-    <details>
-      <summary>Advanced: service-account JSON instead of ADC</summary>
-      <label for="credentials">Path to key file (leave blank to keep ADC)</label>
-      <input id="credentials" name="credentials" autocomplete="off" value="{{ config.credentials }}">
-    </details>
   </form>
   <div id="chart-wrap">
     <canvas id="chart" height="120"></canvas>
@@ -132,36 +79,24 @@
 </main>
 <script>
 const saved = {
-  dataset: {{ config.dataset|tojson }},
-  table_name: {{ config.table_name|tojson }},
-  entity: {{ config.entity|tojson }},
-  event_time: {{ config.event_time|tojson }},
   event_column: {{ config.event_column|tojson }},
   event_value: {{ config.event_value|tojson }},
 };
 const form = document.getElementById("f");
-// HTMLElement.dataset is data-* attributes. Access the BigQuery dataset
-// select by id, not as a property of the form.
 const projectEl = document.getElementById("project");
 const dataProjectEl = document.getElementById("data_project");
 const datasetEl = document.getElementById("dataset");
 const tableNameEl = document.getElementById("table_name");
 const tableEl = document.getElementById("table");
 const locationEl = document.getElementById("location");
-const entityEl = document.getElementById("entity");
 const eventTimeEl = document.getElementById("event_time");
 const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
 const eventValueEl = document.getElementById("event_value");
 const eventValueWrap = document.getElementById("event_value-wrap");
 const lookbackEl = document.getElementById("lookback_days");
-const ENTITY_TYPES = new Set({{ entity_types|tojson }});
-const TIME_TYPES = new Set({{ time_types|tojson }});
 const EVENT_NAME_TYPES = new Set({{ event_name_types|tojson }});
 let chart;
-let dsGen = 0;
-let tblGen = 0;
-let colGen = 0;
 let valGen = 0;
 
 function debounce(fn, ms) {
@@ -190,37 +125,6 @@ function typedOptions(cols, allowed) {
       value: c.name,
       label: c.type ? c.name + " (" + c.type + ")" : c.name,
     }));
-}
-async function loadEventValues() {
-  const gen = ++valGen;
-  if (!eventColumnEl.value) {
-    hideSelect(eventValueEl);
-    eventValueWrap.hidden = true;
-    return;
-  }
-  eventValueWrap.hidden = false;
-  if (!eventTimeEl.value || !combinedTable() || !locationEl.value) {
-    hideSelect(eventValueEl);
-    return;
-  }
-  hideSelect(eventValueEl);
-  setLoading(eventValueEl, true);
-  const data = await post("/api/event_values", {
-    ...authBody(),
-    table: combinedTable(),
-    location: locationEl.value,
-    event_column: eventColumnEl.value,
-    event_time: eventTimeEl.value,
-    lookback_days: Number(lookbackEl.value),
-  });
-  if (gen !== valGen) return;
-  setLoading(eventValueEl, false);
-  if (!data.ok) {
-    hideSelect(eventValueEl);
-    setError(data.error || "Could not list event names");
-    return;
-  }
-  fillSelect(eventValueEl, data.values || [], saved.event_value);
 }
 function fillSelect(sel, items, selected) {
   const cur = selected || sel.value;
@@ -253,33 +157,12 @@ function fillSelect(sel, items, selected) {
   if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
   sel.hidden = false;
 }
-function catalogProject() {
-  return dataProjectEl.value.trim() || projectEl.value.trim();
-}
 function authBody() {
   return {
     project: projectEl.value.trim(),
     data_project: dataProjectEl.value.trim(),
     credentials: credentialsEl.value.trim(),
   };
-}
-function combinedTable() {
-  const billing = projectEl.value.trim();
-  const data = dataProjectEl.value.trim() || billing;
-  const dataset = datasetEl.value.trim();
-  const tableName = tableNameEl.value.trim();
-  if (!dataset || !tableName) return "";
-  if (data && data !== billing) return data + "." + dataset + "." + tableName;
-  return dataset + "." + tableName;
-}
-function clearColumns() {
-  hideSelect(entityEl);
-  hideSelect(eventTimeEl);
-  hideSelect(eventColumnEl);
-  tableEl.value = "";
-  valGen++;
-  hideSelect(eventValueEl);
-  eventValueWrap.hidden = true;
 }
 async function post(url, body) {
   const res = await fetch(url, {
@@ -289,103 +172,58 @@ async function post(url, body) {
   });
   return res.json();
 }
-async function loadDatasets() {
-  const gen = ++dsGen;
-  tblGen++;
-  colGen++;
-  setError("");
-  hideSelect(tableNameEl);
-  clearColumns();
-  if (!catalogProject()) {
-    hideSelect(datasetEl);
+async function loadEventValues() {
+  const gen = ++valGen;
+  if (!eventColumnEl.value) {
+    hideSelect(eventValueEl);
+    eventValueWrap.hidden = true;
     return;
   }
-  hideSelect(datasetEl);
-  setLoading(datasetEl, true);
-  const data = await post("/api/datasets", authBody());
-  if (gen !== dsGen) return;
-  setLoading(datasetEl, false);
+  eventValueWrap.hidden = false;
+  if (!eventTimeEl.value || !tableEl.value || !locationEl.value) {
+    hideSelect(eventValueEl);
+    return;
+  }
+  hideSelect(eventValueEl);
+  setLoading(eventValueEl, true);
+  const data = await post("/api/event_values", {
+    ...authBody(),
+    table: tableEl.value,
+    location: locationEl.value,
+    event_column: eventColumnEl.value,
+    event_time: eventTimeEl.value,
+    lookback_days: Number(lookbackEl.value),
+  });
+  if (gen !== valGen) return;
+  setLoading(eventValueEl, false);
   if (!data.ok) {
-    hideSelect(datasetEl);
-    setError(data.error || "Could not list datasets");
+    hideSelect(eventValueEl);
+    setError(data.error || "Could not list event names");
     return;
   }
-  fillSelect(datasetEl, (data.datasets || []).map((d) => d.id), saved.dataset);
-  if (datasetEl.value) await loadTables();
+  fillSelect(eventValueEl, data.values || [], saved.event_value);
 }
-async function loadTables() {
-  const gen = ++tblGen;
-  colGen++;
-  setError("");
-  clearColumns();
-  if (!datasetEl.value) {
-    hideSelect(tableNameEl);
-    return;
-  }
-  hideSelect(tableNameEl);
-  setLoading(tableNameEl, true);
-  const data = await post("/api/tables", {...authBody(), dataset: datasetEl.value});
-  if (gen !== tblGen) return;
-  setLoading(tableNameEl, false);
-  if (!data.ok) {
-    hideSelect(tableNameEl);
-    setError(data.error || "Could not list tables");
-    return;
-  }
-  if (data.location) locationEl.value = data.location;
-  fillSelect(tableNameEl, data.tables || [], saved.table_name);
-  if (tableNameEl.value) await loadColumns();
-}
-async function loadColumns() {
-  const gen = ++colGen;
-  valGen++;
-  setError("");
-  if (!datasetEl.value || !tableNameEl.value) {
-    clearColumns();
-    return;
-  }
-  hideSelect(entityEl);
-  hideSelect(eventTimeEl);
-  hideSelect(eventColumnEl);
-  setLoading(entityEl, true);
-  setLoading(eventTimeEl, true);
+async function loadEventColumns() {
+  if (!datasetEl.value || !tableNameEl.value) return;
   setLoading(eventColumnEl, true);
   const data = await post("/api/columns", {
     ...authBody(),
     dataset: datasetEl.value,
     table_name: tableNameEl.value,
   });
-  if (gen !== colGen) return;
-  setLoading(entityEl, false);
-  setLoading(eventTimeEl, false);
   setLoading(eventColumnEl, false);
   if (!data.ok) {
-    clearColumns();
     setError(data.error || "Could not list columns");
     return;
   }
-  if (data.location) locationEl.value = data.location;
-  const cols = data.columns || [];
-  fillSelect(entityEl, typedOptions(cols, ENTITY_TYPES), saved.entity);
-  fillSelect(eventTimeEl, typedOptions(cols, TIME_TYPES), saved.event_time);
-  fillSelect(eventColumnEl, typedOptions(cols, EVENT_NAME_TYPES), saved.event_column);
-  tableEl.value = combinedTable();
+  fillSelect(eventColumnEl, typedOptions(data.columns || [], EVENT_NAME_TYPES), saved.event_column);
   await loadEventValues();
 }
 
-datasetEl.addEventListener("change", loadTables);
-tableNameEl.addEventListener("change", loadColumns);
 eventColumnEl.addEventListener("change", loadEventValues);
-eventTimeEl.addEventListener("change", loadEventValues);
-const scheduleDatasets = debounce(loadDatasets, 400);
-const scheduleEventValues = debounce(loadEventValues, 400);
-[projectEl, dataProjectEl, credentialsEl].forEach((el) => {
-  el.addEventListener("input", scheduleDatasets);
-  el.addEventListener("change", scheduleDatasets);
-});
-lookbackEl.addEventListener("input", scheduleEventValues);
-lookbackEl.addEventListener("change", scheduleEventValues);
-if (catalogProject()) loadDatasets();
+lookbackEl.addEventListener("input", debounce(loadEventValues, 400));
+lookbackEl.addEventListener("change", loadEventValues);
+loadEventColumns();
 
 function bucketLabel(raw) {
   const s = String(raw ?? "");
@@ -409,11 +247,9 @@ function relabelMeasures() {
     }
   }
 }
-document.getElementById("entity_label").addEventListener("input", relabelMeasures);
 relabelMeasures();
 
 function payload() {
-  tableEl.value = combinedTable();
   const d = Object.fromEntries(new FormData(form).entries());
   d.exact = document.getElementById("exact").checked;
   d.lookback_days = Number(d.lookback_days);
@@ -424,7 +260,7 @@ form.addEventListener("submit", async (e) => {
   setError("");
   const body = payload();
   if (!body.table || !body.entity || !body.event_time) {
-    setError("Pick a table, entity column, and timestamp column.");
+    setError("Mapping is incomplete. Open Setup.");
     return;
   }
   const res = await fetch("/api/run", {
@@ -456,13 +292,13 @@ form.addEventListener("submit", async (e) => {
   const ctx = document.getElementById("chart");
   if (chart) chart.destroy();
   if (window.Chart) {
+    const measureLabel = (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || body.measure;
     chart = new Chart(ctx, {
       type: "line",
-      data: { labels, datasets: [{ label: (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || body.measure, data: values, tension: 0.1 }] },
+      data: { labels, datasets: [{ label: measureLabel, data: values, tension: 0.1 }] },
       options: { responsive: true, scales: { y: { beginAtZero: true } } },
     });
   }
 });
 </script>
-</body>
-</html>
+{% endblock %}

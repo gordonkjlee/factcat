@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+{% block title %}Factcat — Setup{% endblock %}
+{% block extra_css %}
+    .setup-form { max-width: 28rem; padding: 1.5rem; background: #fff; min-height: calc(100vh - 2.75rem); }
+{% endblock %}
+{% block body %}
+<form id="f" class="setup-form">
+  <h1>Project setup</h1>
+  <p class="lede">Map a table in <em>your</em> BigQuery. Saved to <code>.factcat.json</code> in this directory. ADC unless you open Advanced.</p>
+
+  <h2>Warehouse</h2>
+  <label for="project">GCP project that runs the query (billing)</label>
+  <input id="project" name="project" required autocomplete="off" value="{{ config.project }}">
+  <label for="data_project">Project that holds the table (blank = same as billing)</label>
+  <input id="data_project" name="data_project" autocomplete="off" value="{{ config.data_project }}">
+  <input type="hidden" name="location" id="location" value="{{ config.location }}">
+  <input type="hidden" name="table" id="table" value="{{ config.table }}">
+
+  <h2>Table</h2>
+  <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <select id="dataset" name="dataset" hidden></select>
+  <label for="table_name">Table <span id="table_name-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <select id="table_name" name="table_name" hidden></select>
+
+  <h2>Grain</h2>
+  <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <select id="entity" name="entity" required hidden></select>
+  <label for="entity_label">This grain is called</label>
+  <input id="entity_label" name="entity_label" list="entity-label-suggestions" autocomplete="off" value="{{ config.entity_label }}">
+  <datalist id="entity-label-suggestions">
+    <option value="customer">
+    <option value="user">
+    <option value="subscription">
+    <option value="account">
+  </datalist>
+  <span class="hint">Display name only. Does not default the id column. Blank = entity.</span>
+  <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <select id="event_time" name="event_time" required hidden></select>
+
+  <button type="submit">Save and open Events</button>
+  <p id="error"></p>
+
+  <details>
+    <summary>Advanced: service-account JSON instead of ADC</summary>
+    <label for="credentials">Path to key file (leave blank to keep ADC)</label>
+    <input id="credentials" name="credentials" autocomplete="off" value="{{ config.credentials }}">
+  </details>
+</form>
+<script>
+const saved = {
+  dataset: {{ config.dataset|tojson }},
+  table_name: {{ config.table_name|tojson }},
+  entity: {{ config.entity|tojson }},
+  event_time: {{ config.event_time|tojson }},
+};
+const form = document.getElementById("f");
+// HTMLElement.dataset is data-* attributes. Access the BigQuery dataset
+// select by id, not as a property of the form.
+const projectEl = document.getElementById("project");
+const dataProjectEl = document.getElementById("data_project");
+const datasetEl = document.getElementById("dataset");
+const tableNameEl = document.getElementById("table_name");
+const tableEl = document.getElementById("table");
+const locationEl = document.getElementById("location");
+const entityEl = document.getElementById("entity");
+const eventTimeEl = document.getElementById("event_time");
+const credentialsEl = document.getElementById("credentials");
+const ENTITY_TYPES = new Set({{ entity_types|tojson }});
+const TIME_TYPES = new Set({{ time_types|tojson }});
+let dsGen = 0;
+let tblGen = 0;
+let colGen = 0;
+
+function debounce(fn, ms) {
+  let t;
+  return () => {
+    clearTimeout(t);
+    t = setTimeout(fn, ms);
+  };
+}
+function setError(text) {
+  document.getElementById("error").textContent = text || "";
+}
+function setLoading(sel, on) {
+  const hint = document.getElementById(sel.id + "-loading");
+  if (hint) hint.hidden = !on;
+}
+function hideSelect(sel) {
+  setLoading(sel, false);
+  sel.innerHTML = "";
+  sel.hidden = true;
+}
+function typedOptions(cols, allowed) {
+  return (cols || [])
+    .filter((c) => allowed.has(String(c.type || "").toUpperCase()))
+    .map((c) => ({
+      value: c.name,
+      label: c.type ? c.name + " (" + c.type + ")" : c.name,
+    }));
+}
+function fillSelect(sel, items, selected) {
+  const cur = selected || sel.value;
+  sel.innerHTML = "";
+  if (!items.length) {
+    sel.hidden = true;
+    return;
+  }
+  const ranked = [...items].sort((a, b) => {
+    const ka = String(typeof a === "string" ? a : a.value).toLowerCase();
+    const kb = String(typeof b === "string" ? b : b.value).toLowerCase();
+    if (ka < kb) return -1;
+    if (ka > kb) return 1;
+    return 0;
+  });
+  const blank = document.createElement("option");
+  blank.value = "";
+  sel.appendChild(blank);
+  for (const item of ranked) {
+    const opt = document.createElement("option");
+    if (typeof item === "string") {
+      opt.value = item;
+      opt.textContent = item;
+    } else {
+      opt.value = item.value;
+      opt.textContent = item.label;
+    }
+    sel.appendChild(opt);
+  }
+  if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  sel.hidden = false;
+}
+function catalogProject() {
+  return dataProjectEl.value.trim() || projectEl.value.trim();
+}
+function authBody() {
+  return {
+    project: projectEl.value.trim(),
+    data_project: dataProjectEl.value.trim(),
+    credentials: credentialsEl.value.trim(),
+  };
+}
+function combinedTable() {
+  const billing = projectEl.value.trim();
+  const data = dataProjectEl.value.trim() || billing;
+  const dataset = datasetEl.value.trim();
+  const tableName = tableNameEl.value.trim();
+  if (!dataset || !tableName) return "";
+  if (data && data !== billing) return data + "." + dataset + "." + tableName;
+  return dataset + "." + tableName;
+}
+function clearColumns() {
+  hideSelect(entityEl);
+  hideSelect(eventTimeEl);
+  tableEl.value = "";
+}
+async function post(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+async function loadDatasets() {
+  const gen = ++dsGen;
+  tblGen++;
+  colGen++;
+  setError("");
+  hideSelect(tableNameEl);
+  clearColumns();
+  if (!catalogProject()) {
+    hideSelect(datasetEl);
+    return;
+  }
+  hideSelect(datasetEl);
+  setLoading(datasetEl, true);
+  const data = await post("/api/datasets", authBody());
+  if (gen !== dsGen) return;
+  setLoading(datasetEl, false);
+  if (!data.ok) {
+    hideSelect(datasetEl);
+    setError(data.error || "Could not list datasets");
+    return;
+  }
+  fillSelect(datasetEl, (data.datasets || []).map((d) => d.id), saved.dataset);
+  if (datasetEl.value) await loadTables();
+}
+async function loadTables() {
+  const gen = ++tblGen;
+  colGen++;
+  setError("");
+  clearColumns();
+  if (!datasetEl.value) {
+    hideSelect(tableNameEl);
+    return;
+  }
+  hideSelect(tableNameEl);
+  setLoading(tableNameEl, true);
+  const data = await post("/api/tables", {...authBody(), dataset: datasetEl.value});
+  if (gen !== tblGen) return;
+  setLoading(tableNameEl, false);
+  if (!data.ok) {
+    hideSelect(tableNameEl);
+    setError(data.error || "Could not list tables");
+    return;
+  }
+  if (data.location) locationEl.value = data.location;
+  fillSelect(tableNameEl, data.tables || [], saved.table_name);
+  if (tableNameEl.value) await loadColumns();
+}
+async function loadColumns() {
+  const gen = ++colGen;
+  setError("");
+  if (!datasetEl.value || !tableNameEl.value) {
+    clearColumns();
+    return;
+  }
+  hideSelect(entityEl);
+  hideSelect(eventTimeEl);
+  setLoading(entityEl, true);
+  setLoading(eventTimeEl, true);
+  const data = await post("/api/columns", {
+    ...authBody(),
+    dataset: datasetEl.value,
+    table_name: tableNameEl.value,
+  });
+  if (gen !== colGen) return;
+  setLoading(entityEl, false);
+  setLoading(eventTimeEl, false);
+  if (!data.ok) {
+    clearColumns();
+    setError(data.error || "Could not list columns");
+    return;
+  }
+  if (data.location) locationEl.value = data.location;
+  const cols = data.columns || [];
+  fillSelect(entityEl, typedOptions(cols, ENTITY_TYPES), saved.entity);
+  fillSelect(eventTimeEl, typedOptions(cols, TIME_TYPES), saved.event_time);
+  tableEl.value = combinedTable();
+}
+
+datasetEl.addEventListener("change", loadTables);
+tableNameEl.addEventListener("change", loadColumns);
+const scheduleDatasets = debounce(loadDatasets, 400);
+[projectEl, dataProjectEl, credentialsEl].forEach((el) => {
+  el.addEventListener("input", scheduleDatasets);
+  el.addEventListener("change", scheduleDatasets);
+});
+if (catalogProject()) loadDatasets();
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setError("");
+  tableEl.value = combinedTable();
+  const body = Object.fromEntries(new FormData(form).entries());
+  if (!body.table || !body.entity || !body.event_time || !body.project || !body.location) {
+    setError("Pick a table, entity id, and timestamp. Location comes from the dataset.");
+    return;
+  }
+  const data = await post("/api/save", body);
+  if (!data.ok) {
+    setError(data.error || "Could not save mapping");
+    return;
+  }
+  window.location.href = "/";
+});
+</script>
+{% endblock %}

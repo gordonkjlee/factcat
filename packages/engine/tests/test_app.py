@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -9,44 +10,72 @@ from fastapi.testclient import TestClient
 
 from factcat.warehouses import QueryResult
 from factcat_app.catalog import column_fits
+from factcat_app.config import mapping_ready
 from factcat_app.main import APP_DIR, app
 
 
-def test_index_renders(monkeypatch, tmp_path):
+def _map_cfg(tmp_path, monkeypatch, **extra):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    data = {
+        "project": "adc-project",
+        "location": "EU",
+        "table": "analytics.events",
+        "dataset": "analytics",
+        "table_name": "events",
+        "entity": "account_id",
+        "event_time": "occurred_at",
+    }
+    data.update(extra)
+    (tmp_path / "cfg.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_unmapped_root_redirects_to_setup(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     monkeypatch.setattr("factcat_app.main.bootstrap_project", lambda: "adc-project")
+    client = TestClient(app)
+    res = client.get("/", follow_redirects=False)
+    assert res.status_code == 303
+    assert res.headers["location"] == "/setup"
+
+
+def test_setup_renders(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr("factcat_app.main.bootstrap_project", lambda: "adc-project")
+    client = TestClient(app)
+    res = client.get("/setup")
+    assert res.status_code == 200
+    assert "Project setup" in res.text
+    assert "Entity id" in res.text
+    assert "This grain is called" in res.text
+    assert "Volume" not in res.text
+    assert 'value="user_id"' not in res.text
+    assert "/path/to/key.json" not in res.text
+    assert "Load datasets" not in res.text
+    assert "form.dataset" not in res.text
+    assert "Select a dataset" not in res.text
+    assert "Select a table" not in res.text
+    assert 'getElementById("dataset")' in res.text
+    assert 'id="dataset-loading"' in res.text
+    assert 'aria-label="Loading"' in res.text
+    assert 'value="adc-project"' in res.text
+    assert 'href="/setup"' in res.text
+
+
+def test_events_renders_when_mapped(monkeypatch, tmp_path):
+    _map_cfg(tmp_path, monkeypatch)
     client = TestClient(app)
     res = client.get("/")
     assert res.status_code == 200
     assert "Volume" in res.text
     assert "Unique entities" in res.text
     assert "Average per entity" in res.text
-    assert "This grain is called" in res.text
     assert ">Uniques<" not in res.text
-    assert 'value="user_id"' not in res.text
-    assert "/path/to/key.json" not in res.text
-    assert "dataset.events" not in res.text
-    assert "subscription_id" not in res.text
-    assert "Load datasets" not in res.text
-    assert "form.dataset" not in res.text
-    assert "Select a dataset" not in res.text
-    assert "Select a table" not in res.text
-    assert "Select entity column" not in res.text
-    assert "Select timestamp column" not in res.text
-    assert "Loading datasets" not in res.text
-    assert "Loading tables" not in res.text
-    assert 'getElementById("dataset")' in res.text
-    assert 'id="dataset-loading"' in res.text
-    assert 'id="table_name-loading"' in res.text
-    assert 'aria-label="Loading"' in res.text
-    assert "@keyframes spin" in res.text
-    assert "Event name value" not in res.text
-    assert "Uniques grain" not in res.text
-    assert "Entity id" in res.text
     assert "Only this event" in res.text
     assert "/api/event_values" in res.text
-    assert 'id="event_value-loading"' in res.text
-    assert 'value="adc-project"' in res.text
+    assert "Project setup" not in res.text
+    assert "GCP project that runs" not in res.text
+    assert "account_id" in res.text
+    assert 'value="user_id"' not in res.text
 
 
 def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
@@ -220,7 +249,40 @@ def test_save_drops_unknown_keys_and_nulls(monkeypatch, tmp_path):
 
 
 def test_template_ships_with_package():
-    assert (Path(APP_DIR) / "templates" / "index.html").is_file()
+    templates = Path(APP_DIR) / "templates"
+    assert (templates / "index.html").is_file()
+    assert (templates / "setup.html").is_file()
+    assert (templates / "base.html").is_file()
+
+
+def test_mapping_ready_requires_table_entity_and_time():
+    base = {
+        "project": "p",
+        "location": "EU",
+        "table": "analytics.events",
+        "entity": "account_id",
+        "event_time": "occurred_at",
+    }
+    assert mapping_ready(base)
+    for key in ("table", "entity", "event_time"):
+        missing = dict(base)
+        missing[key] = ""
+        assert not mapping_ready(missing)
+
+
+def test_save_overlays_without_resetting_lookback(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    client.post(
+        "/api/save",
+        json={"project": "acme", "lookback_days": 90, "measure": "total"},
+    )
+    client.post("/api/save", json={"location": "EU"})
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert saved["project"] == "acme"
+    assert saved["location"] == "EU"
+    assert saved["lookback_days"] == 90
+    assert saved["measure"] == "total"
 
 
 def test_datasets_lists_from_adapter(monkeypatch, tmp_path):
