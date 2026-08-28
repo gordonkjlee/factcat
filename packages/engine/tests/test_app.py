@@ -13,11 +13,17 @@ from factcat_app.main import APP_DIR, app
 
 def test_index_renders(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr("factcat_app.main.bootstrap_project", lambda: "adc-project")
     client = TestClient(app)
     res = client.get("/")
     assert res.status_code == 200
     assert "Uniques" in res.text
     assert 'value="user_id"' not in res.text
+    assert "/path/to/key.json" not in res.text
+    assert "dataset.events" not in res.text
+    assert "subscription_id" not in res.text
+    assert "Load datasets" in res.text
+    assert 'value="adc-project"' in res.text
 
 
 def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
@@ -191,3 +197,60 @@ def test_save_drops_unknown_keys_and_nulls(monkeypatch, tmp_path):
 
 def test_template_ships_with_package():
     assert (Path(APP_DIR) / "templates" / "index.html").is_file()
+
+
+def test_datasets_lists_from_adapter(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr(
+        "factcat_app.catalog.list_datasets",
+        lambda **kw: [{"id": "3_entity"}, {"id": "analytics"}],
+    )
+    client = TestClient(app)
+    res = client.post("/api/datasets", json={"project": "p"})
+    assert res.status_code == 200
+    assert res.json()["datasets"][0]["id"] == "3_entity"
+
+
+def test_tables_return_location(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr(
+        "factcat_app.catalog.list_tables",
+        lambda **kw: {"location": "EU", "tables": ["customer_events"]},
+    )
+    client = TestClient(app)
+    res = client.post(
+        "/api/tables", json={"project": "p", "dataset": "3_entity"}
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["location"] == "EU"
+    assert "customer_events" in body["tables"]
+
+
+def test_columns_list_names(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr(
+        "factcat_app.catalog.list_columns",
+        lambda **kw: {
+            "location": "EU",
+            "columns": [
+                {"name": "customer_care_id", "type": "STRING"},
+                {"name": "event_datetime", "type": "DATETIME"},
+            ],
+        },
+    )
+    client = TestClient(app)
+    res = client.post(
+        "/api/columns",
+        json={"project": "p", "dataset": "3_entity", "table_name": "customer_events"},
+    )
+    assert res.status_code == 200
+    names = [c["name"] for c in res.json()["columns"]]
+    assert names == ["customer_care_id", "event_datetime"]
+
+
+def test_datasets_require_project(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    res = client.post("/api/datasets", json={"project": ""})
+    assert res.status_code == 400

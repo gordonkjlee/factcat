@@ -11,8 +11,11 @@ CONFIG_ENV = "FACTCAT_CONFIG"
 
 DEFAULTS: dict[str, Any] = {
     "project": "",
+    "data_project": "",
     "location": "",
     "credentials": "",
+    "dataset": "",
+    "table_name": "",
     "table": "",
     "entity": "",
     "event_time": "",

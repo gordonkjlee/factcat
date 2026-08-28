@@ -8,18 +8,22 @@
   <style>
     :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #111; }
     body { margin: 0; background: #f4f4f5; }
-    main { display: grid; grid-template-columns: 22rem 1fr; min-height: 100vh; }
+    main { display: grid; grid-template-columns: 24rem 1fr; min-height: 100vh; }
     form { background: #fff; padding: 1.25rem; border-right: 1px solid #e4e4e7; }
-    h1 { font-size: 1.1rem; margin: 0 0 1rem; }
+    h1 { font-size: 1.1rem; margin: 0 0 0.35rem; }
+    h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; margin: 1.1rem 0 0.4rem; }
+    .lede { font-size: 0.8rem; color: #52525b; margin: 0 0 0.75rem; }
     label { display: block; font-size: 0.75rem; font-weight: 600; margin: 0.65rem 0 0.2rem; }
     input, select { width: 100%; box-sizing: border-box; padding: 0.4rem 0.5rem; }
     .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
-    button { margin-top: 1rem; padding: 0.5rem 0.9rem; }
+    button { margin-top: 0.75rem; padding: 0.5rem 0.9rem; }
+    button.secondary { background: #fff; }
     #chart-wrap { padding: 1.25rem; }
-    #error { color: #b91c1c; white-space: pre-wrap; }
+    #error { color: #b91c1c; white-space: pre-wrap; font-size: 0.85rem; }
+    #status { color: #52525b; font-size: 0.8rem; min-height: 1.2em; }
     table { border-collapse: collapse; margin-top: 1rem; font-size: 0.85rem; }
     td, th { border-bottom: 1px solid #e4e4e7; padding: 0.25rem 0.75rem 0.25rem 0; text-align: left; }
-    details { margin-top: 1rem; font-size: 0.75rem; }
+    details { margin-top: 0.75rem; font-size: 0.75rem; }
     pre { overflow: auto; background: #fff; padding: 0.75rem; }
   </style>
 </head>
@@ -27,25 +31,34 @@
 <main>
   <form id="f">
     <h1>Factcat — Events</h1>
-    <p style="font-size:0.8rem;color:#52525b;margin:0 0 0.75rem">
-      Runs in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code>.
-    </p>
-    <label>GCP project</label>
-    <input name="project" required value="{{ config.project }}">
-    <label>Location</label>
-    <input name="location" required placeholder="EU" value="{{ config.location }}">
-    <label>Service-account JSON (optional; ADC if empty)</label>
-    <input name="credentials" placeholder="/path/to/key.json" value="{{ config.credentials }}">
-    <label>Table</label>
-    <input name="table" required placeholder="dataset.events" value="{{ config.table }}">
-    <label>Entity column</label>
-    <input name="entity" required placeholder="subscription_id" value="{{ config.entity }}">
-    <label>Timestamp column</label>
-    <input name="event_time" required placeholder="occurred_at" value="{{ config.event_time }}">
-    <label>Event name column (optional)</label>
-    <input name="event_column" placeholder="event_name" value="{{ config.event_column }}">
-    <label>Event name value (optional)</label>
-    <input name="event_value" placeholder="paid" value="{{ config.event_value }}">
+    <p class="lede">Runs in <em>your</em> BigQuery. Uses application-default credentials unless you open Advanced. Mapping is saved to <code>.factcat.json</code>.</p>
+
+    <h2>1. Project</h2>
+    <label for="project">GCP project that runs the query (billing)</label>
+    <input id="project" name="project" required autocomplete="off" value="{{ config.project }}">
+    <label for="data_project">Project that holds the table (blank = same as billing)</label>
+    <input id="data_project" name="data_project" autocomplete="off" value="{{ config.data_project }}">
+    <input type="hidden" name="location" id="location" value="{{ config.location }}">
+    <input type="hidden" name="table" id="table" value="{{ config.table }}">
+    <button type="button" id="load-datasets" class="secondary">Load datasets</button>
+
+    <h2>2. Table</h2>
+    <label for="dataset">Dataset</label>
+    <select id="dataset" name="dataset"></select>
+    <label for="table_name">Table</label>
+    <select id="table_name" name="table_name"></select>
+
+    <h2>3. Columns</h2>
+    <label for="entity">Entity (Uniques grain — no user_id default)</label>
+    <select id="entity" name="entity" required></select>
+    <label for="event_time">Timestamp</label>
+    <select id="event_time" name="event_time" required></select>
+    <label for="event_column">Event name column (optional)</label>
+    <select id="event_column" name="event_column"></select>
+    <label for="event_value">Event name value (optional)</label>
+    <input id="event_value" name="event_value" autocomplete="off" value="{{ config.event_value }}">
+
+    <h2>4. Chart</h2>
     <label>Measure</label>
     <select name="measure">
       <option value="total" {% if config.measure == "total" %}selected{% endif %}>Total</option>
@@ -65,7 +78,14 @@
       <label for="exact" style="margin:0">Exact (off = approx Uniques)</label>
     </div>
     <button type="submit">Run</button>
+    <p id="status"></p>
     <p id="error"></p>
+
+    <details>
+      <summary>Advanced: service-account JSON instead of ADC</summary>
+      <label for="credentials">Path to key file (leave blank to keep ADC)</label>
+      <input id="credentials" name="credentials" autocomplete="off" value="{{ config.credentials }}">
+    </details>
   </form>
   <div id="chart-wrap">
     <canvas id="chart" height="120"></canvas>
@@ -80,9 +100,128 @@
   </div>
 </main>
 <script>
+const saved = {
+  dataset: {{ config.dataset|tojson }},
+  table_name: {{ config.table_name|tojson }},
+  entity: {{ config.entity|tojson }},
+  event_time: {{ config.event_time|tojson }},
+  event_column: {{ config.event_column|tojson }},
+};
 const form = document.getElementById("f");
 let chart;
+
+function setStatus(text) {
+  document.getElementById("status").textContent = text || "";
+}
+function setError(text) {
+  document.getElementById("error").textContent = text || "";
+}
+function fillSelect(sel, items, selected, blankLabel) {
+  const cur = selected || sel.value;
+  sel.innerHTML = "";
+  if (blankLabel !== undefined) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = blankLabel;
+    sel.appendChild(opt);
+  }
+  for (const item of items) {
+    const opt = document.createElement("option");
+    if (typeof item === "string") {
+      opt.value = item;
+      opt.textContent = item;
+    } else {
+      opt.value = item.value;
+      opt.textContent = item.label;
+    }
+    sel.appendChild(opt);
+  }
+  if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+}
+function authBody() {
+  return {
+    project: form.project.value.trim(),
+    data_project: form.data_project.value.trim(),
+    credentials: form.credentials.value.trim(),
+  };
+}
+function combinedTable() {
+  const billing = form.project.value.trim();
+  const data = form.data_project.value.trim() || billing;
+  const dataset = form.dataset.value.trim();
+  const tableName = form.table_name.value.trim();
+  if (!dataset || !tableName) return "";
+  if (data && data !== billing) return data + "." + dataset + "." + tableName;
+  return dataset + "." + tableName;
+}
+async function post(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+async function loadDatasets() {
+  setError("");
+  setStatus("Loading datasets…");
+  const data = await post("/api/datasets", authBody());
+  if (!data.ok) {
+    setStatus("");
+    setError(data.error || "Could not list datasets");
+    return;
+  }
+  fillSelect(form.dataset, (data.datasets || []).map((d) => d.id), saved.dataset, "Select a dataset");
+  setStatus((data.datasets || []).length + " datasets");
+  if (form.dataset.value) await loadTables();
+}
+async function loadTables() {
+  setError("");
+  if (!form.dataset.value) return;
+  setStatus("Loading tables…");
+  const data = await post("/api/tables", {...authBody(), dataset: form.dataset.value});
+  if (!data.ok) {
+    setStatus("");
+    setError(data.error || "Could not list tables");
+    return;
+  }
+  if (data.location) form.location.value = data.location;
+  fillSelect(form.table_name, data.tables || [], saved.table_name, "Select a table");
+  setStatus((data.tables || []).length + " tables" + (data.location ? " · " + data.location : ""));
+  if (form.table_name.value) await loadColumns();
+}
+async function loadColumns() {
+  setError("");
+  if (!form.dataset.value || !form.table_name.value) return;
+  setStatus("Loading columns…");
+  const data = await post("/api/columns", {
+    ...authBody(),
+    dataset: form.dataset.value,
+    table_name: form.table_name.value,
+  });
+  if (!data.ok) {
+    setStatus("");
+    setError(data.error || "Could not list columns");
+    return;
+  }
+  if (data.location) form.location.value = data.location;
+  const cols = (data.columns || []).map((c) => ({
+    value: c.name,
+    label: c.type ? c.name + " (" + c.type + ")" : c.name,
+  }));
+  fillSelect(form.entity, cols, saved.entity, "Select entity column");
+  fillSelect(form.event_time, cols, saved.event_time, "Select timestamp column");
+  fillSelect(form.event_column, cols, saved.event_column, "(none)");
+  form.table.value = combinedTable();
+  setStatus((data.columns || []).length + " columns");
+}
+
+document.getElementById("load-datasets").addEventListener("click", loadDatasets);
+form.dataset.addEventListener("change", loadTables);
+form.table_name.addEventListener("change", loadColumns);
+
 function payload() {
+  form.table.value = combinedTable();
   const d = Object.fromEntries(new FormData(form).entries());
   d.exact = document.getElementById("exact").checked;
   d.lookback_days = Number(d.lookback_days);
@@ -90,8 +229,12 @@ function payload() {
 }
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
-  document.getElementById("error").textContent = "";
+  setError("");
   const body = payload();
+  if (!body.table || !body.entity || !body.event_time) {
+    setError("Pick a table, entity column, and timestamp column.");
+    return;
+  }
   const res = await fetch("/api/run", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -99,7 +242,7 @@ form.addEventListener("submit", async (e) => {
   });
   const data = await res.json();
   if (!data.ok) {
-    document.getElementById("error").textContent = data.error || res.statusText;
+    setError(data.error || res.statusText);
     return;
   }
   document.getElementById("sql").textContent = data.sql || "";
@@ -128,6 +271,8 @@ form.addEventListener("submit", async (e) => {
     });
   }
 });
+
+if (form.project.value) loadDatasets();
 </script>
 </body>
 </html>

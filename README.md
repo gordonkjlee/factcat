@@ -211,21 +211,15 @@ cd /path/to/your/warehouse   # mapping is saved here
 factcat-app
 ```
 
-Open http://127.0.0.1:8000. On first run the form is empty. Fill in:
+Open http://127.0.0.1:8000. The billing project is filled from ADC when possible.
+Click **Load datasets**, pick dataset → table → entity and timestamp columns. Location
+is taken from the dataset (do not guess `US`). Advanced is only if you use a
+key file instead of ADC.
 
-| Field | What to put |
-|---|---|
-| GCP project | The project that **runs** the query (billing) |
-| Location | Dataset location, e.g. `EU` or `US` — do not guess |
-| Service-account JSON | Leave blank to use ADC from `gcloud auth application-default login`. Or a path to a key file |
-| Table | `dataset.table` or `project.dataset.table` |
-| Entity column | The id to count as Uniques (`subscription_id`, `account_id`, …). There is no `user_id` default |
-| Timestamp column | When the event happened |
-| Event name column / value | Optional filter, e.g. `event_name` + `paid` |
-| Measure | Total, Uniques, or Average (Total / Uniques) |
-| Bucket | Day, week, or month (fills `date_trunc`, not a hidden calendar API) |
-| Lookback (days) | How far back to scan (default 30) |
-| Exact | Off = approx Uniques. On = exact `COUNT DISTINCT` |
+If the table lives in another GCP project (billing in `dev`, data in `prod`), set
+**Project that holds the table** before loading datasets.
+
+There is no `user_id` default: Uniques is whatever entity column you pick.
 
 Click **Run**. The mapping is written to `.factcat.json` in the directory where you started
 `factcat-app`, so the next start is already filled in. Add `.factcat.json` to that repo’s
