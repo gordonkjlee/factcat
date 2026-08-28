@@ -18,7 +18,11 @@ def test_index_renders(monkeypatch, tmp_path):
     client = TestClient(app)
     res = client.get("/")
     assert res.status_code == 200
-    assert "Uniques" in res.text
+    assert "Volume" in res.text
+    assert "Unique entities" in res.text
+    assert "Average per entity" in res.text
+    assert "This grain is called" in res.text
+    assert ">Uniques<" not in res.text
     assert 'value="user_id"' not in res.text
     assert "/path/to/key.json" not in res.text
     assert "dataset.events" not in res.text
@@ -83,7 +87,8 @@ def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
     sql = warehouse.run.call_args.args[0]
     assert "account_id" in sql
     assert "user_id" not in sql
-    assert "TIMESTAMP_TRUNC" in sql.upper()
+    assert "TIMESTAMP_TRUNC" in sql.upper() or "DATE_TRUNC" in sql.upper()
+    assert "DATE" in sql.upper()
     assert captured["kind"] == "bigquery"
     assert captured["project"] == "p"
     assert captured["location"] == "EU"

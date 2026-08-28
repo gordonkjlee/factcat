@@ -40,7 +40,7 @@ def test_does_not_default_entity_to_user_id():
 
 def test_week_bucket_is_date_trunc_sugar():
     spec = spec_from_form(_form(grain="week"))
-    assert spec.bucket == "date_trunc('week', occurred_at)"
+    assert spec.bucket == "CAST(date_trunc('week', occurred_at) AS DATE)"
 
 
 def test_event_filter_is_and_lookback():
@@ -105,7 +105,15 @@ def test_event_value_without_column_is_rejected():
 
 def test_month_bucket_is_date_trunc_sugar():
     spec = spec_from_form(_form(grain="month"))
-    assert spec.bucket == "date_trunc('month', occurred_at)"
+    assert spec.bucket == "CAST(date_trunc('month', occurred_at) AS DATE)"
+
+
+def test_day_bucket_casts_to_date():
+    spec = spec_from_form(_form(grain="day"))
+    assert spec.bucket == "CAST(date_trunc('day', occurred_at) AS DATE)"
+    sql = events_sql(spec, dialect="bigquery").upper()
+    assert "DATE" in sql
+    assert "DATE_TRUNC" in sql or "TIMESTAMP_TRUNC" in sql
 
 
 def test_plain_table_transpiles():

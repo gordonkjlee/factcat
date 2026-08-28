@@ -84,7 +84,7 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
         event_time=event_time,
         measure=measure,  # type: ignore[arg-type]
         on="events",
-        bucket=f"date_trunc('{grain}', {event_time})",
+        bucket=f"CAST(date_trunc('{grain}', {event_time}) AS DATE)",
         where=" AND ".join(clauses),
         exact=exact,
     )

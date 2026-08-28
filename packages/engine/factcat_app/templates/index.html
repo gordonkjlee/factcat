@@ -7,9 +7,15 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
     :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #111; }
+    html, body { height: 100%; overflow: hidden; }
     body { margin: 0; background: #f4f4f5; }
-    main { display: grid; grid-template-columns: 24rem 1fr; min-height: 100vh; }
-    form { background: #fff; padding: 1.25rem; border-right: 1px solid #e4e4e7; }
+    main {
+      display: grid;
+      grid-template-columns: 24rem 1fr;
+      height: 100vh;
+      min-height: 0;
+    }
+    form { background: #fff; padding: 1.25rem; border-right: 1px solid #e4e4e7; overflow-y: auto; min-height: 0; }
     h1 { font-size: 1.1rem; margin: 0 0 0.35rem; }
     h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; margin: 1.1rem 0 0.4rem; }
     .lede { font-size: 0.8rem; color: #52525b; margin: 0 0 0.75rem; }
@@ -17,7 +23,7 @@
     input, select { width: 100%; box-sizing: border-box; padding: 0.4rem 0.5rem; }
     .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
     button { margin-top: 0.75rem; padding: 0.5rem 0.9rem; }
-    #chart-wrap { padding: 1.25rem; }
+    #chart-wrap { padding: 1.25rem; overflow: auto; min-height: 0; }
     #error { color: #b91c1c; white-space: pre-wrap; font-size: 0.85rem; }
     .hint { display: block; font-weight: 400; color: #71717a; font-size: 0.7rem; margin: 0.15rem 0 0.35rem; }
     .loading {
@@ -65,6 +71,15 @@
     <h2>3. Columns</h2>
     <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="entity" name="entity" required hidden></select>
+    <label for="entity_label">This grain is called</label>
+    <input id="entity_label" name="entity_label" list="entity-label-suggestions" autocomplete="off" value="{{ config.entity_label }}">
+    <datalist id="entity-label-suggestions">
+      <option value="customer">
+      <option value="user">
+      <option value="subscription">
+      <option value="account">
+    </datalist>
+    <span class="hint">Display name only. Does not default the id column. Blank = entity.</span>
     <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="event_time" name="event_time" required hidden></select>
     <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
@@ -77,10 +92,10 @@
 
     <h2>4. Chart</h2>
     <label>Measure</label>
-    <select name="measure">
-      <option value="total" {% if config.measure == "total" %}selected{% endif %}>Total</option>
-      <option value="uniques" {% if config.measure == "uniques" %}selected{% endif %}>Uniques</option>
-      <option value="average" {% if config.measure == "average" %}selected{% endif %}>Average</option>
+    <select name="measure" id="measure">
+      <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>Volume</option>
+      <option value="uniques" title="Count distinct of the mapped entity id" {% if config.measure == "uniques" %}selected{% endif %}>Unique entities</option>
+      <option value="average" title="Volume divided by unique entities" {% if config.measure == "average" %}selected{% endif %}>Average per entity</option>
     </select>
     <label>Bucket</label>
     <select name="grain">
@@ -92,7 +107,7 @@
     <input id="lookback_days" name="lookback_days" type="number" min="1" max="3650" value="{{ config.lookback_days }}">
     <div class="row">
       <input name="exact" type="checkbox" id="exact" {% if config.exact %}checked{% endif %} style="width:auto">
-      <label for="exact" style="margin:0">Exact (off = approx Uniques)</label>
+      <label for="exact" style="margin:0">Exact (off = approx unique count)</label>
     </div>
     <button type="submit">Run</button>
     <p id="error"></p>
@@ -372,6 +387,31 @@ lookbackEl.addEventListener("input", scheduleEventValues);
 lookbackEl.addEventListener("change", scheduleEventValues);
 if (catalogProject()) loadDatasets();
 
+function bucketLabel(raw) {
+  const s = String(raw ?? "");
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : s;
+}
+function relabelMeasures() {
+  const w = (document.getElementById("entity_label").value || "").trim();
+  const unique = w ? "Unique " + w : "Unique entities";
+  const avg = w ? "Average per " + w : "Average per entity";
+  for (const o of form.measure.options) {
+    if (o.value === "total") {
+      o.textContent = "Volume";
+      o.title = "Count of event rows in the bucket";
+    } else if (o.value === "uniques") {
+      o.textContent = unique;
+      o.title = "Count distinct of the mapped entity id" + (w ? " (" + w + ")" : "");
+    } else if (o.value === "average") {
+      o.textContent = avg;
+      o.title = "Volume divided by " + unique.toLowerCase();
+    }
+  }
+}
+document.getElementById("entity_label").addEventListener("input", relabelMeasures);
+relabelMeasures();
+
 function payload() {
   tableEl.value = combinedTable();
   const d = Object.fromEntries(new FormData(form).entries());
@@ -403,12 +443,12 @@ form.addEventListener("submit", async (e) => {
   const labels = [];
   const values = [];
   for (const row of data.rows || []) {
-    labels.push(row.bucket);
+    labels.push(bucketLabel(row.bucket));
     values.push(row.value);
     const tr = document.createElement("tr");
     const tdBucket = document.createElement("td");
     const tdValue = document.createElement("td");
-    tdBucket.textContent = row.bucket;
+    tdBucket.textContent = bucketLabel(row.bucket);
     tdValue.textContent = row.value;
     tr.append(tdBucket, tdValue);
     tbody.appendChild(tr);
@@ -418,7 +458,7 @@ form.addEventListener("submit", async (e) => {
   if (window.Chart) {
     chart = new Chart(ctx, {
       type: "line",
-      data: { labels, datasets: [{ label: body.measure, data: values, tension: 0.1 }] },
+      data: { labels, datasets: [{ label: (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || body.measure, data: values, tension: 0.1 }] },
       options: { responsive: true, scales: { y: { beginAtZero: true } } },
     });
   }
