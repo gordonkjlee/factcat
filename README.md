@@ -169,13 +169,15 @@ unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` 
 
 ## Install
 
-```bash
-pip install factcat              # generate SQL from Python
-pip install factcat[bigquery]    # also run that SQL on BigQuery
-pip install factcat[app]         # local Events chart (includes the BigQuery extra)
-```
+One project: [factcat](https://pypi.org/project/factcat/). Pick the extra that matches what you want:
 
-https://pypi.org/project/factcat/ — one project. `[app]` is an extra, not a second package.
+| You want | Install |
+|---|---|
+| Generate SQL from Python | `pip install factcat` |
+| Run that SQL on BigQuery | `pip install factcat[bigquery]` |
+| The local Events chart | `pip install factcat[app]` |
+
+`[app]` already includes the BigQuery extra. You do not install all three.
 
 To hack on the library:
 
