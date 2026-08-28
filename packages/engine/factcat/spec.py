@@ -139,6 +139,9 @@ class EventsSpec:
                     for ``on="events"``.
         bucket:     SQL time-axis expression. Default ``date_trunc('day', {event_time})``.
         where:      optional filter on the source relation.
+        exact:      False (default) uses approx NDV / approx median where the
+                    dialect has them. True is COUNT DISTINCT / PERCENTILE_CONT.
+                    A later chart toggle sets this; Total/Sum/AVG are unchanged.
     """
 
     table: str
@@ -149,6 +152,7 @@ class EventsSpec:
     of: str | None = None
     bucket: str | None = None
     where: str | None = None
+    exact: bool = False
 
     def __post_init__(self) -> None:
         if self.on not in ONS:

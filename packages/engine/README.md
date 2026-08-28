@@ -36,7 +36,7 @@ print(events_sql(EventsSpec(
 Event measures: `total`, `uniques`, `average` (Total / Uniques). Property
 measures (`on="property"`, `of=` a column): `sum`, `average`, `median`,
 `distinct` (mean distinct values per entity). Uniques is `COUNT DISTINCT` of
-`entity`.
+`entity` when `exact=True`; default `exact=False` is approx NDV.
 
 `retained` is arbitrary SQL over any column in your table, plus the derived columns
 `offset_days`, `period_index` and `within_period_offset`.

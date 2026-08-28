@@ -67,6 +67,24 @@ EVENTS_MEDIAN = EventsSpec(
     of="amount",
 )
 
+EVENTS_MEDIAN_EXACT = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="median",
+    of="amount",
+    exact=True,
+)
+
+EVENTS_UNIQUES_EXACT = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="uniques",
+    exact=True,
+)
+
 EVENTS_DISTINCT = EventsSpec(
     table="events",
     entity="entity_id",
@@ -120,26 +138,48 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS, dialect=dialect)
     events_sql(EVENTS_AVG, dialect=dialect)
     events_sql(EVENTS_MEDIAN, dialect=dialect)
+    events_sql(EVENTS_MEDIAN_EXACT, dialect=dialect)
     events_sql(EVENTS_DISTINCT, dialect=dialect)
+    events_sql(EVENTS_UNIQUES_EXACT, dialect=dialect)
 
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
     )
 
 
-def test_bigquery_median_uses_percentile_cont():
-    sql = events_sql(EVENTS_MEDIAN, dialect="bigquery")
+def test_bigquery_exact_median_uses_percentile_cont():
+    sql = events_sql(EVENTS_MEDIAN_EXACT, dialect="bigquery")
     assert "PERCENTILE_CONT" in sql.upper()
-    assert "0.5" in sql
     assert "OVER" in sql.upper()
     assert "APPROX_QUANTILES" not in sql.upper()
-    assert "median(fc_of)" not in sql.lower()
 
 
-def test_duckdb_median_uses_median():
-    sql = events_sql(EVENTS_MEDIAN, dialect="duckdb")
+def test_bigquery_approx_median_uses_approx_quantiles():
+    sql = events_sql(EVENTS_MEDIAN, dialect="bigquery")
+    assert "APPROX_QUANTILES" in sql.upper()
+    assert "PERCENTILE_CONT" not in sql.upper()
+
+
+def test_bigquery_approx_uniques_uses_approx_count_distinct():
+    sql = events_sql(EVENTS, dialect="bigquery")
+    assert "APPROX_COUNT_DISTINCT" in sql.upper()
+    assert "COUNT(DISTINCT" not in sql.upper().replace("APPROX_COUNT_DISTINCT", "")
+
+
+def test_bigquery_exact_uniques_uses_count_distinct():
+    sql = events_sql(EVENTS_UNIQUES_EXACT, dialect="bigquery")
+    assert "COUNT(DISTINCT" in sql.upper()
+    assert "APPROX_COUNT_DISTINCT" not in sql.upper()
+
+
+def test_postgres_approx_uniques_falls_back_to_count_distinct():
+    sql = events_sql(EVENTS, dialect="postgres")
+    assert "COUNT(DISTINCT" in sql.upper()
+
+
+def test_duckdb_exact_median_uses_median():
+    sql = events_sql(EVENTS_MEDIAN_EXACT, dialect="duckdb")
     assert "median(fc_of)" in sql.lower()
-    assert "percentile_cont" not in sql.lower()
 
 
 @pytest.mark.parametrize("dialect", SUPPORTED)

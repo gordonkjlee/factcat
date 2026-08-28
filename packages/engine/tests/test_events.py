@@ -41,6 +41,7 @@ def _spec(**overrides) -> EventsSpec:
         entity="subscription_id",
         event_time="paid_at",
         measure="uniques",
+        exact=True,  # ground truth; default on the spec is approx
     )
     base.update(overrides)
     return EventsSpec(**base)
@@ -91,9 +92,9 @@ def test_null_entity_is_in_total_not_uniques(amounts):
         entity="entity_id",
         event_time="occurred_at",
     )
-    total = _by_day(amounts, EventsSpec(measure="total", **spec))
-    uniques = _by_day(amounts, EventsSpec(measure="uniques", **spec))
-    average = _by_day(amounts, EventsSpec(measure="average", **spec))
+    total = _by_day(amounts, EventsSpec(measure="total", exact=True, **spec))
+    uniques = _by_day(amounts, EventsSpec(measure="uniques", exact=True, **spec))
+    average = _by_day(amounts, EventsSpec(measure="average", exact=True, **spec))
     # 4 rows on 2026-01-05, two uniques (S1, S2). Average = 4/2.
     assert total["2026-01-05"] == 4
     assert uniques["2026-01-05"] == 2
@@ -107,6 +108,7 @@ def test_property_sum_average_median(amounts):
         event_time="occurred_at",
         on="property",
         of="amount",
+        exact=True,
     )
     # 10, 30, 20, 5 → sum 65, mean 16.25, median 15 (mean of 10 and 20).
     assert _by_day(amounts, EventsSpec(measure="sum", **spec))["2026-01-05"] == 65
@@ -124,6 +126,7 @@ def test_distinct_property_values_per_entity(amounts):
         on="property",
         measure="distinct",
         of="amount",
+        exact=True,
     )
     got = _by_day(amounts, spec)
     assert got["2026-01-05"] == 1.5
@@ -149,6 +152,7 @@ def test_explicit_week_bucket(amounts):
         entity="entity_id",
         event_time="occurred_at",
         measure="total",
+        exact=True,
         bucket="date_trunc('week', occurred_at)",
     )
     rows = amounts.execute(events_sql(spec)).fetchall()
@@ -209,6 +213,19 @@ def test_events_do_not_take_sum():
             on="events",
             measure="sum",
         )
+
+
+def test_default_is_approx():
+    spec = EventsSpec(
+        table="payments",
+        entity="subscription_id",
+        event_time="paid_at",
+        measure="uniques",
+    )
+    assert spec.exact is False
+    sql = events_sql(spec, dialect="duckdb")
+    assert "approx_count_distinct" in sql.lower()
+    assert "count(distinct fc_entity)" not in sql.lower()
 
 
 def test_where_filters_rows(con):

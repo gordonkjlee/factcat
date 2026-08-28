@@ -2,15 +2,35 @@
 
 Event family: Total, Uniques, Average (Total / Uniques). Property family:
 Sum, Average, Median of ``of``, or mean distinct ``of`` values per entity.
-Entity and bucket are caller-supplied so this does not collapse to unique
-users by day.
+``exact=False`` (default) uses approx NDV / approx median where the dialect
+has them. A chart toggle sets ``exact=True``.
 """
 
 from __future__ import annotations
 
+import re
+
 from ._emit import transpile
-from .dialects import median_select_from_base
+from .dialects import count_distinct, median_select_from_base
 from .spec import EventsSpec
+
+_NDV_RE = re.compile(
+    r"factcat_ndv\s*\(\s*(fc_entity|fc_of)\s*\)",
+    re.IGNORECASE,
+)
+
+
+def _ndv(expr: str, spec: EventsSpec) -> str:
+    if spec.exact:
+        return f"COUNT(DISTINCT {expr})"
+    return f"factcat_ndv({expr})"
+
+
+def _splice_ndv(sql: str, dialect: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        return count_distinct(match.group(1), dialect, exact=False)
+
+    return _NDV_RE.sub(repl, sql)
 
 
 def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
@@ -43,7 +63,7 @@ def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
             SELECT
                 fc_bucket,
                 fc_entity,
-                COUNT(DISTINCT fc_of) AS fc_n
+                {_ndv("fc_of", spec)} AS fc_n
             FROM base
             WHERE fc_entity IS NOT NULL
             GROUP BY 1, 2
@@ -55,18 +75,18 @@ def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
         GROUP BY 1
         ORDER BY 1
         """
-        return transpile(sql, dialect)
+        return _splice_ndv(transpile(sql, dialect), dialect)
 
     if spec.on == "property" and spec.measure == "median":
-        sql = f"{base}\n{median_select_from_base(dialect)}"
+        sql = f"{base}\n{median_select_from_base(dialect, exact=spec.exact)}"
         return transpile(sql, dialect)
 
     if spec.on == "events":
         agg = {
             "total": "COUNT(*)",
-            "uniques": "COUNT(DISTINCT fc_entity)",
+            "uniques": _ndv("fc_entity", spec),
             "average": (
-                "COUNT(*) * 1.0 / NULLIF(COUNT(DISTINCT fc_entity), 0)"
+                f"COUNT(*) * 1.0 / NULLIF({_ndv('fc_entity', spec)}, 0)"
             ),
         }[spec.measure]
     else:
@@ -84,4 +104,4 @@ def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
     GROUP BY 1
     ORDER BY 1
     """
-    return transpile(sql, dialect)
+    return _splice_ndv(transpile(sql, dialect), dialect)
