@@ -33,6 +33,21 @@ print(events_sql(EventsSpec(
 )))
 ```
 
+Breakdowns are caller SQL plus optional ``top_n`` (default 8) and
+``include_other`` (default True). ``breakdown_at`` is ``rows`` / ``first`` /
+``last`` and does not replace the expression.
+
+```python
+print(events_sql(EventsSpec(
+    table="analytics.fct_events",
+    entity="subscription_id",
+    event_time="occurred_at",
+    measure="uniques",
+    breakdowns=("country",),
+    top_n=8,
+)))
+```
+
 Event measures: `total`, `uniques`, `average` (Total / Uniques). Property
 measures (`on="property"`, `of=` a column): `sum`, `average`, `median`,
 `distinct` (mean distinct values per entity). Uniques is `COUNT DISTINCT` of

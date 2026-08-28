@@ -94,6 +94,27 @@ EVENTS_DISTINCT = EventsSpec(
     of="country",
 )
 
+EVENTS_BREAKDOWN = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=("country",),
+    breakdown_labels=("country",),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_APPROX = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=False,
+    breakdowns=("country",),
+    top_n=8,
+)
+
 EVENTS_WEEK = EventsSpec(
     table="events",
     entity="entity_id",
@@ -157,6 +178,8 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS_DISTINCT, dialect=dialect)
     events_sql(EVENTS_UNIQUES_EXACT, dialect=dialect)
     events_sql(EVENTS_WEEK, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_APPROX, dialect=dialect)
 
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
@@ -186,6 +209,14 @@ def test_bigquery_week_start_monday_is_explicit():
     sql = events_sql(EVENTS_WEEK, dialect="bigquery")
     assert "WEEK(MONDAY)" in sql.upper().replace(" ", "")
     assert "factcat_period_start_shifted" not in sql
+
+
+def test_bigquery_approx_breakdown_uses_approx_top_count():
+    sql = events_sql(EVENTS_BREAKDOWN_APPROX, dialect="bigquery")
+    assert "APPROX_TOP_COUNT" in sql.upper()
+    sql_exact = events_sql(EVENTS_BREAKDOWN, dialect="bigquery")
+    assert "APPROX_TOP_COUNT" not in sql_exact.upper()
+    assert "LIMIT" in sql_exact.upper()
 
 
 def test_bigquery_exact_uniques_uses_count_distinct():

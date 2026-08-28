@@ -86,6 +86,25 @@ spec = EventsSpec(
 print(events_sql(spec, dialect="bigquery"))
 ```
 
+Split a series by a caller expression. ``top_n`` (default 8) folds a long
+tail into ``(other)``; set ``include_other=False`` to drop the tail instead.
+``breakdown_at`` is ``rows`` (the value on the event), ``first``, or ``last``
+(one non-null value per entity). It does not replace the expression.
+
+```python
+print(events_sql(EventsSpec(
+    table="analytics.fct_events",
+    entity="subscription_id",
+    event_time="occurred_at",
+    measure="uniques",
+    where="event_name = 'paid'",
+    breakdowns=("country",),
+    breakdown_at="rows",
+    top_n=8,
+    include_other=True,
+), dialect="bigquery"))
+```
+
 Uniques, Distinct, and Median default to **approx** (`exact=False`):
 `APPROX_COUNT_DISTINCT` / `APPROX_QUANTILES` on BigQuery. The local app’s
 Exact toggle sets `exact=True` for `COUNT DISTINCT` / `PERCENTILE_CONT`.
