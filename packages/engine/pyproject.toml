@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "factcat"
-version = "0.1.0"
+version = "0.2.0"
 description = "Product analytics on the event model already in your warehouse"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,19 +17,30 @@ classifiers = [
   "Topic :: Database",
   "Topic :: Scientific/Engineering :: Information Analysis",
 ]
-dependencies = ["sqlglot>=25.0.0"]
+dependencies = [
+  "sqlglot>=25.0.0",
+  "fastapi>=0.110.0",
+  "uvicorn>=0.27.0",
+  "jinja2>=3.1.0",
+]
 
 [project.optional-dependencies]
 # DuckDB is the reference dialect and the engine the test suite executes against.
-dev = ["duckdb>=1.0.0", "pytest>=8.0.0"]
+dev = ["duckdb>=1.0.0", "pytest>=8.0.0", "httpx>=0.27.0"]
+# Execute adapters. Named after connect(kind=). Default install has none.
+# Extra `all` is every shipped driver — not a privileged first warehouse.
 bigquery = ["google-cloud-bigquery>=3.0.0"]
+all = ["factcat[bigquery]"]
+
+[project.scripts]
+factcat-app = "factcat_app.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/gordonkjlee/factcat"
 Source = "https://github.com/gordonkjlee/factcat"
 
 [tool.hatch.build.targets.wheel]
-packages = ["factcat"]
+packages = ["factcat", "factcat_app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

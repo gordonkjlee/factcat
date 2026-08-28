@@ -22,8 +22,11 @@ Adding an adapter (Snowflake, Databricks, …)
 2. Constructor takes **that** warehouse's identity and auth (the caller's
    project, account, host, …). Do not add those fields to ``Adapter`` —
    BigQuery has project/location; Snowflake does not.
-3. Lazy-import the official driver. Optional extra ``factcat[<kind>]``.
-4. One line in ``_ADAPTERS`` below.
+3. Lazy-import the official driver. Extra ``factcat[<kind>]`` named after
+   ``connect(kind=)``. The default install has **no** warehouse SDK; extra
+   ``all`` is every shipped driver. Do not put the first warehouse in
+   core dependencies.
+4. One line in ``_ADAPTERS`` below, and the extra in ``pyproject.toml``.
 5. Mock the vendor client in tests. No live warehouse in CI.
 6. Do not add SQL generation here. If a construct cannot transpile, it belongs
    in ``dialects.py``.

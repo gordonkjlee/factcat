@@ -149,9 +149,9 @@ integers for the period grid - and it lives in
 **Execute adapters** push that SQL into the caller's warehouse through its official
 client. Factcat has no warehouse of its own. BigQuery ships today. The contract is
 `dialect` plus `run(sql)` - identity, auth, and cost knobs stay on the concrete class so
-Snowflake does not inherit `project` / `location` / `maximum_bytes_billed`. Adding an
-adapter is a module, an optional extra, and one line in the registry; see the docstring
-on `factcat.warehouses`.
+Snowflake does not inherit `project` / `location` / `maximum_bytes_billed`. A later
+warehouse is a module and one line in the registry; see the docstring on
+`factcat.warehouses`.
 
 ```python
 from factcat import RetentionSpec, retention_sql
@@ -167,41 +167,47 @@ pass a service-account JSON path as `credentials`. Queries are capped at 10 GiB 
 unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` and
 `location` are required.
 
-## Install (library)
+## Install
+
+One project: [factcat](https://pypi.org/project/factcat/).
 
 ```bash
-pip install factcat
-pip install factcat[bigquery]   # to run SQL on BigQuery from Python
+pip install factcat              # SQL generation + the local chart
+pip install factcat[bigquery]    # run queries in BigQuery
 ```
 
-That is the engine only. The browser app is not on PyPI yet; run it from a clone (below).
+`pip install factcat[bigquery]` is one command (it installs factcat plus the
+driver). The default has **no** warehouse SDK. Later warehouses are extras
+named the same way (`factcat[snowflake]`). `factcat[all]` is every execute
+adapter we ship.
 
 To hack on the library:
 
 ```bash
-pip install -e "packages/engine[dev]"
+pip install -e "packages/engine[dev,all]"
 ```
 
-## Run the app from scratch
+## Run the app
 
 The app is a local web page. It does not ingest your data. It generates SQL and runs it
-in **your** BigQuery. No Docker.
+in **your** BigQuery. No Docker. Start it from **your warehouse repo** (or any project
+directory); that is where `.factcat.json` is written.
 
-**You need:** Python 3.10+, Git, and the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install).
+**You need:** Python 3.10+ and the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install).
 A GCP project with the BigQuery API enabled, and a table you can query (BigQuery Job User
 on the project, Data Viewer on the dataset).
 
 ```bash
-git clone https://github.com/gordonkjlee/factcat.git
-cd factcat
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux:
 source .venv/bin/activate
 
-pip install -e "packages/engine[bigquery]" -e "packages/app"
+pip install factcat[bigquery]
 gcloud auth application-default login
 gcloud config set project YOUR_GCP_PROJECT
+
+cd /path/to/your/warehouse   # mapping is saved here
 factcat-app
 ```
 
@@ -222,8 +228,9 @@ Open http://127.0.0.1:8000. On first run the form is empty. Fill in:
 | Exact | Off = approx Uniques. On = exact `COUNT DISTINCT` |
 
 Click **Run**. The mapping is written to `.factcat.json` in the directory where you started
-`factcat-app`, so the next start is already filled in. ADC lives in your user profile; you
-do not log in to Google every time you start the app.
+`factcat-app`, so the next start is already filled in. Add `.factcat.json` to that repo’s
+`.gitignore`. ADC lives in your user profile; you do not log in to Google every time you
+start the app.
 
 Queries are capped at 10 GiB scanned (the BigQuery adapter default). The form does not
 expose that cap; raise `maximum_bytes_billed` from Python if a table needs more.
@@ -235,7 +242,6 @@ form. The app never copies your events off BigQuery.
 
 ```bash
 cd packages/engine && python -m pytest
-cd packages/app && python -m pytest
 ```
 
 The suite runs against DuckDB with hand-computed ground truth, and every expected number in
