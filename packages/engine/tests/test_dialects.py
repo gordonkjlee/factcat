@@ -127,15 +127,19 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     )
 
 
-def test_bigquery_median_uses_approx_quantiles():
+def test_bigquery_median_uses_percentile_cont():
     sql = events_sql(EVENTS_MEDIAN, dialect="bigquery")
-    assert "APPROX_QUANTILES" in sql.upper()
-    assert "factcat_median" not in sql.lower()
+    assert "PERCENTILE_CONT" in sql.upper()
+    assert "0.5" in sql
+    assert "OVER" in sql.upper()
+    assert "APPROX_QUANTILES" not in sql.upper()
+    assert "median(fc_of)" not in sql.lower()
 
 
 def test_duckdb_median_uses_median():
     sql = events_sql(EVENTS_MEDIAN, dialect="duckdb")
     assert "median(fc_of)" in sql.lower()
+    assert "percentile_cont" not in sql.lower()
 
 
 @pytest.mark.parametrize("dialect", SUPPORTED)

@@ -5,9 +5,10 @@ window functions. Two constructs do not survive cleanly:
 
 1. **Generating a series of integers** (the retention period grid).
    DuckDB ``UNNEST(GENERATE_SERIES)``; Redshift has no reachable generator.
-2. **Median as an aggregate.** sqlglot emits ``MEDIAN`` / ``PERCENTILE_CONT
-   WITHIN GROUP`` which is not valid BigQuery (PERCENTILE_CONT is a window
-   function there). Proved before this helper was added.
+2. **Median on BigQuery.** sqlglot emits aggregate ``MEDIAN(x)``, which
+   BigQuery does not have. The exact form is the window function
+   ``PERCENTILE_CONT(x, 0.5) OVER (PARTITION BY ...)``. Runners execute
+   SQL; they do not translate it. This helper is generation.
 
 Everything else is one emitter.
 """
@@ -37,28 +38,32 @@ def _union_all_grid(n: int) -> str:
     return " UNION ALL ".join(f"SELECT {i} AS period_index" for i in range(n + 1))
 
 
-def median_agg(expr: str, dialect: str) -> str:
-    """Aggregate median of ``expr`` in ``dialect``.
+def median_select_from_base(dialect: str) -> str:
+    """``SELECT bucket, value`` from ``base`` (columns ``fc_bucket``, ``fc_of``).
 
-    BigQuery has no aggregate ``MEDIAN`` / ``PERCENTILE_CONT``; it gets
-    ``APPROX_QUANTILES``. Exact medians elsewhere use ``percentile_cont`` or
-    native ``median``.
+    DuckDB-shaped ``median(fc_of)`` everywhere except BigQuery, which has no
+    aggregate median. BigQuery is ``PERCENTILE_CONT(fc_of, 0.5)`` as a window.
     """
-    if dialect == "duckdb":
-        return f"median({expr})"
-    if dialect in ("postgres", "redshift"):
-        return f"percentile_cont(0.5) WITHIN GROUP (ORDER BY {expr})"
     if dialect == "bigquery":
-        return f"APPROX_QUANTILES({expr}, 100)[OFFSET(50)]"
-    if dialect == "snowflake":
-        return f"median({expr})"
-    if dialect in ("databricks", "spark"):
-        return f"percentile_approx({expr}, 0.5)"
-    if dialect in ("trino", "presto"):
-        return f"approx_percentile({expr}, 0.5)"
-    if dialect == "clickhouse":
-        return f"median({expr})"
-    return f"median({expr})"
+        return """SELECT
+        fc_bucket AS bucket,
+        MIN(fc_p) AS value
+    FROM (
+        SELECT
+            fc_bucket,
+            PERCENTILE_CONT(fc_of, 0.5 IGNORE NULLS) OVER (
+                PARTITION BY fc_bucket
+            ) AS fc_p
+        FROM base
+    )
+    GROUP BY 1
+    ORDER BY 1"""
+    return """SELECT
+        fc_bucket AS bucket,
+        median(fc_of) AS value
+    FROM base
+    GROUP BY 1
+    ORDER BY 1"""
 
 
 def period_grid(n_periods: int, dialect: str) -> str:

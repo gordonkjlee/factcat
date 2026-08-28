@@ -19,7 +19,7 @@ reads your fact tables where they sit, and never copies them anywhere.
 
 from __future__ import annotations
 
-from .dialects import SUPPORTED, median_agg, period_grid
+from .dialects import SUPPORTED, period_grid
 from .events import build_sql as events_sql
 from .funnel import build_sql as funnel_sql
 from .retention import build_sql as retention_sql
@@ -40,7 +40,6 @@ __all__ = [
     "SUPPORTED",
     "events_sql",
     "funnel_sql",
-    "median_agg",
     "period_grid",
     "retention_sql",
 ]

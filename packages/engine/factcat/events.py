@@ -8,18 +8,9 @@ users by day.
 
 from __future__ import annotations
 
-import re
-
 from ._emit import transpile
-from .dialects import median_agg
+from .dialects import median_select_from_base
 from .spec import EventsSpec
-
-# sqlglot leaves this unknown function in place; we splice the dialect median.
-_MEDIAN_TOKEN = "factcat_median"
-_MEDIAN_RE = re.compile(
-    r"factcat_median\s*\(\s*fc_of\s*\)",
-    re.IGNORECASE,
-)
 
 
 def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
@@ -66,6 +57,10 @@ def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
         """
         return transpile(sql, dialect)
 
+    if spec.on == "property" and spec.measure == "median":
+        sql = f"{base}\n{median_select_from_base(dialect)}"
+        return transpile(sql, dialect)
+
     if spec.on == "events":
         agg = {
             "total": "COUNT(*)",
@@ -78,7 +73,6 @@ def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
         agg = {
             "sum": "SUM(fc_of)",
             "average": "AVG(fc_of)",
-            "median": f"{_MEDIAN_TOKEN}(fc_of)",
         }[spec.measure]
 
     sql = f"""
@@ -90,13 +84,4 @@ def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
     GROUP BY 1
     ORDER BY 1
     """
-    out = transpile(sql, dialect)
-    if spec.on == "property" and spec.measure == "median":
-        replacement = median_agg("fc_of", dialect)
-        out, n = _MEDIAN_RE.subn(replacement, out)
-        if n != 1:
-            raise RuntimeError(
-                "expected to splice exactly one median aggregate, "
-                f"replaced {n} in: {out[:200]!r}"
-            )
-    return out
+    return transpile(sql, dialect)
