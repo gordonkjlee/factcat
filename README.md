@@ -166,12 +166,14 @@ pass a service-account JSON path as `credentials`. Queries are capped at 10 GiB 
 unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` and
 `location` are required.
 
-## Install
+## Install (library)
 
 ```bash
 pip install factcat
-pip install factcat[bigquery]   # to run SQL on BigQuery
+pip install factcat[bigquery]   # to run SQL on BigQuery from Python
 ```
+
+That is the engine only. The browser app is not on PyPI yet; run it from a clone (below).
 
 To hack on the library:
 
@@ -179,20 +181,51 @@ To hack on the library:
 pip install -e "packages/engine[dev]"
 ```
 
-## Local app
+## Run the app from scratch
 
-A FastAPI page that fills `EventsSpec` and runs it in **your** BigQuery. No Docker.
-Connection and column mapping persist in `.factcat.json` in the working directory.
-Google login is ADC (`gcloud auth application-default login`), not re-entered every start.
+The app is a local web page. It does not ingest your data. It generates SQL and runs it
+in **your** BigQuery. No Docker.
+
+**You need:** Python 3.10+, Git, and the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install).
+A GCP project with the BigQuery API enabled, and a table you can query (BigQuery Job User
+on the project, Data Viewer on the dataset).
 
 ```bash
+git clone https://github.com/gordonkjlee/factcat.git
+cd factcat
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
 pip install -e "packages/engine[bigquery]" -e "packages/app"
 gcloud auth application-default login
+gcloud config set project YOUR_GCP_PROJECT
 factcat-app
 ```
 
-Open http://127.0.0.1:8000 — map table / entity / timestamp, pick Total, Uniques or
-Average, optionally Exact.
+Open http://127.0.0.1:8000. On first run the form is empty. Fill in:
+
+| Field | What to put |
+|---|---|
+| GCP project | The project that **runs** the query (billing) |
+| Location | Dataset location, e.g. `EU` or `US` — do not guess |
+| Service-account JSON | Leave blank to use ADC from `gcloud auth application-default login`. Or a path to a key file |
+| Table | `dataset.table` or `project.dataset.table` |
+| Entity column | The id to count as Uniques (`subscription_id`, `account_id`, …). There is no `user_id` default |
+| Timestamp column | When the event happened |
+| Event name column / value | Optional filter, e.g. `event_name` + `paid` |
+| Measure | Total, Uniques, or Average (Total / Uniques) |
+| Bucket | Day, week, or month (fills `date_trunc`, not a hidden calendar API) |
+| Lookback (days) | How far back to scan (default 30) |
+| Exact | Off = approx Uniques. On = exact `COUNT DISTINCT` |
+
+Click **Run**. The mapping is written to `.factcat.json` in the directory where you started
+`factcat-app`, so the next start is already filled in. ADC lives in your user profile; you
+do not log in to Google every time you start the app.
+
+Stop the server with Ctrl+C. To use a key file instead of ADC, paste the JSON path in the
+form. The app never copies your events off BigQuery.
 
 ## Tests
 
