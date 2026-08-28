@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/gordonkjlee/factcat/compare/v0.2.0...v0.3.0) (2026-08-28)
+
+
+### Features
+
+* **app:** map tables and columns from BigQuery metadata ([#12](https://github.com/gordonkjlee/factcat/issues/12)) ([4ce3caa](https://github.com/gordonkjlee/factcat/commit/4ce3caa505af8fde3272e50a5b24e7490b47fe41))
+
 ## [0.2.0](https://github.com/gordonkjlee/factcat/compare/v0.1.0...v0.2.0) (2026-08-28)
 
 
