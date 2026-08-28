@@ -12,6 +12,24 @@ from factcat.warehouses.bigquery import (
     list_tables,
 )
 
+# BigQuery SchemaField.field_type names. Entity is an id for COUNT DISTINCT —
+# strings and exact numerics, not floats, bools, or timestamps.
+ENTITY_TYPES = frozenset(
+    {"STRING", "INT64", "INTEGER", "NUMERIC", "BIGNUMERIC"}
+)
+TIME_TYPES = frozenset({"TIMESTAMP", "DATETIME", "DATE"})
+# Compared as a SQL string literal in the form (event_column = 'paid').
+EVENT_NAME_TYPES = frozenset({"STRING"})
+
+
+def column_fits(field_type: str, role: str) -> bool:
+    allowed = {
+        "entity": ENTITY_TYPES,
+        "event_time": TIME_TYPES,
+        "event_column": EVENT_NAME_TYPES,
+    }[role]
+    return (field_type or "").strip().upper() in allowed
+
 
 def _creds(form: dict[str, Any]) -> str | None:
     raw = (form.get("credentials") or "").strip()
@@ -53,7 +71,11 @@ def bootstrap_project() -> str:
 
 __all__ = [
     "AdapterError",
+    "ENTITY_TYPES",
+    "EVENT_NAME_TYPES",
+    "TIME_TYPES",
     "bootstrap_project",
+    "column_fits",
     "columns_from_form",
     "datasets_from_form",
     "tables_from_form",

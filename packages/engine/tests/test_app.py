@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
 from factcat.warehouses import QueryResult
+from factcat_app.catalog import column_fits
 from factcat_app.main import APP_DIR, app
 
 
@@ -33,7 +34,10 @@ def test_index_renders(monkeypatch, tmp_path):
     assert 'getElementById("dataset")' in res.text
     assert 'id="dataset-loading"' in res.text
     assert 'id="table_name-loading"' in res.text
-    assert ">Loading<" in res.text
+    assert 'aria-label="Loading"' in res.text
+    assert "@keyframes spin" in res.text
+    assert "Event name value" not in res.text
+    assert "Only this event" in res.text
     assert 'value="adc-project"' in res.text
 
 
@@ -265,3 +269,29 @@ def test_datasets_require_project(monkeypatch, tmp_path):
     client = TestClient(app)
     res = client.post("/api/datasets", json={"project": ""})
     assert res.status_code == 400
+
+
+def test_entity_column_types_are_ids_not_timestamps():
+    assert column_fits("STRING", "entity")
+    assert column_fits("integer", "entity")
+    assert column_fits("INT64", "entity")
+    assert column_fits("NUMERIC", "entity")
+    assert not column_fits("TIMESTAMP", "entity")
+    assert not column_fits("FLOAT", "entity")
+    assert not column_fits("BOOL", "entity")
+    assert not column_fits("RECORD", "entity")
+
+
+def test_event_time_column_types_are_temporal():
+    assert column_fits("TIMESTAMP", "event_time")
+    assert column_fits("DATETIME", "event_time")
+    assert column_fits("DATE", "event_time")
+    assert not column_fits("STRING", "event_time")
+    assert not column_fits("TIME", "event_time")
+    assert not column_fits("INT64", "event_time")
+
+
+def test_event_name_column_is_string():
+    assert column_fits("STRING", "event_column")
+    assert not column_fits("INT64", "event_column")
+    assert not column_fits("TIMESTAMP", "event_column")

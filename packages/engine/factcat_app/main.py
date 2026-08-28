@@ -12,6 +12,9 @@ from factcat import events_sql
 from factcat.warehouses import AdapterError, connect
 
 from .catalog import (
+    ENTITY_TYPES,
+    EVENT_NAME_TYPES,
+    TIME_TYPES,
     bootstrap_project,
     columns_from_form,
     datasets_from_form,
@@ -31,7 +34,16 @@ def index(request: Request) -> HTMLResponse:
     cfg = load()
     if not cfg.get("project"):
         cfg["project"] = bootstrap_project()
-    return templates.TemplateResponse(request, "index.html", {"config": cfg})
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "config": cfg,
+            "entity_types": sorted(ENTITY_TYPES),
+            "time_types": sorted(TIME_TYPES),
+            "event_name_types": sorted(EVENT_NAME_TYPES),
+        },
+    )
 
 
 def _catalog_error(exc: Exception) -> JSONResponse:

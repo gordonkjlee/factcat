@@ -19,8 +19,23 @@
     button { margin-top: 0.75rem; padding: 0.5rem 0.9rem; }
     #chart-wrap { padding: 1.25rem; }
     #error { color: #b91c1c; white-space: pre-wrap; font-size: 0.85rem; }
-    .loading { font-weight: 400; color: #a1a1aa; margin-left: 0.4rem; text-transform: none; letter-spacing: 0; }
-    .loading[hidden], select[hidden] { display: none !important; }
+    .hint { display: block; font-weight: 400; color: #71717a; font-size: 0.7rem; margin: 0.15rem 0 0.35rem; }
+    .loading {
+      display: inline-block;
+      width: 0.7em;
+      height: 0.7em;
+      margin-left: 0.45rem;
+      border: 2px solid #e4e4e7;
+      border-top-color: #52525b;
+      border-radius: 50%;
+      vertical-align: -0.1em;
+      animation: spin 0.7s linear infinite;
+    }
+    .loading[hidden], select[hidden], #event_value-wrap[hidden] { display: none !important; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .loading { animation: none; border-top-color: #52525b; }
+    }
     table { border-collapse: collapse; margin-top: 1rem; font-size: 0.85rem; }
     td, th { border-bottom: 1px solid #e4e4e7; padding: 0.25rem 0.75rem 0.25rem 0; text-align: left; }
     details { margin-top: 0.75rem; font-size: 0.75rem; }
@@ -42,20 +57,23 @@
     <input type="hidden" name="table" id="table" value="{{ config.table }}">
 
     <h2>2. Table</h2>
-    <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden>Loading</span></label>
+    <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="dataset" name="dataset" hidden></select>
-    <label for="table_name">Table <span id="table_name-loading" class="loading" hidden>Loading</span></label>
+    <label for="table_name">Table <span id="table_name-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="table_name" name="table_name" hidden></select>
 
     <h2>3. Columns</h2>
-    <label for="entity">Entity (Uniques grain — no user_id default) <span id="entity-loading" class="loading" hidden>Loading</span></label>
+    <label for="entity">Entity (Uniques grain — no user_id default) <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="entity" name="entity" required hidden></select>
-    <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden>Loading</span></label>
+    <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="event_time" name="event_time" required hidden></select>
-    <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden>Loading</span></label>
+    <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="event_column" name="event_column" hidden></select>
-    <label for="event_value">Event name value (optional)</label>
-    <input id="event_value" name="event_value" autocomplete="off" value="{{ config.event_value }}">
+    <div id="event_value-wrap" {% if not config.event_column %}hidden{% endif %}>
+      <label for="event_value">Only this event</label>
+      <span class="hint">Keeps rows where that column equals this name, e.g. paid.</span>
+      <input id="event_value" name="event_value" autocomplete="off" value="{{ config.event_value }}">
+    </div>
 
     <h2>4. Chart</h2>
     <label>Measure</label>
@@ -118,6 +136,11 @@ const entityEl = document.getElementById("entity");
 const eventTimeEl = document.getElementById("event_time");
 const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
+const eventValueEl = document.getElementById("event_value");
+const eventValueWrap = document.getElementById("event_value-wrap");
+const ENTITY_TYPES = new Set({{ entity_types|tojson }});
+const TIME_TYPES = new Set({{ time_types|tojson }});
+const EVENT_NAME_TYPES = new Set({{ event_name_types|tojson }});
 let chart;
 let dsGen = 0;
 let tblGen = 0;
@@ -141,6 +164,19 @@ function hideSelect(sel) {
   setLoading(sel, false);
   sel.innerHTML = "";
   sel.hidden = true;
+}
+function typedOptions(cols, allowed) {
+  return (cols || [])
+    .filter((c) => allowed.has(String(c.type || "").toUpperCase()))
+    .map((c) => ({
+      value: c.name,
+      label: c.type ? c.name + " (" + c.type + ")" : c.name,
+    }));
+}
+function syncEventValue() {
+  const on = Boolean(eventColumnEl.value);
+  eventValueWrap.hidden = !on;
+  if (!on) eventValueEl.value = "";
 }
 function fillSelect(sel, items, selected) {
   const cur = selected || sel.value;
@@ -190,6 +226,7 @@ function clearColumns() {
   hideSelect(eventTimeEl);
   hideSelect(eventColumnEl);
   tableEl.value = "";
+  syncEventValue();
 }
 async function post(url, body) {
   const res = await fetch(url, {
@@ -274,18 +311,17 @@ async function loadColumns() {
     return;
   }
   if (data.location) locationEl.value = data.location;
-  const cols = (data.columns || []).map((c) => ({
-    value: c.name,
-    label: c.type ? c.name + " (" + c.type + ")" : c.name,
-  }));
-  fillSelect(entityEl, cols, saved.entity);
-  fillSelect(eventTimeEl, cols, saved.event_time);
-  fillSelect(eventColumnEl, cols, saved.event_column);
+  const cols = data.columns || [];
+  fillSelect(entityEl, typedOptions(cols, ENTITY_TYPES), saved.entity);
+  fillSelect(eventTimeEl, typedOptions(cols, TIME_TYPES), saved.event_time);
+  fillSelect(eventColumnEl, typedOptions(cols, EVENT_NAME_TYPES), saved.event_column);
   tableEl.value = combinedTable();
+  syncEventValue();
 }
 
 datasetEl.addEventListener("change", loadTables);
 tableNameEl.addEventListener("change", loadColumns);
+eventColumnEl.addEventListener("change", syncEventValue);
 const scheduleDatasets = debounce(loadDatasets, 400);
 [projectEl, dataProjectEl, credentialsEl].forEach((el) => {
   el.addEventListener("input", scheduleDatasets);
