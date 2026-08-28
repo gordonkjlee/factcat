@@ -170,15 +170,17 @@ unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` 
 ## Install
 
 ```bash
-pip install factcat                 # generate SQL from Python
-pip install factcat[bigquery]       # also run that SQL on BigQuery
-pip install factcat-app             # local Events chart (pulls factcat[bigquery])
+pip install factcat              # generate SQL from Python
+pip install factcat[bigquery]    # also run that SQL on BigQuery
+pip install factcat[app]         # local Events chart (includes the BigQuery extra)
 ```
+
+https://pypi.org/project/factcat/ — one project. `[app]` is an extra, not a second package.
 
 To hack on the library:
 
 ```bash
-pip install -e "packages/engine[dev]"
+pip install -e "packages/engine[dev,app]"
 ```
 
 ## Run the app
@@ -197,7 +199,7 @@ python -m venv .venv
 # macOS/Linux:
 source .venv/bin/activate
 
-pip install factcat-app
+pip install factcat[app]
 gcloud auth application-default login
 gcloud config set project YOUR_GCP_PROJECT
 
@@ -236,7 +238,6 @@ form. The app never copies your events off BigQuery.
 
 ```bash
 cd packages/engine && python -m pytest
-cd packages/app && python -m pytest
 ```
 
 The suite runs against DuckDB with hand-computed ground truth, and every expected number in

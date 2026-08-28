@@ -1,4 +1,3 @@
 {
-  "packages/engine": "0.1.0",
-  "packages/app": "0.0.0"
+  "packages/engine": "0.1.0"
 }

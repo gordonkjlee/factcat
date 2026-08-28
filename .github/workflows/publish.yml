@@ -12,26 +12,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  plan:
+  publish:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
+      id-token: write   # trusted publishing (OIDC) - no API token is stored
+    environment: pypi
     outputs:
-      engine_publish: ${{ steps.plan.outputs.engine_publish }}
-      engine_tag: ${{ steps.plan.outputs.engine_tag }}
-      engine_version: ${{ steps.plan.outputs.engine_version }}
-      app_publish: ${{ steps.plan.outputs.app_publish }}
-      app_tag: ${{ steps.plan.outputs.app_tag }}
-      app_version: ${{ steps.plan.outputs.app_version }}
+      found: ${{ steps.release.outputs.found }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - name: Find unpublished releases
-        id: plan
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Find unpublished release
+        id: release
         run: |
           # GraphQL, not `gh api repos/.../releases/latest`. The REST call cannot
           # distinguish "no releases exist" from "could not ask": both yield an
@@ -39,203 +36,127 @@ jobs:
           # a skipped release look like a green run.
           if ! RESPONSE=$(gh api graphql -f query='
             query($owner:String!,$name:String!){
-              repository(owner:$owner,name:$name){
-                releases(first:20, orderBy:{field:CREATED_AT, direction:DESC}){
-                  nodes { tagName }
-                }
-              }
+              repository(owner:$owner,name:$name){ latestRelease{ tagName } }
             }' -F owner="${{ github.repository_owner }}" -F name="${GITHUB_REPOSITORY#*/}" 2>&1); then
-            echo "::error::Could not query releases: ${RESPONSE}. Refusing to assume there is nothing to publish."
+            echo "::error::Could not query the latest release: ${RESPONSE}. Refusing to assume there is nothing to publish."
             exit 1
           fi
-          export RESPONSE
-          python3 - <<'PY'
-          import json, os, sys, urllib.error, urllib.request
+          TAG=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); r=((d.get('data') or {}).get('repository') or {}).get('latestRelease'); print((r or {}).get('tagName') or '')")
+          if [ -z "$TAG" ]; then
+            echo "No releases exist yet - nothing to publish."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION="${TAG#v}"
+          VERSION="${VERSION#factcat-}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/factcat/${VERSION}/json")
+          if [ "$CODE" = "200" ]; then
+            echo "$TAG already on PyPI"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          elif [ "$CODE" = "404" ]; then
+            echo "$TAG not on PyPI - publishing"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::PyPI returned ${CODE} for factcat ${VERSION}. Refusing to guess whether it is published."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-          data = json.loads(os.environ["RESPONSE"])
-          nodes = (
-              data.get("data", {})
-              .get("repository", {})
-              .get("releases", {})
-              .get("nodes")
-          )
-          if nodes is None:
-              print("::error::GraphQL response missing releases.nodes", file=sys.stderr)
-              sys.exit(1)
-
-          def pypi_code(name, version):
-              url = f"https://pypi.org/pypi/{name}/{version}/json"
-              try:
-                  with urllib.request.urlopen(url, timeout=30) as resp:
-                      return resp.status
-              except urllib.error.HTTPError as exc:
-                  return exc.code
-
-          found = {
-              "factcat": None,
-              "factcat-app": None,
-          }
-          for node in nodes:
-              tag = node.get("tagName") or ""
-              if tag.startswith("factcat-app-v"):
-                  name, version = "factcat-app", tag.removeprefix("factcat-app-v")
-              elif tag.startswith("factcat-v"):
-                  name, version = "factcat", tag.removeprefix("factcat-v")
-              elif tag.startswith("v") and "app" not in tag:
-                  name, version = "factcat", tag[1:]
-              else:
-                  continue
-              if found[name] is not None:
-                  continue
-              code = pypi_code(name, version)
-              if code == 200:
-                  print(f"{tag}: {name} {version} already on PyPI")
-                  found[name] = "published"
-                  continue
-              if code != 404:
-                  print(
-                      f"::error::PyPI returned {code} for {name} {version}. "
-                      "Refusing to guess whether it is published.",
-                      file=sys.stderr,
-                  )
-                  sys.exit(1)
-              print(f"{tag}: {name} {version} not on PyPI - will publish")
-              found[name] = (tag, version)
-
-          def write(key, value):
-              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-                  out.write(f"{key}={value}\n")
-
-          engine = found["factcat"]
-          app = found["factcat-app"]
-          if isinstance(engine, tuple):
-              write("engine_publish", "true")
-              write("engine_tag", engine[0])
-              write("engine_version", engine[1])
-          else:
-              write("engine_publish", "false")
-              write("engine_tag", "")
-              write("engine_version", "")
-          if isinstance(app, tuple):
-              write("app_publish", "true")
-              write("app_tag", app[0])
-              write("app_version", app[1])
-          else:
-              write("app_publish", "false")
-              write("app_tag", "")
-              write("app_version", "")
-          PY
-
-  publish-engine:
-    needs: plan
-    if: needs.plan.outputs.engine_publish == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write
-    environment: pypi
-    steps:
-      - uses: actions/checkout@v7
+      - if: steps.release.outputs.found == 'true'
+        uses: actions/checkout@v7
         with:
-          ref: ${{ needs.plan.outputs.engine_tag }}
-      - uses: actions/setup-python@v7
+          ref: ${{ steps.release.outputs.tag }}
+
+      - if: steps.release.outputs.found == 'true'
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - name: Test engine
+
+      - if: steps.release.outputs.found == 'true'
+        name: Run tests before publishing
         run: |
-          pip install -e "packages/engine[dev]"
+          pip install -e "packages/engine[dev,app]"
           cd packages/engine && python -m pytest
-      - name: Build
+
+      - if: steps.release.outputs.found == 'true'
+        name: Build
         run: |
           pip install build
           python -m build packages/engine
-      - name: Publish factcat ${{ needs.plan.outputs.engine_version }}
+
+      - if: steps.release.outputs.found == 'true'
+        name: Publish ${{ steps.release.outputs.tag }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: packages/engine/dist
 
-  publish-app:
-    needs: [plan, publish-engine]
-    if: >-
-      always() &&
-      needs.plan.outputs.app_publish == 'true' &&
-      (needs.publish-engine.result == 'success' ||
-       needs.publish-engine.result == 'skipped')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      id-token: write
-    environment: pypi
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.plan.outputs.app_tag }}
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-      - name: Test app
-        run: |
-          pip install -e "packages/engine[dev,bigquery]" -e "packages/app[dev]"
-          cd packages/app && python -m pytest
-      - name: Build
-        run: |
-          pip install build
-          python -m build packages/app
-      - name: Publish factcat-app ${{ needs.plan.outputs.app_version }}
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: packages/app/dist
-
   verify:
-    needs: [plan, publish-engine, publish-app]
-    if: always() && needs.plan.result == 'success'
+    needs: publish
+    if: always() && needs.publish.result != 'skipped'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       issues: write
     steps:
-      - name: Smoke-install from PyPI
-        id: smoke
-        env:
-          ENGINE_PUBLISH: ${{ needs.plan.outputs.engine_publish }}
-          ENGINE_TAG: ${{ needs.plan.outputs.engine_tag }}
-          ENGINE_VERSION: ${{ needs.plan.outputs.engine_version }}
-          APP_PUBLISH: ${{ needs.plan.outputs.app_publish }}
-          APP_TAG: ${{ needs.plan.outputs.app_tag }}
-          APP_VERSION: ${{ needs.plan.outputs.app_version }}
-          ENGINE_RESULT: ${{ needs.publish-engine.result }}
-          APP_RESULT: ${{ needs.publish-app.result }}
+      - name: Which version should be live?
+        id: expected
         run: |
-          set -euo pipefail
-          wait_pypi() {
-            local name="$1" version="$2"
-            local deadline=$((SECONDS + 300))
-            while [ "$SECONDS" -lt "$deadline" ]; do
-              if curl -sf -o /dev/null "https://pypi.org/pypi/${name}/${version}/json"; then
-                echo "${name} ${version} is on PyPI after ${SECONDS}s."
-                return 0
-              fi
-              echo "not resolvable after ${SECONDS}s, waiting..."
-              sleep 20
-            done
-            echo "::error::${name} ${version} is not on PyPI after ${SECONDS}s."
-            return 1
-          }
+          if ! RESPONSE=$(gh api graphql -f query='
+            query($owner:String!,$name:String!){
+              repository(owner:$owner,name:$name){ latestRelease{ tagName } }
+            }' -F owner="${{ github.repository_owner }}" -F name="${GITHUB_REPOSITORY#*/}" 2>&1); then
+            echo "::error::Could not query the latest release: ${RESPONSE}. Refusing to report a release verified when it was never checked."
+            exit 1
+          fi
+          TAG=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); r=((d.get('data') or {}).get('repository') or {}).get('latestRelease'); print((r or {}).get('tagName') or '')")
+          if [ -z "$TAG" ]; then
+            echo "No releases exist yet - nothing to verify."
+            echo "check=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION="${TAG#v}"
+          VERSION="${VERSION#factcat-}"
+          echo "check=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-          python3 -m venv /tmp/smoke
+      - if: steps.expected.outputs.check == 'true'
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
 
-          if [ "$ENGINE_PUBLISH" = "true" ]; then
-            if [ "$ENGINE_RESULT" != "success" ]; then
-              echo "::error::engine publish result is ${ENGINE_RESULT}"
-              exit 1
+      - if: steps.expected.outputs.check == 'true'
+        name: Is ${{ steps.expected.outputs.tag }} installable from PyPI?
+        id: smoke
+        run: |
+          VERSION="${{ steps.expected.outputs.version }}"
+          DEADLINE=$((SECONDS + 300))
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            if curl -sf -o /dev/null "https://pypi.org/pypi/factcat/${VERSION}/json"; then
+              echo "factcat ${VERSION} is on PyPI after ${SECONDS}s."
+              break
             fi
-            wait_pypi factcat "$ENGINE_VERSION"
-            /tmp/smoke/bin/pip install --quiet "factcat[bigquery]==${ENGINE_VERSION}"
-            /tmp/smoke/bin/python - <<'EOF'
+            echo "not resolvable after ${SECONDS}s, waiting..."
+            sleep 20
+          done
+          if ! curl -sf -o /dev/null "https://pypi.org/pypi/factcat/${VERSION}/json"; then
+            echo "::error::factcat ${VERSION} is not on PyPI after ${SECONDS}s."
+            exit 1
+          fi
+
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet "factcat[app]==${VERSION}"
+          /tmp/smoke/bin/python - <<'EOF'
+          import shutil
           from factcat import EventsSpec, RetentionSpec, events_sql, retention_sql
+          from factcat_app.query import spec_from_form
+
           spec = RetentionSpec(
               table="payments", entity="subscription_id", entity_time="sub_start",
               event_time="paid_at", period_days=35, n_periods=2,
@@ -243,27 +164,14 @@ jobs:
           )
           sql = retention_sql(spec, dialect="snowflake")
           assert "factcat_period_grid" in sql, "period grid missing from generated SQL"
+
           events = events_sql(EventsSpec(
               table="events", entity="subscription_id", event_time="occurred_at",
               measure="uniques",
           ), dialect="bigquery")
           assert "APPROX_COUNT_DISTINCT" in events.upper()
-          print("Smoke test passed: factcat from PyPI generates SQL.")
-          EOF
-          fi
 
-          if [ "$APP_PUBLISH" = "true" ]; then
-            if [ "$APP_RESULT" != "success" ]; then
-              echo "::error::app publish result is ${APP_RESULT}"
-              exit 1
-            fi
-            wait_pypi factcat-app "$APP_VERSION"
-            /tmp/smoke/bin/pip install --quiet "factcat-app==${APP_VERSION}"
-            /tmp/smoke/bin/python - <<'EOF'
-          import shutil
-          from factcat import EventsSpec
-          from factcat_app.query import spec_from_form
-          spec = spec_from_form({
+          form = spec_from_form({
               "table": "analytics.events",
               "entity": "subscription_id",
               "event_time": "occurred_at",
@@ -271,34 +179,29 @@ jobs:
               "grain": "day",
               "lookback_days": 7,
           })
-          assert spec.entity == "subscription_id"
-          assert shutil.which("factcat-app"), "console script missing"
-          print("Smoke test passed: factcat-app from PyPI.")
+          assert form.entity == "subscription_id"
+          assert shutil.which("factcat-app"), "factcat-app console script missing"
+          print("Smoke test passed: factcat[app] from PyPI generates SQL and has factcat-app.")
           EOF
-          fi
 
       - name: Open an issue if the release never landed
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ENGINE_TAG: ${{ needs.plan.outputs.engine_tag }}
-          APP_TAG: ${{ needs.plan.outputs.app_tag }}
+        if: failure() && steps.expected.outputs.check == 'true'
         run: |
-          TAG="${ENGINE_TAG:-$APP_TAG}"
+          TAG="${{ steps.expected.outputs.tag }}"
+          VERSION="${{ steps.expected.outputs.version }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           BODY_FILE="${RUNNER_TEMP}/issue-body.md"
           {
-            echo "A GitHub release existed, but the matching PyPI package either never landed or failed the install smoke test."
+            echo "The GitHub release **${TAG}** exists, but factcat ${VERSION} either never reached PyPI or does not work when installed from it."
             echo
-            echo "Engine publish: ${{ needs.publish-engine.result }}. App publish: ${{ needs.publish-app.result }}."
+            echo "Publish job result: ${{ needs.publish.result }}."
             echo
             echo "Run that failed: ${RUN_URL}"
             echo
             echo "Check, in order:"
             echo "1. Did the publish job reach the upload step, or fail earlier (tests, build, OIDC)?"
-            echo "2. Is the Trusted Publisher still configured on PyPI for this repo, workflow \`publish.yml\`, and environment \`pypi\`?"
-            echo "3. For **factcat-app**, is there a pending publisher named exactly \`factcat-app\`?"
-            echo "4. Engine tag \`${ENGINE_TAG}\`, app tag \`${APP_TAG}\`."
+            echo "2. Is the Trusted Publisher still configured on PyPI for this repo and workflow?"
+            echo "3. Is https://pypi.org/pypi/factcat/${VERSION}/json resolvable now?"
           } > "$BODY_FILE"
 
           EXISTING=$(gh issue list --repo ${{ github.repository }} --state open \
@@ -312,3 +215,5 @@ jobs:
             --title "Release ${TAG} did not reach PyPI" \
             --assignee gordonkjlee \
             --body-file "$BODY_FILE"
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -46,8 +46,9 @@ Generates SQL and queries in place. No SDK, no ingestion, no copy of your data.
 SQL generation supports DuckDB, Postgres, BigQuery, Snowflake, Databricks, Spark, Trino,
 Presto, ClickHouse and Redshift. Execute adapters push that SQL into the caller's
 warehouse. Factcat has no warehouse of its own. BigQuery ships today
-(`pip install factcat[bigquery]`); the adapter contract is `dialect` plus `run(sql)`,
-which is the same shape Snowflake and Databricks will use.
+(`pip install factcat[bigquery]`). The local Events chart is the same project:
+`pip install factcat[app]`, then `factcat-app`. The adapter contract is `dialect`
+plus `run(sql)`, which is the same shape Snowflake and Databricks will use.
 
 ```python
 from factcat import RetentionSpec, retention_sql
