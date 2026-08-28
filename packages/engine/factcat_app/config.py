@@ -26,6 +26,9 @@ DEFAULTS: dict[str, Any] = {
     "grain": "day",
     "exact": False,
     "lookback_days": 30,
+    "range_preset": "30",
+    "start_date": "",
+    "end_date": "",
 }
 
 

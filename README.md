@@ -219,10 +219,12 @@ writes `.factcat.json` and goes to the Events chart (`/`). Setup is a
 separate control at the bottom of the left rail, not an analysis.
 Advanced is only if you use a key file instead of ADC.
 
-On Events, optional event-name column is STRING only; **Only this event**
-is a DISTINCT of that column in the lookback window (blank = every event).
-Catalog dropdowns are alphabetical. Entity lists string and integer
-columns; timestamp lists TIMESTAMP / DATETIME.
+Map the event-name column on **Setup** (STRING). On Events, **Event** is
+which name to chart (**All events** = no filter). **Date range** is last
+7/30/90/365 days, this week, this month, or a custom from/to — sugar on
+`event_time`, not a period enum. Catalog dropdowns are alphabetical.
+Entity lists string and integer columns; timestamp lists TIMESTAMP /
+DATETIME.
 
 If the table lives in another GCP project (billing in `dev`, data in `prod`), set
 **Project that holds the table** before loading datasets.

@@ -43,6 +43,17 @@
     .chart-body canvas { width: 100% !important; height: 100% !important; }
     #sql { margin: 0; min-height: 100%; box-sizing: border-box; }
     .summary { font-size: 0.75rem; color: #52525b; margin: 0 0 0.75rem; }
+    .pane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding-right: 0.5rem; }
+    .pane-head h2 { border-bottom: none; padding: 0.45rem 0.75rem; }
+    .pane-actions button { margin: 0; padding: 0.2rem 0.5rem; font-size: 0.7rem; }
+    #result-table { table-layout: fixed; width: 100%; }
+    #result-table th { position: relative; cursor: pointer; user-select: none; min-width: 4rem; }
+    #result-table th .grip {
+      position: absolute; right: 0; top: 0; width: 6px; height: 100%;
+      cursor: col-resize;
+    }
+    #custom-range label { display: inline-block; width: auto; margin-right: 0.35rem; }
+    #custom-range input { width: auto; }
 {% endblock %}
 {% block body %}
 <main class="workspace">
@@ -65,13 +76,28 @@
     <input type="hidden" name="entity" id="entity" value="{{ config.entity }}">
     <input type="hidden" name="entity_label" id="entity_label" value="{{ config.entity_label }}">
     <input type="hidden" name="event_time" id="event_time" value="{{ config.event_time }}">
+    <input type="hidden" name="event_column" id="event_column" value="{{ config.event_column }}">
 
-    <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="event_column" name="event_column" hidden></select>
-    <div id="event_value-wrap" hidden>
-      <label for="event_value">Only this event <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span></label>
-      <span class="hint">DISTINCT names in that column in the lookback window. Blank = every event.</span>
-      <select id="event_value" name="event_value" hidden></select>
+    <div id="event_value-wrap" {% if not config.event_column %}hidden{% endif %}>
+      <label for="event_value">Event <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span></label>
+      <select id="event_value" name="event_value"></select>
+    </div>
+
+    <label for="range_preset">Date range</label>
+    <select id="range_preset" name="range_preset">
+      <option value="7" {% if config.range_preset == "7" %}selected{% endif %}>Last 7 days</option>
+      <option value="30" {% if config.range_preset == "30" or not config.range_preset %}selected{% endif %}>Last 30 days</option>
+      <option value="90" {% if config.range_preset == "90" %}selected{% endif %}>Last 90 days</option>
+      <option value="365" {% if config.range_preset == "365" %}selected{% endif %}>Last 365 days</option>
+      <option value="this_week" {% if config.range_preset == "this_week" %}selected{% endif %}>This week</option>
+      <option value="this_month" {% if config.range_preset == "this_month" %}selected{% endif %}>This month</option>
+      <option value="custom" {% if config.range_preset == "custom" %}selected{% endif %}>Custom</option>
+    </select>
+    <div id="custom-range" {% if config.range_preset != "custom" %}hidden{% endif %}>
+      <label for="start_date">From</label>
+      <input id="start_date" name="start_date" type="date" value="{{ config.start_date }}">
+      <label for="end_date">To</label>
+      <input id="end_date" name="end_date" type="date" value="{{ config.end_date }}">
     </div>
 
     <label>Measure</label>
@@ -86,8 +112,6 @@
       <option value="week" {% if config.grain == "week" %}selected{% endif %}>Week</option>
       <option value="month" {% if config.grain == "month" %}selected{% endif %}>Month</option>
     </select>
-    <label>Lookback (days)</label>
-    <input id="lookback_days" name="lookback_days" type="number" min="1" max="3650" value="{{ config.lookback_days }}">
     <div class="row">
       <input name="exact" type="checkbox" id="exact" {% if config.exact %}checked{% endif %} style="width:auto">
       <label for="exact" style="margin:0">Exact (off = approx unique count)</label>
@@ -104,11 +128,21 @@
       </div>
     </section>
     <section class="pane pane-table">
-      <h2>Table</h2>
+      <div class="pane-head">
+        <h2>Table</h2>
+        <span class="pane-actions">
+          <button type="button" id="export-csv" hidden>Export CSV</button>
+        </span>
+      </div>
       <div class="pane-body">
         <p class="empty" id="table-empty">Run to see rows.</p>
         <table id="result-table" hidden>
-          <thead><tr><th>Bucket</th><th>Value</th></tr></thead>
+          <thead>
+            <tr>
+              <th data-key="bucket">Bucket <span class="grip" data-col="0"></span></th>
+              <th data-key="value">Value <span class="grip" data-col="1"></span></th>
+            </tr>
+          </thead>
           <tbody id="rows"></tbody>
         </table>
       </div>
@@ -123,14 +157,11 @@
 </main>
 <script>
 const saved = {
-  event_column: {{ config.event_column|tojson }},
   event_value: {{ config.event_value|tojson }},
 };
 const form = document.getElementById("f");
 const projectEl = document.getElementById("project");
 const dataProjectEl = document.getElementById("data_project");
-const datasetEl = document.getElementById("dataset");
-const tableNameEl = document.getElementById("table_name");
 const tableEl = document.getElementById("table");
 const locationEl = document.getElementById("location");
 const eventTimeEl = document.getElementById("event_time");
@@ -138,18 +169,13 @@ const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
 const eventValueEl = document.getElementById("event_value");
 const eventValueWrap = document.getElementById("event_value-wrap");
-const lookbackEl = document.getElementById("lookback_days");
-const EVENT_NAME_TYPES = new Set({{ event_name_types|tojson }});
+const rangePresetEl = document.getElementById("range_preset");
+const customRangeEl = document.getElementById("custom-range");
 let chart;
 let valGen = 0;
-
-function debounce(fn, ms) {
-  let t;
-  return () => {
-    clearTimeout(t);
-    t = setTimeout(fn, ms);
-  };
-}
+let tableRows = [];
+let sortKey = "bucket";
+let sortDir = 1;
 function setError(text) {
   document.getElementById("error").textContent = text || "";
 }
@@ -157,23 +183,10 @@ function setLoading(sel, on) {
   const hint = document.getElementById(sel.id + "-loading");
   if (hint) hint.hidden = !on;
 }
-function hideSelect(sel) {
-  setLoading(sel, false);
-  sel.innerHTML = "";
-  sel.hidden = true;
-}
-function typedOptions(cols, allowed) {
-  return (cols || [])
-    .filter((c) => allowed.has(String(c.type || "").toUpperCase()))
-    .map((c) => ({
-      value: c.name,
-      label: c.type ? c.name + " (" + c.type + ")" : c.name,
-    }));
-}
-function fillSelect(sel, items, selected) {
+function fillSelect(sel, items, selected, blankLabel) {
   const cur = selected || sel.value;
   sel.innerHTML = "";
-  if (!items.length) {
+  if (!items.length && !blankLabel) {
     sel.hidden = true;
     return;
   }
@@ -186,6 +199,7 @@ function fillSelect(sel, items, selected) {
   });
   const blank = document.createElement("option");
   blank.value = "";
+  blank.textContent = blankLabel || "";
   sel.appendChild(blank);
   for (const item of ranked) {
     const opt = document.createElement("option");
@@ -216,58 +230,49 @@ async function post(url, body) {
   });
   return res.json();
 }
+function rangeBody() {
+  return {
+    range_preset: rangePresetEl.value,
+    start_date: form.start_date.value,
+    end_date: form.end_date.value,
+  };
+}
+function syncCustomRange() {
+  customRangeEl.hidden = rangePresetEl.value !== "custom";
+}
 async function loadEventValues() {
   const gen = ++valGen;
   if (!eventColumnEl.value) {
-    hideSelect(eventValueEl);
     eventValueWrap.hidden = true;
     return;
   }
   eventValueWrap.hidden = false;
-  if (!eventTimeEl.value || !tableEl.value || !locationEl.value) {
-    hideSelect(eventValueEl);
-    return;
-  }
-  hideSelect(eventValueEl);
+  if (!eventTimeEl.value || !tableEl.value || !locationEl.value) return;
   setLoading(eventValueEl, true);
   const data = await post("/api/event_values", {
     ...authBody(),
+    ...rangeBody(),
     table: tableEl.value,
     location: locationEl.value,
     event_column: eventColumnEl.value,
     event_time: eventTimeEl.value,
-    lookback_days: Number(lookbackEl.value),
   });
   if (gen !== valGen) return;
   setLoading(eventValueEl, false);
   if (!data.ok) {
-    hideSelect(eventValueEl);
-    setError(data.error || "Could not list event names");
+    setError(data.error || "Could not list events");
     return;
   }
-  fillSelect(eventValueEl, data.values || [], saved.event_value);
+  fillSelect(eventValueEl, data.values || [], saved.event_value, "All events");
 }
-async function loadEventColumns() {
-  if (!datasetEl.value || !tableNameEl.value) return;
-  setLoading(eventColumnEl, true);
-  const data = await post("/api/columns", {
-    ...authBody(),
-    dataset: datasetEl.value,
-    table_name: tableNameEl.value,
-  });
-  setLoading(eventColumnEl, false);
-  if (!data.ok) {
-    setError(data.error || "Could not list columns");
-    return;
-  }
-  fillSelect(eventColumnEl, typedOptions(data.columns || [], EVENT_NAME_TYPES), saved.event_column);
-  await loadEventValues();
-}
-
-eventColumnEl.addEventListener("change", loadEventValues);
-lookbackEl.addEventListener("input", debounce(loadEventValues, 400));
-lookbackEl.addEventListener("change", loadEventValues);
-loadEventColumns();
+rangePresetEl.addEventListener("change", () => {
+  syncCustomRange();
+  loadEventValues();
+});
+form.start_date.addEventListener("change", loadEventValues);
+form.end_date.addEventListener("change", loadEventValues);
+syncCustomRange();
+if (eventColumnEl.value) loadEventValues();
 
 function bucketLabel(raw) {
   const s = String(raw ?? "");
@@ -296,9 +301,74 @@ relabelMeasures();
 function payload() {
   const d = Object.fromEntries(new FormData(form).entries());
   d.exact = document.getElementById("exact").checked;
-  d.lookback_days = Number(d.lookback_days);
   return d;
 }
+function csvCell(value) {
+  const s = String(value ?? "");
+  if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function renderTable() {
+  const tbody = document.getElementById("rows");
+  tbody.innerHTML = "";
+  const ranked = [...tableRows].sort((a, b) => {
+    const av = a[sortKey];
+    const bv = b[sortKey];
+    const an = Number(av);
+    const bn = Number(bv);
+    let cmp;
+    if (av !== "" && bv !== "" && !Number.isNaN(an) && !Number.isNaN(bn)) cmp = an - bn;
+    else cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+    return cmp * sortDir;
+  });
+  for (const row of ranked) {
+    const tr = document.createElement("tr");
+    const tdBucket = document.createElement("td");
+    const tdValue = document.createElement("td");
+    tdBucket.textContent = row.bucket;
+    tdValue.textContent = row.value;
+    tr.append(tdBucket, tdValue);
+    tbody.appendChild(tr);
+  }
+}
+function exportCsv() {
+  const lines = ["bucket,value"];
+  for (const row of tableRows) lines.push(csvCell(row.bucket) + "," + csvCell(row.value));
+  const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "factcat-events.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+document.querySelectorAll("#result-table th[data-key]").forEach((th) => {
+  th.addEventListener("click", (e) => {
+    if (e.target.classList.contains("grip")) return;
+    const key = th.getAttribute("data-key");
+    if (sortKey === key) sortDir = -sortDir;
+    else { sortKey = key; sortDir = 1; }
+    renderTable();
+  });
+});
+document.querySelectorAll("#result-table .grip").forEach((grip) => {
+  grip.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const th = grip.parentElement;
+    const startX = e.clientX;
+    const startW = th.getBoundingClientRect().width;
+    function move(ev) {
+      th.style.width = Math.max(48, startW + (ev.clientX - startX)) + "px";
+    }
+    function up() {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+    }
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+});
+document.getElementById("export-csv").addEventListener("click", exportCsv);
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   setError("");
@@ -322,21 +392,14 @@ form.addEventListener("submit", async (e) => {
   sqlEl.classList.remove("empty");
   document.getElementById("table-empty").hidden = true;
   document.getElementById("result-table").hidden = false;
-  const tbody = document.getElementById("rows");
-  tbody.innerHTML = "";
-  const labels = [];
-  const values = [];
-  for (const row of data.rows || []) {
-    labels.push(bucketLabel(row.bucket));
-    values.push(row.value);
-    const tr = document.createElement("tr");
-    const tdBucket = document.createElement("td");
-    const tdValue = document.createElement("td");
-    tdBucket.textContent = bucketLabel(row.bucket);
-    tdValue.textContent = row.value;
-    tr.append(tdBucket, tdValue);
-    tbody.appendChild(tr);
-  }
+  document.getElementById("export-csv").hidden = false;
+  tableRows = (data.rows || []).map((row) => ({
+    bucket: bucketLabel(row.bucket),
+    value: row.value,
+  }));
+  renderTable();
+  const labels = tableRows.map((r) => r.bucket);
+  const values = tableRows.map((r) => r.value);
   document.getElementById("chart-empty").hidden = true;
   const ctx = document.getElementById("chart");
   ctx.hidden = false;

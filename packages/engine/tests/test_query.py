@@ -43,6 +43,35 @@ def test_week_bucket_is_date_trunc_sugar():
     assert spec.bucket == "CAST(date_trunc('week', occurred_at) AS DATE)"
 
 
+def test_range_preset_7_is_last_n_days():
+    spec = spec_from_form(_form(range_preset="7"))
+    assert "occurred_at >= current_date - 7" in spec.where
+
+
+def test_this_month_is_anchored_date_trunc():
+    spec = spec_from_form(_form(range_preset="this_month"))
+    assert "date_trunc('month', current_date)" in spec.where
+
+
+def test_custom_range_is_inclusive_dates():
+    spec = spec_from_form(
+        _form(range_preset="custom", start_date="2026-01-01", end_date="2026-01-31")
+    )
+    assert "DATE '2026-01-01'" in spec.where
+    assert "DATE '2026-02-01'" in spec.where
+    sql = events_sql(spec, dialect="bigquery")
+    assert "INTERVAL" not in sql.upper()
+
+
+def test_custom_range_rejects_bad_dates():
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        spec_from_form(_form(range_preset="custom", start_date="nope", end_date="2026-01-01"))
+    with pytest.raises(ValueError, match="on or before"):
+        spec_from_form(
+            _form(range_preset="custom", start_date="2026-02-01", end_date="2026-01-01")
+        )
+
+
 def test_event_filter_is_and_lookback():
     spec = spec_from_form(
         _form(event_column="event_name", event_value="paid")

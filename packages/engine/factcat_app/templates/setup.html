@@ -41,6 +41,9 @@
   <span class="hint">Display only. Does not choose the id column.</span>
   <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="event_time" name="event_time" required hidden></select>
+  <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <select id="event_column" name="event_column" hidden></select>
+  <span class="hint">STRING column of event names. The Events page picks which name to chart.</span>
 
   <button type="submit">Save and open Events</button>
   <p id="error"></p>
@@ -57,6 +60,7 @@ const saved = {
   table_name: {{ config.table_name|tojson }},
   entity: {{ config.entity|tojson }},
   event_time: {{ config.event_time|tojson }},
+  event_column: {{ config.event_column|tojson }},
 };
 const form = document.getElementById("f");
 // HTMLElement.dataset is data-* attributes. Access the BigQuery dataset
@@ -69,9 +73,11 @@ const tableEl = document.getElementById("table");
 const locationEl = document.getElementById("location");
 const entityEl = document.getElementById("entity");
 const eventTimeEl = document.getElementById("event_time");
+const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
 const ENTITY_TYPES = new Set({{ entity_types|tojson }});
 const TIME_TYPES = new Set({{ time_types|tojson }});
+const EVENT_NAME_TYPES = new Set({{ event_name_types|tojson }});
 let dsGen = 0;
 let tblGen = 0;
 let colGen = 0;
@@ -168,6 +174,7 @@ function combinedTable() {
 function clearColumns() {
   hideSelect(entityEl);
   hideSelect(eventTimeEl);
+  hideSelect(eventColumnEl);
   tableEl.value = "";
 }
 async function post(url, body) {
@@ -213,6 +220,7 @@ async function loadColumns() {
   if (!datasetEl.value || !tableNameEl.value) return;
   setLoading(entityEl, true);
   setLoading(eventTimeEl, true);
+  setLoading(eventColumnEl, true);
   const data = await post("/api/columns", {
     ...authBody(),
     dataset: datasetEl.value,
@@ -221,6 +229,7 @@ async function loadColumns() {
   if (gen !== colGen) return;
   setLoading(entityEl, false);
   setLoading(eventTimeEl, false);
+  setLoading(eventColumnEl, false);
   if (!data.ok) {
     setError(data.error || "Could not list columns");
     return;
@@ -229,6 +238,7 @@ async function loadColumns() {
   const cols = data.columns || [];
   fillSelect(entityEl, typedOptions(cols, ENTITY_TYPES), entityEl.value || saved.entity);
   fillSelect(eventTimeEl, typedOptions(cols, TIME_TYPES), eventTimeEl.value || saved.event_time);
+  fillSelect(eventColumnEl, typedOptions(cols, EVENT_NAME_TYPES), eventColumnEl.value || saved.event_column);
   tableEl.value = combinedTable();
 }
 
@@ -249,6 +259,7 @@ function fetchColumnsOnce() {
 }
 entityEl.addEventListener("mousedown", fetchColumnsOnce);
 eventTimeEl.addEventListener("mousedown", fetchColumnsOnce);
+eventColumnEl.addEventListener("mousedown", fetchColumnsOnce);
 datasetEl.addEventListener("change", () => {
   if (suppressChange) return;
   tablesFetched = false;
@@ -274,6 +285,7 @@ seedSelect(datasetEl, saved.dataset);
 seedSelect(tableNameEl, saved.table_name);
 seedSelect(entityEl, saved.entity);
 seedSelect(eventTimeEl, saved.event_time);
+seedSelect(eventColumnEl, saved.event_column);
 tableEl.value = combinedTable();
 
 const ENTITY_NAME_PRESETS = ["User", "Customer", "Account", "Subscription"];
