@@ -6,15 +6,20 @@ build-backend = "hatchling.build"
 name = "factcat-app"
 version = "0.1.0"
 description = "Local Factcat UI: Events chart on the caller's BigQuery"
+readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Gordon Lee" }]
 dependencies = [
-  "factcat[bigquery]",
+  "factcat[bigquery]>=0.2.0",  # 0.1.0 on PyPI has neither Events nor the extra
   "fastapi>=0.110.0",
   "uvicorn>=0.27.0",
   "jinja2>=3.1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/gordonkjlee/factcat"
+Source = "https://github.com/gordonkjlee/factcat"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "httpx>=0.27.0"]
