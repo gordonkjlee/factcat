@@ -21,8 +21,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: pip install -e "packages/engine[dev]"
+        run: pip install -e "packages/engine[dev,bigquery]" -e "packages/app[dev]"
 
-      - name: Test
+      - name: Test engine
         working-directory: packages/engine
+        run: python -m pytest
+
+      - name: Test app
+        working-directory: packages/app
         run: python -m pytest
