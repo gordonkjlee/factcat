@@ -22,6 +22,7 @@ dependencies = ["sqlglot>=25.0.0"]
 [project.optional-dependencies]
 # DuckDB is the reference dialect and the engine the test suite executes against.
 dev = ["duckdb>=1.0.0", "pytest>=8.0.0"]
+bigquery = ["google-cloud-bigquery>=3.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/gordonkjlee/factcat"
