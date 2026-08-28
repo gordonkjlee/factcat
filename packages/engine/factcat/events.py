@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 
 from ._emit import transpile
-from .dialects import count_distinct, median_select_from_base
+from .dialects import count_distinct, median_select_from_base, splice_placeholders
 from .spec import EventsSpec
 
 _NDV_RE = re.compile(
@@ -75,11 +75,13 @@ def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
         GROUP BY 1
         ORDER BY 1
         """
-        return _splice_ndv(transpile(sql, dialect), dialect)
+        return splice_placeholders(
+            _splice_ndv(transpile(sql, dialect), dialect), dialect
+        )
 
     if spec.on == "property" and spec.measure == "median":
         sql = f"{base}\n{median_select_from_base(dialect, exact=spec.exact)}"
-        return transpile(sql, dialect)
+        return splice_placeholders(transpile(sql, dialect), dialect)
 
     if spec.on == "events":
         agg = {
@@ -104,4 +106,6 @@ def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
     GROUP BY 1
     ORDER BY 1
     """
-    return _splice_ndv(transpile(sql, dialect), dialect)
+    return splice_placeholders(
+        _splice_ndv(transpile(sql, dialect), dialect), dialect
+    )

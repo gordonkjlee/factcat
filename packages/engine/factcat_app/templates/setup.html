@@ -1,0 +1,441 @@
+{% extends "base.html" %}
+{% block title %}Factcat — Setup{% endblock %}
+{% block extra_css %}
+    .setup-form { max-width: 28rem; padding: 1.5rem; background: #fff; min-height: 100%; }
+    #status { color: #166534; font-size: 0.85rem; }
+{% endblock %}
+{% block body %}
+<form id="f" class="setup-form">
+  <h1>Project setup</h1>
+  <p class="lede">Map a table in <em>your</em> BigQuery. Saved to <code>.factcat.json</code> in this directory. ADC unless you open Advanced.</p>
+
+  <h2>Warehouse</h2>
+  <label for="project">GCP project that runs the query (billing)</label>
+  <input id="project" name="project" required autocomplete="off" value="{{ config.project }}">
+  <label for="data_project">Project that holds the table (blank = same as billing)</label>
+  <input id="data_project" name="data_project" autocomplete="off" value="{{ config.data_project }}">
+  <input type="hidden" name="location" id="location" value="{{ config.location }}">
+  <input type="hidden" name="table" id="table" value="{{ config.table }}">
+
+  <h2>Table</h2>
+  <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <select id="dataset" name="dataset" hidden></select>
+  <label for="table_name">Table <span id="table_name-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <select id="table_name" name="table_name" hidden></select>
+
+  <h2>Grain</h2>
+  <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <select id="entity" name="entity" required hidden></select>
+  <label for="entity_label_choice">Entity name (singular)</label>
+  <select id="entity_label_choice">
+    <option value="User">User</option>
+    <option value="Customer">Customer</option>
+    <option value="Account">Account</option>
+    <option value="Subscription">Subscription</option>
+    <option value="__other__">Other</option>
+  </select>
+  <div id="entity_label_other_wrap" hidden>
+    <label for="entity_label_other">Custom singular</label>
+    <input id="entity_label_other" autocomplete="off">
+  </div>
+  <input type="hidden" name="entity_label" id="entity_label" value="{{ config.entity_label or 'User' }}">
+  <label for="entity_label_plural">Plural</label>
+  <input id="entity_label_plural" name="entity_label_plural" autocomplete="off" value="{{ config.entity_label_plural or 'Users' }}">
+  <span class="hint">Display only (Unique Users, Average per User). Does not choose the id column.</span>
+  <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <select id="event_time" name="event_time" required hidden></select>
+  <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <select id="event_column" name="event_column" hidden></select>
+  <span class="hint">STRING column of event names. Save runs DISTINCT on the last 90 days and caches the list for Events.</span>
+  <h2>Formatting</h2>
+  <label for="week_start">Week starts on</label>
+  <select id="week_start" name="week_start">
+    <option value="monday" {% if config.week_start != "sunday" %}selected{% endif %}>Monday</option>
+    <option value="sunday" {% if config.week_start == "sunday" %}selected{% endif %}>Sunday</option>
+  </select>
+  <span class="hint">Used for weekly buckets and this/previous week. Does not use the warehouse default.</span>
+  <label for="thousand_sep">Thousand separator</label>
+  <select id="thousand_sep" name="thousand_sep">
+    <option value="comma" {% if config.thousand_sep == "comma" or not config.thousand_sep %}selected{% endif %}>Comma (1,234)</option>
+    <option value="period" {% if config.thousand_sep == "period" %}selected{% endif %}>Period (1.234)</option>
+    <option value="space" {% if config.thousand_sep == "space" %}selected{% endif %}>Space (1 234)</option>
+    <option value="none" {% if config.thousand_sep == "none" %}selected{% endif %}>None (1234)</option>
+  </select>
+  <label for="decimal_sep">Decimal separator</label>
+  <select id="decimal_sep" name="decimal_sep">
+    <option value="period" {% if config.decimal_sep == "period" or not config.decimal_sep %}selected{% endif %}>Period (1.23)</option>
+    <option value="comma" {% if config.decimal_sep == "comma" %}selected{% endif %}>Comma (1,23)</option>
+  </select>
+  <span class="hint" id="num-example">Example: 1,234.56</span>
+  <label for="bytes_cap_gb">Job scan cap (GB)</label>
+  <input id="bytes_cap_gb" name="bytes_cap_gb" type="number" min="0" step="1" value="{{ config.bytes_cap_gb if config.bytes_cap_gb is not none else 10 }}">
+  <span class="hint">Factcat sets this on the BigQuery job (<code>maximum_bytes_billed</code>). 0 is unlimited. A report can override it for one run.</span>
+  <label for="query_row_limit">Result row limit</label>
+  <input id="query_row_limit" name="query_row_limit" type="number" min="1" step="1" value="{{ config.query_row_limit or 1000000 }}">
+  <span class="hint">Crash fuse in SQL after aggregation (most recent rows). A normal chart never hits this; grouping by a high-cardinality property might. It does not reduce bytes scanned. A report can raise it if results are truncated.</span>
+
+  <button type="submit" id="save">Save</button>
+  <p id="status"></p>
+  <p id="error"></p>
+
+  <details>
+    <summary>Advanced: service-account JSON instead of ADC</summary>
+    <label for="credentials">Path to key file (leave blank to keep ADC)</label>
+    <input id="credentials" name="credentials" autocomplete="off" value="{{ config.credentials }}">
+  </details>
+</form>
+<script>
+const saved = {
+  dataset: {{ config.dataset|tojson }},
+  table_name: {{ config.table_name|tojson }},
+  entity: {{ config.entity|tojson }},
+  event_time: {{ config.event_time|tojson }},
+  event_column: {{ config.event_column|tojson }},
+};
+const form = document.getElementById("f");
+// HTMLElement.dataset is data-* attributes. Access the BigQuery dataset
+// select by id, not as a property of the form.
+const projectEl = document.getElementById("project");
+const dataProjectEl = document.getElementById("data_project");
+const datasetEl = document.getElementById("dataset");
+const tableNameEl = document.getElementById("table_name");
+const tableEl = document.getElementById("table");
+const locationEl = document.getElementById("location");
+const entityEl = document.getElementById("entity");
+const eventTimeEl = document.getElementById("event_time");
+const eventColumnEl = document.getElementById("event_column");
+const credentialsEl = document.getElementById("credentials");
+const ENTITY_TYPES = new Set({{ entity_types|tojson }});
+const TIME_TYPES = new Set({{ time_types|tojson }});
+const EVENT_NAME_TYPES = new Set({{ event_name_types|tojson }});
+let dsGen = 0;
+let tblGen = 0;
+let colGen = 0;
+let datasetsFetched = false;
+let tablesFetched = false;
+let columnsFetched = false;
+let suppressChange = false;
+
+function setError(text) {
+  document.getElementById("error").textContent = text || "";
+}
+function setStatus(text) {
+  document.getElementById("status").textContent = text || "";
+}
+function setLoading(sel, on) {
+  const hint = document.getElementById(sel.id + "-loading");
+  if (hint) hint.hidden = !on;
+}
+function hideSelect(sel) {
+  setLoading(sel, false);
+  sel.innerHTML = "";
+  sel.hidden = true;
+}
+function typedOptions(cols, allowed) {
+  return (cols || [])
+    .filter((c) => allowed.has(String(c.type || "").toUpperCase()))
+    .map((c) => ({
+      value: c.name,
+      label: c.type ? c.name + " (" + c.type + ")" : c.name,
+    }));
+}
+function fillSelect(sel, items, selected) {
+  suppressChange = true;
+  const cur = selected || sel.value;
+  sel.innerHTML = "";
+  if (!items.length) {
+    sel.hidden = true;
+    return;
+  }
+  const ranked = [...items].sort((a, b) => {
+    const ka = String(typeof a === "string" ? a : a.value).toLowerCase();
+    const kb = String(typeof b === "string" ? b : b.value).toLowerCase();
+    if (ka < kb) return -1;
+    if (ka > kb) return 1;
+    return 0;
+  });
+  const blank = document.createElement("option");
+  blank.value = "";
+  sel.appendChild(blank);
+  for (const item of ranked) {
+    const opt = document.createElement("option");
+    if (typeof item === "string") {
+      opt.value = item;
+      opt.textContent = item;
+    } else {
+      opt.value = item.value;
+      opt.textContent = item.label;
+    }
+    sel.appendChild(opt);
+  }
+  if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  sel.hidden = false;
+  suppressChange = false;
+}
+function seedSelect(sel, value) {
+  suppressChange = true;
+  sel.innerHTML = "";
+  if (value) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = value;
+    sel.appendChild(opt);
+    sel.value = value;
+  }
+  sel.hidden = false;
+  suppressChange = false;
+}
+function catalogProject() {
+  return dataProjectEl.value.trim() || projectEl.value.trim();
+}
+function authBody() {
+  return {
+    project: projectEl.value.trim(),
+    data_project: dataProjectEl.value.trim(),
+    credentials: credentialsEl.value.trim(),
+  };
+}
+function combinedTable() {
+  const billing = projectEl.value.trim();
+  const data = dataProjectEl.value.trim() || billing;
+  const dataset = datasetEl.value.trim();
+  const tableName = tableNameEl.value.trim();
+  if (!dataset || !tableName) return "";
+  if (data && data !== billing) return data + "." + dataset + "." + tableName;
+  return dataset + "." + tableName;
+}
+function clearColumns() {
+  hideSelect(entityEl);
+  hideSelect(eventTimeEl);
+  hideSelect(eventColumnEl);
+  tableEl.value = "";
+}
+async function post(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+async function loadDatasets() {
+  const gen = ++dsGen;
+  setError("");
+  if (!catalogProject()) return;
+  setLoading(datasetEl, true);
+  const data = await post("/api/datasets", authBody());
+  if (gen !== dsGen) return;
+  setLoading(datasetEl, false);
+  if (!data.ok) {
+    setError(data.error || "Could not list datasets");
+    return;
+  }
+  fillSelect(datasetEl, (data.datasets || []).map((d) => d.id), datasetEl.value || saved.dataset);
+}
+async function loadTables() {
+  const gen = ++tblGen;
+  setError("");
+  if (!datasetEl.value) return;
+  setLoading(tableNameEl, true);
+  const data = await post("/api/tables", {...authBody(), dataset: datasetEl.value});
+  if (gen !== tblGen) return;
+  setLoading(tableNameEl, false);
+  if (!data.ok) {
+    setError(data.error || "Could not list tables");
+    return;
+  }
+  if (data.location) locationEl.value = data.location;
+  fillSelect(tableNameEl, data.tables || [], tableNameEl.value || saved.table_name);
+}
+async function loadColumns() {
+  const gen = ++colGen;
+  setError("");
+  if (!datasetEl.value || !tableNameEl.value) return;
+  setLoading(entityEl, true);
+  setLoading(eventTimeEl, true);
+  setLoading(eventColumnEl, true);
+  const data = await post("/api/columns", {
+    ...authBody(),
+    dataset: datasetEl.value,
+    table_name: tableNameEl.value,
+  });
+  if (gen !== colGen) return;
+  setLoading(entityEl, false);
+  setLoading(eventTimeEl, false);
+  setLoading(eventColumnEl, false);
+  if (!data.ok) {
+    setError(data.error || "Could not list columns");
+    return;
+  }
+  if (data.location) locationEl.value = data.location;
+  const cols = data.columns || [];
+  fillSelect(entityEl, typedOptions(cols, ENTITY_TYPES), entityEl.value || saved.entity);
+  fillSelect(eventTimeEl, typedOptions(cols, TIME_TYPES), eventTimeEl.value || saved.event_time);
+  fillSelect(eventColumnEl, typedOptions(cols, EVENT_NAME_TYPES), eventColumnEl.value || saved.event_column);
+  tableEl.value = combinedTable();
+}
+
+datasetEl.addEventListener("mousedown", () => {
+  if (datasetsFetched) return;
+  datasetsFetched = true;
+  loadDatasets();
+});
+tableNameEl.addEventListener("mousedown", () => {
+  if (tablesFetched) return;
+  tablesFetched = true;
+  loadTables();
+});
+function fetchColumnsOnce() {
+  if (columnsFetched) return;
+  columnsFetched = true;
+  loadColumns();
+}
+entityEl.addEventListener("mousedown", fetchColumnsOnce);
+eventTimeEl.addEventListener("mousedown", fetchColumnsOnce);
+eventColumnEl.addEventListener("mousedown", fetchColumnsOnce);
+datasetEl.addEventListener("change", () => {
+  if (suppressChange) return;
+  tablesFetched = false;
+  columnsFetched = false;
+  seedSelect(tableNameEl, "");
+  clearColumns();
+  tableEl.value = "";
+});
+tableNameEl.addEventListener("change", () => {
+  if (suppressChange) return;
+  columnsFetched = false;
+  clearColumns();
+  tableEl.value = combinedTable();
+});
+[projectEl, dataProjectEl, credentialsEl].forEach((el) => {
+  el.addEventListener("input", () => {
+    datasetsFetched = false;
+    tablesFetched = false;
+    columnsFetched = false;
+  });
+});
+seedSelect(datasetEl, saved.dataset);
+seedSelect(tableNameEl, saved.table_name);
+seedSelect(entityEl, saved.entity);
+seedSelect(eventTimeEl, saved.event_time);
+seedSelect(eventColumnEl, saved.event_column);
+tableEl.value = combinedTable();
+
+const ENTITY_NAME_PRESETS = {
+  User: "Users",
+  Customer: "Customers",
+  Account: "Accounts",
+  Subscription: "Subscriptions",
+};
+const labelChoiceEl = document.getElementById("entity_label_choice");
+const labelOtherWrap = document.getElementById("entity_label_other_wrap");
+const labelOtherEl = document.getElementById("entity_label_other");
+const labelEl = document.getElementById("entity_label");
+const labelPluralEl = document.getElementById("entity_label_plural");
+function syncEntityName() {
+  if (labelChoiceEl.value === "__other__") {
+    labelOtherWrap.hidden = false;
+    labelEl.value = labelOtherEl.value.trim();
+  } else {
+    labelOtherWrap.hidden = true;
+    labelEl.value = labelChoiceEl.value;
+    labelPluralEl.value = ENTITY_NAME_PRESETS[labelChoiceEl.value] || labelPluralEl.value;
+  }
+}
+function seedEntityName() {
+  const raw = (labelEl.value || "").trim() || "User";
+  const preset = Object.keys(ENTITY_NAME_PRESETS).find((p) => p.toLowerCase() === raw.toLowerCase());
+  if (preset) {
+    labelChoiceEl.value = preset;
+    labelOtherEl.value = "";
+  } else {
+    labelChoiceEl.value = "__other__";
+    labelOtherEl.value = raw;
+  }
+  syncEntityName();
+}
+labelChoiceEl.addEventListener("change", syncEntityName);
+labelOtherEl.addEventListener("input", syncEntityName);
+seedEntityName();
+
+function thousandChar() {
+  const v = document.getElementById("thousand_sep").value;
+  if (v === "none") return "";
+  if (v === "space") return " ";
+  if (v === "period") return ".";
+  return ",";
+}
+function decimalChar() {
+  return document.getElementById("decimal_sep").value === "comma" ? "," : ".";
+}
+function syncNumExample() {
+  const thou = thousandChar();
+  const dec = decimalChar();
+  const el = document.getElementById("num-example");
+  if ((thou === "." || thou === ",") && thou === dec) {
+    el.textContent = "Thousand and decimal separators must differ.";
+    return false;
+  }
+  el.textContent = "Example: 1" + (thou || "") + "234" + dec + "56";
+  return true;
+}
+["thousand_sep", "decimal_sep"].forEach((id) => {
+  document.getElementById(id).addEventListener("change", syncNumExample);
+});
+syncNumExample();
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setError("");
+  setStatus("");
+  syncEntityName();
+  if (!syncNumExample()) {
+    setError("Thousand and decimal separators must differ.");
+    return;
+  }
+  tableEl.value = combinedTable();
+  const body = Object.fromEntries(new FormData(form).entries());
+  if (!body.table || !body.entity || !body.event_time || !body.project || !body.location) {
+    setError("Pick a table, entity id, and timestamp. Location comes from the dataset.");
+    return;
+  }
+  if (!body.entity_label) {
+    setError("Pick an entity name, or Other and type one.");
+    return;
+  }
+  const saveBtn = document.getElementById("save");
+  saveBtn.disabled = true;
+  saveBtn.textContent = "Saving…";
+  if (!body.event_column) body.event_names = [];
+  try {
+    const data = await post("/api/save", body);
+    if (!data.ok) {
+      setError(data.error || "Could not save mapping");
+      return;
+    }
+    if (body.event_column) {
+      const ev = await post("/api/event_values", {
+        ...authBody(),
+        table: body.table,
+        location: body.location,
+        event_column: body.event_column,
+        event_time: body.event_time,
+        catalog: true,
+      });
+      if (!ev.ok) {
+        setStatus("Saved");
+        setError(ev.error || "Could not cache event names");
+        return;
+      }
+      const n = (ev.values || []).length;
+      setStatus("Saved. Cached " + n + " event name" + (n === 1 ? "" : "s") + ".");
+      return;
+    }
+    setStatus("Saved");
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = "Save";
+  }
+});
+</script>
+{% endblock %}

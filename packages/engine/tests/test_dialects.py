@@ -94,6 +94,21 @@ EVENTS_DISTINCT = EventsSpec(
     of="country",
 )
 
+EVENTS_WEEK = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="uniques",
+    bucket=(
+        "CAST(factcat_period_start_shifted("
+        "occurred_at, 'week', 'monday', 0) AS DATE)"
+    ),
+    where=(
+        "occurred_at >= factcat_period_start_shifted("
+        "current_date, 'week', 'monday', 0)"
+    ),
+)
+
 
 class _Capture(logging.Handler):
     def __init__(self) -> None:
@@ -141,6 +156,7 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS_MEDIAN_EXACT, dialect=dialect)
     events_sql(EVENTS_DISTINCT, dialect=dialect)
     events_sql(EVENTS_UNIQUES_EXACT, dialect=dialect)
+    events_sql(EVENTS_WEEK, dialect=dialect)
 
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
@@ -164,6 +180,12 @@ def test_bigquery_approx_uniques_uses_approx_count_distinct():
     sql = events_sql(EVENTS, dialect="bigquery")
     assert "APPROX_COUNT_DISTINCT" in sql.upper()
     assert "COUNT(DISTINCT" not in sql.upper().replace("APPROX_COUNT_DISTINCT", "")
+
+
+def test_bigquery_week_start_monday_is_explicit():
+    sql = events_sql(EVENTS_WEEK, dialect="bigquery")
+    assert "WEEK(MONDAY)" in sql.upper().replace(" ", "")
+    assert "factcat_period_start_shifted" not in sql
 
 
 def test_bigquery_exact_uniques_uses_count_distinct():
