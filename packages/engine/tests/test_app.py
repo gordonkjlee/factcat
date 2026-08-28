@@ -37,6 +37,8 @@ def test_index_renders(monkeypatch, tmp_path):
     assert 'aria-label="Loading"' in res.text
     assert "@keyframes spin" in res.text
     assert "Event name value" not in res.text
+    assert "Uniques grain" not in res.text
+    assert "Entity id" in res.text
     assert "Only this event" in res.text
     assert "/api/event_values" in res.text
     assert 'id="event_value-loading"' in res.text
@@ -351,7 +353,7 @@ def test_entity_column_types_are_ids_not_timestamps():
 def test_event_time_column_types_are_temporal():
     assert column_fits("TIMESTAMP", "event_time")
     assert column_fits("DATETIME", "event_time")
-    assert column_fits("DATE", "event_time")
+    assert not column_fits("DATE", "event_time")
     assert not column_fits("STRING", "event_time")
     assert not column_fits("TIME", "event_time")
     assert not column_fits("INT64", "event_time")

@@ -17,7 +17,8 @@ from factcat.warehouses.bigquery import (
 ENTITY_TYPES = frozenset(
     {"STRING", "INT64", "INTEGER", "NUMERIC", "BIGNUMERIC"}
 )
-TIME_TYPES = frozenset({"TIMESTAMP", "DATETIME", "DATE"})
+# Instants, not calendar DATE — product analytics is event-time.
+TIME_TYPES = frozenset({"TIMESTAMP", "DATETIME"})
 # Compared as a SQL string literal in the form (event_column = 'paid').
 EVENT_NAME_TYPES = frozenset({"STRING"})
 

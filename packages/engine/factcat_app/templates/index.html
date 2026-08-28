@@ -29,7 +29,7 @@
       border-top-color: #52525b;
       border-radius: 50%;
       vertical-align: -0.1em;
-      animation: spin 0.7s linear infinite;
+      animation: spin 0.35s linear infinite;
     }
     .loading[hidden], select[hidden], #event_value-wrap[hidden] { display: none !important; }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -63,7 +63,7 @@
     <select id="table_name" name="table_name" hidden></select>
 
     <h2>3. Columns</h2>
-    <label for="entity">Entity (Uniques grain — no user_id default) <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="entity" name="entity" required hidden></select>
     <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
     <select id="event_time" name="event_time" required hidden></select>
