@@ -83,6 +83,13 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "GCP project that runs" not in res.text
     assert "account_id" in res.text
     assert 'value="user_id"' not in res.text
+    assert "pane-chart" in res.text
+    assert "pane-table" in res.text
+    assert "pane-sql" in res.text
+    assert "Run to plot." in res.text
+    assert "Run to see rows." in res.text
+    assert "Run to see generated SQL." in res.text
+    assert "<summary>SQL</summary>" not in res.text
 
 
 def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):

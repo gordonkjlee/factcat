@@ -11,7 +11,37 @@
       min-height: 0;
     }
     .filters { background: #fff; padding: 1.25rem; border-right: 1px solid #e4e4e7; overflow-y: auto; min-height: 0; }
-    #chart-wrap { padding: 1.25rem; overflow: auto; min-height: 0; }
+    .results {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding: 0.5rem;
+      min-height: 0;
+      overflow: hidden;
+      background: #ececee;
+    }
+    .pane {
+      background: #fff;
+      border: 1px solid #e4e4e7;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    .pane h2 {
+      margin: 0;
+      padding: 0.45rem 0.75rem;
+      border-bottom: 1px solid #e4e4e7;
+      font-size: 0.7rem;
+    }
+    .pane-body { flex: 1; overflow: auto; padding: 0.75rem; min-height: 0; }
+    .pane-chart { flex: 2; min-height: 12rem; }
+    .pane-table { flex: 1; min-height: 8rem; }
+    .pane-sql { flex: 0 1 9rem; min-height: 7rem; }
+    .pane-sql .pane-body { padding: 0; }
+    .empty { color: #a1a1aa; font-size: 0.85rem; margin: 0; }
+    .chart-body { position: relative; }
+    .chart-body canvas { width: 100% !important; height: 100% !important; }
+    #sql { margin: 0; min-height: 100%; box-sizing: border-box; }
     .summary { font-size: 0.75rem; color: #52525b; margin: 0 0 0.75rem; }
 {% endblock %}
 {% block body %}
@@ -65,16 +95,30 @@
     <button type="submit">Run</button>
     <p id="error"></p>
   </form>
-  <div id="chart-wrap">
-    <canvas id="chart" height="120"></canvas>
-    <table>
-      <thead><tr><th>Bucket</th><th>Value</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
-    <details>
-      <summary>SQL</summary>
-      <pre id="sql"></pre>
-    </details>
+  <div class="results">
+    <section class="pane pane-chart">
+      <h2>Chart</h2>
+      <div class="pane-body chart-body">
+        <p class="empty" id="chart-empty">Run to plot.</p>
+        <canvas id="chart" hidden></canvas>
+      </div>
+    </section>
+    <section class="pane pane-table">
+      <h2>Table</h2>
+      <div class="pane-body">
+        <p class="empty" id="table-empty">Run to see rows.</p>
+        <table id="result-table" hidden>
+          <thead><tr><th>Bucket</th><th>Value</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="pane pane-sql">
+      <h2>SQL</h2>
+      <div class="pane-body">
+        <pre id="sql" class="empty">Run to see generated SQL.</pre>
+      </div>
+    </section>
   </div>
 </main>
 <script>
@@ -273,7 +317,11 @@ form.addEventListener("submit", async (e) => {
     setError(data.error || res.statusText);
     return;
   }
-  document.getElementById("sql").textContent = data.sql || "";
+  const sqlEl = document.getElementById("sql");
+  sqlEl.textContent = data.sql || "";
+  sqlEl.classList.remove("empty");
+  document.getElementById("table-empty").hidden = true;
+  document.getElementById("result-table").hidden = false;
   const tbody = document.getElementById("rows");
   tbody.innerHTML = "";
   const labels = [];
@@ -289,14 +337,16 @@ form.addEventListener("submit", async (e) => {
     tr.append(tdBucket, tdValue);
     tbody.appendChild(tr);
   }
+  document.getElementById("chart-empty").hidden = true;
   const ctx = document.getElementById("chart");
+  ctx.hidden = false;
   if (chart) chart.destroy();
   if (window.Chart) {
     const measureLabel = (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || body.measure;
     chart = new Chart(ctx, {
       type: "line",
       data: { labels, datasets: [{ label: measureLabel, data: values, tension: 0.1 }] },
-      options: { responsive: true, scales: { y: { beginAtZero: true } } },
+      options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } },
     });
   }
 });

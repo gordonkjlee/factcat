@@ -232,7 +232,7 @@ There is no `user_id` default. **Entity name** on Setup is a display label
 **Volume** is row count, **Unique User** (or Unique Customer, …) is distinct
 of the mapped id, **Average per User** is Volume / that unique count (hover
 the measure names). Day/week/month buckets are dates, not timestamps. The
-filter pane and the chart scroll separately.
+filter pane sits beside Chart, Table, and SQL result panes.
 
 Click **Run**. The mapping is written to `.factcat.json` in the directory where you started
 `factcat-app`, so the next start is already filled in. Add `.factcat.json` to that repo’s
