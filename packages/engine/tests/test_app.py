@@ -24,7 +24,16 @@ def test_index_renders(monkeypatch, tmp_path):
     assert "subscription_id" not in res.text
     assert "Load datasets" not in res.text
     assert "form.dataset" not in res.text
+    assert "Select a dataset" not in res.text
+    assert "Select a table" not in res.text
+    assert "Select entity column" not in res.text
+    assert "Select timestamp column" not in res.text
+    assert "Loading datasets" not in res.text
+    assert "Loading tables" not in res.text
     assert 'getElementById("dataset")' in res.text
+    assert 'id="dataset-loading"' in res.text
+    assert 'id="table_name-loading"' in res.text
+    assert ">Loading<" in res.text
     assert 'value="adc-project"' in res.text
 
 
