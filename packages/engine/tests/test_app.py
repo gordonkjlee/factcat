@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from factcat.warehouses import QueryResult
+from factcat.warehouses import BytesCapError, QueryResult
 from factcat_app.catalog import column_fits
 from factcat_app.config import mapping_ready
 from factcat_app.main import APP_DIR, app
@@ -47,9 +47,15 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "Project setup" in res.text
     assert "Entity id" in res.text
     assert "This grain is called" not in res.text
-    assert "Entity name" in res.text
+    assert "Entity name (singular)" in res.text
+    assert "Plural" in res.text
     assert "Event name column" in res.text
     assert "Week starts on" in res.text
+    assert "Formatting" in res.text
+    assert "Thousand separator" in res.text
+    assert "Decimal separator" in res.text
+    assert 'id="thousand_sep"' in res.text
+    assert 'id="decimal_sep"' in res.text
     assert ">Other<" in res.text
     assert 'value="User"' in res.text
     assert "Volume" not in res.text
@@ -68,6 +74,16 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "if (catalogProject()) loadDatasets()" not in res.text
     assert 'addEventListener("mousedown"' in res.text
     assert ">Analysis<" not in res.text
+    assert "Job scan cap" in res.text
+    assert 'id="bytes_cap_gb"' in res.text
+    assert "Result row limit" in res.text
+    assert 'id="query_row_limit"' in res.text
+    assert "Save and open Events" not in res.text
+    assert 'id="save"' in res.text
+    assert ">Save<" in res.text
+    assert "window.location.href" not in res.text
+    assert "Saved" in res.text
+    assert "catalog: true" in res.text
 
 
 def test_events_renders_when_mapped(monkeypatch, tmp_path):
@@ -76,15 +92,79 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     res = client.get("/")
     assert res.status_code == 200
     assert "Volume" in res.text
-    assert "Unique User" in res.text
+    assert "Unique Users" in res.text
+    assert "Unique User<" not in res.text
     assert "Average per User" in res.text
     assert ">Uniques<" not in res.text
     assert "Only this event" not in res.text
     assert "Event name column" not in res.text
     assert "Date range" in res.text
-    assert "Exclude current period" in res.text
+    assert "Time grain" in res.text
+    assert "<label>Bucket</label>" not in res.text
+    assert "Last 30 days" in res.text
+    assert "Last 8 weeks" in res.text
+    assert "Last 6 months" in res.text
+    assert "This week" in res.text
+    assert "Last week" in res.text
+    assert "Yesterday" in res.text
+    assert 'label: "Custom"' in res.text
+    assert "Specific dates" in res.text
+    assert ">Relative<" in res.text
+    assert "event_names: data.values" not in res.text
+    assert "Include this week" in res.text
+    assert "RANGE_PRESETS" in res.text
+    assert 'id="range_choice"' in res.text
+    assert "applyRangeChoice" in res.text
+    assert "seedRangeChoice" in res.text
+    assert 'value="this">This<' not in res.text
+    assert 'value="previous">Previous<' not in res.text
+    assert "Exclude current period" not in res.text
+    html = res.text
+    grain_at = html.find('id="grain"')
+    range_at = html.find('id="range_choice"')
+    assert grain_at != -1 and range_at != -1 and grain_at < range_at
+    assert "fillSelect(eventValueEl, cachedEventNames" in html
+    assert "syncChartTitle" not in html
+    assert "Exact unique counts" in res.text
+    assert "Exact (off = approx unique count)" not in res.text
+    assert 'id="copy-sql"' in res.text
+    assert 'id="copy-chart"' in res.text
+    assert 'id="copy-table"' in res.text
+    assert "grainHeader" in res.text
+    assert "valueHeader" in res.text
+    assert ">Bucket<" not in res.text
+    assert 'id="export-png"' in res.text
+    assert 'id="chart_type"' in res.text
+    assert "Labels" in res.text
+    assert 'id="chart-title"' in res.text
+    assert 'id="reset-title"' in res.text
+    assert "Reset title" in res.text
+    assert 'value: "this:week"' in res.text
     assert "Export CSV" in res.text
-    assert "All events" in res.text
+    assert "All events" not in res.text
+    assert "Pick an event." in res.text
+    assert "Running…" in res.text
+    assert 'id="run"' in res.text
+    assert 'id="run-estimate"' in res.text
+    assert "/api/estimate" in res.text
+    assert ">Area<" in res.text
+    assert "Format chart" in res.text
+    assert "2 decimals" in res.text
+    assert "Scientific" in res.text
+    assert "Major and minor" in res.text
+    assert "n <= 2 ? \"bar\" : \"line\"" in res.text
+    assert 'id="thousand_sep"' in res.text
+    assert "applySeps" in res.text
+    assert "Show last" not in res.text
+    assert "limit-note" in res.text
+    assert "Load more" in res.text
+    assert 'id="query_row_limit"' in res.text
+    assert "Override cap" in res.text
+    assert "icon-btn" in res.text
+    assert "estimateKey" in res.text
+    assert 'e.target.id === "exact"' in res.text
+    assert "class=\"sort\"" in res.text or 'className = "sort"' in res.text
+    assert html.find('id="exact-wrap"') < html.find('id="exact-hint"') < html.find('id="run"')
     assert "Refresh list" in res.text
     assert "/api/event_values" in res.text
     assert "<h1>Project setup</h1>" not in res.text
@@ -98,6 +178,24 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Run to see rows." in res.text
     assert "Run to see generated SQL." in res.text
     assert "<summary>SQL</summary>" not in res.text
+
+
+def test_events_serves_cached_event_names(monkeypatch, tmp_path):
+    _map_cfg(
+        tmp_path,
+        monkeypatch,
+        event_column="event_name",
+        event_names=["opened", "paid"],
+        event_value="paid",
+    )
+    client = TestClient(app)
+    html = client.get("/").text
+    assert "cachedEventNames" in html
+    assert '"opened"' in html
+    assert '"paid"' in html
+    assert 'id="event_value-wrap" hidden' not in html
+    assert "fillSelect(eventValueEl, cachedEventNames" in html
+    assert "All events" not in html
 
 
 def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
@@ -133,9 +231,14 @@ def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
     assert res.status_code == 200
     body = res.json()
     assert body["ok"] is True
-    assert body["rows"] == [{"bucket": "2026-01-05", "value": 2}]
+    assert body["rows"] == [{"bucket": "2026-01-05", "value": 2, "incomplete": False}]
+    assert body["truncated"] is False
+    assert body["limit"] == 1_000_000
     warehouse.run.assert_called_once()
     sql = warehouse.run.call_args.args[0]
+    compact = " ".join(sql.split()).upper()
+    assert "LIMIT 1000000" in compact
+    assert "ORDER BY BUCKET DESC" in compact
     assert "account_id" in sql
     assert "user_id" not in sql
     assert "TIMESTAMP_TRUNC" in sql.upper() or "DATE_TRUNC" in sql.upper()
@@ -145,6 +248,136 @@ def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
     assert captured["location"] == "EU"
     assert captured["credentials"] == "/tmp/sa.json"
     assert (tmp_path / "cfg.json").is_file()
+
+
+def test_estimate_is_dry_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    captured: dict = {}
+
+    def fake_run(sql, *, dry_run=False):
+        captured["sql"] = sql
+        captured["dry_run"] = dry_run
+        return QueryResult(rows=[{"bucket": "x", "value": 1}], bytes_processed=1500)
+
+    warehouse.run.side_effect = fake_run
+    monkeypatch.setattr(
+        "factcat_app.main.connect", lambda kind, **kw: warehouse
+    )
+    client = TestClient(app)
+    res = client.post(
+        "/api/estimate",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "uniques",
+            "grain": "day",
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["bytes"] == 1500
+    assert body["over_cap"] is False
+    assert captured["dry_run"] is True
+    assert "account_id" in captured["sql"]
+
+
+def test_estimate_over_cap_still_returns_bytes(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.side_effect = BytesCapError(
+        "too big",
+        bytes_processed=20 * 1024**3,
+        maximum_bytes_billed=10 * 1024**3,
+    )
+    monkeypatch.setattr(
+        "factcat_app.main.connect", lambda kind, **kw: warehouse
+    )
+    client = TestClient(app)
+    res = client.post(
+        "/api/estimate",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "uniques",
+            "grain": "day",
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["over_cap"] is True
+    assert body["bytes"] == 20 * 1024**3
+
+
+def test_run_flags_truncated_when_row_count_hits_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(
+        rows=[
+            {"bucket": "2026-01-01", "value": 1},
+            {"bucket": "2026-01-02", "value": 2},
+            {"bucket": "2026-01-03", "value": 3},
+        ]
+    )
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post(
+        "/api/run",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "uniques",
+            "grain": "day",
+            "query_row_limit": 3,
+        },
+    )
+    body = res.json()
+    assert body["ok"] is True
+    assert body["truncated"] is True
+    assert body["limit"] == 3
+    sql = warehouse.run.call_args.args[0]
+    assert "LIMIT 3" in " ".join(sql.split()).upper()
+
+
+def test_run_limit_override_does_not_persist_to_setup(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(rows=[{"bucket": "2026-01-01", "value": 1}])
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post(
+        "/api/run",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "uniques",
+            "grain": "day",
+            "query_row_limit": 5000,
+            "query_row_limit_run": 10000,
+        },
+    )
+    body = res.json()
+    assert body["ok"] is True
+    assert body["limit"] == 10000
+    sql = warehouse.run.call_args.args[0]
+    assert "LIMIT 10000" in " ".join(sql.split()).upper()
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert saved["query_row_limit"] == 5000
+    assert "query_row_limit_run" not in saved
 
 
 def test_run_rejects_empty_entity(monkeypatch, tmp_path):
@@ -397,6 +630,62 @@ def test_event_values_run_distinct_and_sort(monkeypatch, tmp_path):
     assert captured["kind"] == "bigquery"
     assert captured["project"] == "p"
     assert captured["location"] == "EU"
+
+
+def test_catalog_event_values_writes_event_names(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    (tmp_path / "cfg.json").write_text(
+        json.dumps({"event_names": ["stale"]}), encoding="utf-8"
+    )
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(
+        rows=[{"fc_value": "opened"}, {"fc_value": "paid"}]
+    )
+    monkeypatch.setattr(
+        "factcat_app.main.connect", lambda kind, **kw: warehouse
+    )
+    client = TestClient(app)
+    res = client.post(
+        "/api/event_values",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "event_column": "event_name",
+            "event_time": "occurred_at",
+            "catalog": True,
+        },
+    )
+    assert res.status_code == 200
+    assert res.json()["values"] == ["opened", "paid"]
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert saved["event_names"] == ["opened", "paid"]
+
+
+def test_non_catalog_event_values_do_not_write_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    (tmp_path / "cfg.json").write_text(
+        json.dumps({"event_names": ["keep"]}), encoding="utf-8"
+    )
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(rows=[{"fc_value": "paid"}])
+    monkeypatch.setattr(
+        "factcat_app.main.connect", lambda kind, **kw: warehouse
+    )
+    client = TestClient(app)
+    res = client.post(
+        "/api/event_values",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "event_column": "event_name",
+            "event_time": "occurred_at",
+        },
+    )
+    assert res.status_code == 200
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert saved["event_names"] == ["keep"]
 
 
 def test_columns_list_names(monkeypatch, tmp_path):

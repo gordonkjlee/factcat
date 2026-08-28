@@ -45,17 +45,92 @@
     .summary { font-size: 0.75rem; color: #52525b; margin: 0 0 0.75rem; }
     .pane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding-right: 0.5rem; }
     .pane-head h2 { border-bottom: none; padding: 0.45rem 0.75rem; }
-    .pane-actions button { margin: 0; padding: 0.2rem 0.5rem; font-size: 0.7rem; }
+    .pane-actions { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+    .pane-actions button, .pane-actions select { margin: 0; padding: 0.2rem 0.5rem; font-size: 0.7rem; width: auto; }
+    .pane-actions label { margin: 0; font-weight: 400; display: flex; align-items: center; gap: 0.25rem; }
+    .chart-title {
+      flex: 1; min-width: 8rem; margin: 0; padding: 0.35rem 0.75rem;
+      border: none; border-bottom: 1px solid #e4e4e7; font-size: 0.8rem;
+      font-weight: 600; background: transparent;
+    }
+    #exact-wrap[hidden] { display: none !important; }
+    #run-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; flex-wrap: wrap; }
+    #run-row button { margin-top: 0; }
+    #run-status, #run-estimate { font-size: 0.8rem; color: #52525b; }
+    #run-estimate-wrap { display: inline-flex; align-items: center; gap: 0.4rem; }
+    #run-estimate-wrap[hidden] { display: none !important; }
+    #run-estimate-bar {
+      display: inline-block; width: 3.2rem; height: 0.45rem;
+      background: #e4e4e7; border-radius: 2px; overflow: hidden; vertical-align: middle;
+    }
+    #run-estimate-fill { display: block; height: 100%; width: 0; background: #22c55e; }
+    #run-estimate-wrap.warn #run-estimate-fill { background: #eab308; }
+    #run-estimate-wrap.hot #run-estimate-fill, #run-estimate-wrap.over-cap #run-estimate-fill { background: #ef4444; }
+    #run-estimate-wrap.over-cap #run-estimate { color: #b91c1c; font-weight: 600; }
+    .format-pop { position: relative; font-size: 0.7rem; }
+    .format-pop > summary {
+      cursor: pointer; list-style: none; padding: 0.2rem 0.5rem;
+      border: 1px solid #e4e4e7; border-radius: 0.2rem;
+    }
+    .format-pop > summary::-webkit-details-marker { display: none; }
+    .format-pop[open] > .format-body {
+      position: absolute; right: 0; top: calc(100% + 0.2rem); z-index: 8;
+      background: #fff; border: 1px solid #e4e4e7; padding: 0.65rem 0.75rem;
+      min-width: 14rem; box-shadow: 0 4px 14px rgba(0,0,0,.08);
+    }
+    .format-body label {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 0.6rem; margin: 0.4rem 0; font-weight: 400; font-size: 0.7rem;
+    }
+    .format-body select { width: auto; font-size: 0.7rem; padding: 0.15rem 0.3rem; }
+    .icon-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 1.75rem; height: 1.75rem; padding: 0; margin: 0;
+      background: #fff; border: 1px solid #e4e4e7; border-radius: 0.25rem;
+      cursor: pointer; color: #52525b;
+    }
+    .icon-btn svg { width: 0.95rem; height: 0.95rem; display: block; }
+    .icon-btn:hover { color: #111; border-color: #a1a1aa; }
+    .icon-btn.copied { color: #166534; border-color: #86efac; }
+    .format-pop > summary.icon-btn { list-style: none; }
+    .format-pop > summary.icon-btn::-webkit-details-marker { display: none; }
+    .pane-limit {
+      display: flex; align-items: center; gap: 0.3rem; margin: 0;
+      font-size: 0.7rem; font-weight: 400; color: #52525b;
+    }
+    .pane-limit input { width: 3.5rem; padding: 0.15rem 0.3rem; font-size: 0.7rem; }
+    #cap-override {
+      display: flex; align-items: center; gap: 0.35rem;
+      font-size: 0.75rem; color: #b91c1c;
+    }
+    #cap-override[hidden] { display: none !important; }
+    #cap-override input[type="number"] { width: 4rem; padding: 0.15rem 0.3rem; }
     #result-table { table-layout: fixed; width: 100%; }
-    #result-table th { position: relative; cursor: pointer; user-select: none; min-width: 4rem; }
+    #result-table th {
+      position: relative; cursor: pointer; user-select: none; min-width: 4rem;
+      border-right: 1px solid #d4d4d8; padding-right: 0.9rem;
+    }
+    #result-table th .sort {
+      font-size: 0.65rem; color: #a1a1aa; margin-left: 0.25rem;
+    }
+    #result-table th.sorted .sort { color: #111; }
     #result-table th .grip {
-      position: absolute; right: 0; top: 0; width: 6px; height: 100%;
-      cursor: col-resize;
+      position: absolute; right: 0; top: 0; width: 8px; height: 100%;
+      cursor: col-resize; background: #d4d4d8;
+      background: linear-gradient(to right, transparent 2px, #a1a1aa 2px, #a1a1aa 3px, transparent 3px);
+    }
+    #result-table th .grip:hover {
+      background: #3b82f6;
     }
     #custom-range label { display: inline-block; width: auto; margin-right: 0.35rem; }
     #custom-range input { width: auto; }
     .range-row { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.35rem; }
+    .range-row[hidden], #range-include[hidden], #custom-range[hidden],
+    #custom-absolute[hidden], #custom-relative[hidden] { display: none !important; }
     .range-row input[type="number"] { width: 4.5rem; }
+    .incomplete-note { font-size: 0.75rem; color: #52525b; margin: 0.35rem 0 0; }
+    #result-table tr.incomplete td { color: #71717a; font-style: italic; }
+    #custom-snap-hint { margin: 0.35rem 0 0; }
     .linkish {
       background: none; border: none; padding: 0; margin-left: 0.5rem;
       color: #52525b; text-decoration: underline; font-size: 0.75rem;
@@ -82,9 +157,14 @@
     <input type="hidden" name="table_name" id="table_name" value="{{ config.table_name }}">
     <input type="hidden" name="entity" id="entity" value="{{ config.entity }}">
     <input type="hidden" name="entity_label" id="entity_label" value="{{ config.entity_label }}">
+    <input type="hidden" name="entity_label_plural" id="entity_label_plural" value="{{ config.entity_label_plural or 'Users' }}">
     <input type="hidden" name="event_time" id="event_time" value="{{ config.event_time }}">
     <input type="hidden" name="event_column" id="event_column" value="{{ config.event_column }}">
     <input type="hidden" name="week_start" id="week_start" value="{{ config.week_start or 'monday' }}">
+    <input type="hidden" name="thousand_sep" id="thousand_sep" value="{{ config.thousand_sep or 'comma' }}">
+    <input type="hidden" name="decimal_sep" id="decimal_sep" value="{{ config.decimal_sep or 'period' }}">
+    <input type="hidden" name="bytes_cap_gb" id="bytes_cap_gb" value="{{ config.bytes_cap_gb if config.bytes_cap_gb is not none else 10 }}">
+    <input type="hidden" name="query_row_limit" id="query_row_limit" value="{{ config.query_row_limit or 1000000 }}">
 
     <div id="event_value-wrap" {% if not config.event_column %}hidden{% endif %}>
       <label for="event_value">Event <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span>
@@ -93,75 +173,161 @@
       <select id="event_value" name="event_value"></select>
     </div>
 
-    <label for="range_mode">Date range</label>
-    <select id="range_mode" name="range_mode">
-      <option value="last" {% if config.range_mode == "last" or not config.range_mode %}selected{% endif %}>Last</option>
-      <option value="this" {% if config.range_mode == "this" %}selected{% endif %}>This</option>
-      <option value="previous" {% if config.range_mode == "previous" %}selected{% endif %}>Previous</option>
-      <option value="custom" {% if config.range_mode == "custom" %}selected{% endif %}>Custom</option>
+    <label for="grain">Time grain</label>
+    <select name="grain" id="grain">
+      <option value="day" {% if config.grain == "day" or not config.grain %}selected{% endif %}>Day</option>
+      <option value="week" {% if config.grain == "week" %}selected{% endif %}>Week</option>
+      <option value="month" {% if config.grain == "month" %}selected{% endif %}>Month</option>
     </select>
-    <div id="range-last" class="range-row">
+
+    <label for="range_choice">Date range</label>
+    <select id="range_choice"></select>
+    <input type="hidden" name="range_mode" id="range_mode" value="{{ config.range_mode or 'last' }}">
+    <input type="hidden" name="range_unit" id="range_unit" value="{{ config.range_unit or 'day' }}">
+    <div id="range-last" class="range-row" hidden>
+      <span>Last</span>
       <input id="range_n" name="range_n" type="number" min="1" max="3650" value="{{ config.range_n or 30 }}">
-      <select id="range_unit" name="range_unit">
-        <option value="day" {% if config.range_unit == "day" or not config.range_unit %}selected{% endif %}>days</option>
-        <option value="week" {% if config.range_unit == "week" %}selected{% endif %}>weeks</option>
-        <option value="month" {% if config.range_unit == "month" %}selected{% endif %}>months</option>
-        <option value="quarter" {% if config.range_unit == "quarter" %}selected{% endif %}>quarters</option>
-        <option value="year" {% if config.range_unit == "year" %}selected{% endif %}>years</option>
+      <span id="range_n_unit">{% if config.grain == "week" %}weeks{% elif config.grain == "month" %}months{% else %}days{% endif %}</span>
+    </div>
+    <div id="range-include" class="row" hidden>
+      <input name="include_current" type="checkbox" id="include_current" {% if config.include_current %}checked{% endif %} style="width:auto">
+      <label for="include_current" id="include_current_label" style="margin:0">Include this week</label>
+    </div>
+    <div id="custom-range" hidden>
+      <select id="custom_kind" name="custom_kind">
+        <option value="absolute" {% if config.custom_kind != "relative" %}selected{% endif %}>Specific dates</option>
+        <option value="relative" {% if config.custom_kind == "relative" %}selected{% endif %}>Relative</option>
       </select>
-    </div>
-    <div id="range-exclude" class="row">
-      <input name="exclude_current" type="checkbox" id="exclude_current" {% if config.exclude_current %}checked{% endif %} style="width:auto">
-      <label for="exclude_current" style="margin:0">Exclude current period</label>
-    </div>
-    <div id="custom-range" {% if config.range_mode != "custom" %}hidden{% endif %}>
-      <label for="start_date">From</label>
-      <input id="start_date" name="start_date" type="date" value="{{ config.start_date }}">
-      <label for="end_date">To</label>
-      <input id="end_date" name="end_date" type="date" value="{{ config.end_date }}">
+      <div id="custom-absolute">
+        <label for="start_date">From</label>
+        <input id="start_date" name="start_date" type="date" value="{{ config.start_date }}">
+        <label for="end_date">To</label>
+        <input id="end_date" name="end_date" type="date" value="{{ config.end_date }}">
+        <p id="custom-snap-hint" class="summary" hidden></p>
+      </div>
+      <div id="custom-relative" hidden>
+        <div class="range-row">
+          <span>From</span>
+          <input id="rel_start_n" name="rel_start_n" type="number" min="0" max="3650" value="{{ config.rel_start_n or 12 }}">
+          <span id="rel_unit_from">days</span>
+          <span>ago</span>
+        </div>
+        <div class="range-row">
+          <span>To</span>
+          <input id="rel_end_n" name="rel_end_n" type="number" min="0" max="3650" value="{{ config.rel_end_n if config.rel_end_n is not none else 0 }}">
+          <span id="rel_unit_to">days</span>
+          <span>ago</span>
+        </div>
+        <p id="custom-rel-hint" class="summary">0 = this day.</p>
+      </div>
     </div>
 
     <label>Measure</label>
     <select name="measure" id="measure">
       <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>Volume</option>
-      <option value="uniques" title="Count distinct of the mapped entity id" {% if config.measure == "uniques" %}selected{% endif %}>Unique {{ config.entity_label or "User" }}</option>
+      <option value="uniques" title="Count distinct of the mapped entity id" {% if config.measure == "uniques" %}selected{% endif %}>Unique {{ config.entity_label_plural or "Users" }}</option>
       <option value="average" title="Volume divided by unique entities" {% if config.measure == "average" %}selected{% endif %}>Average per {{ config.entity_label or "User" }}</option>
     </select>
-    <label>Bucket</label>
-    <select name="grain">
-      <option value="day" {% if config.grain == "day" %}selected{% endif %}>Day</option>
-      <option value="week" {% if config.grain == "week" %}selected{% endif %}>Week</option>
-      <option value="month" {% if config.grain == "month" %}selected{% endif %}>Month</option>
-    </select>
-    <div class="row">
-      <input name="exact" type="checkbox" id="exact" {% if config.exact %}checked{% endif %} style="width:auto">
-      <label for="exact" style="margin:0">Exact (off = approx unique count)</label>
+    <div id="exact-wrap">
+      <div class="row">
+        <input name="exact" type="checkbox" id="exact" {% if config.exact %}checked{% endif %} style="width:auto">
+        <label for="exact" style="margin:0">Exact unique counts</label>
+      </div>
+      <span class="hint" id="exact-hint">Same bytes scanned; more CPU. Off is HyperLogLog (faster).</span>
     </div>
-    <button type="submit">Run</button>
+    <div id="run-row">
+      <button type="submit" id="run">Run</button>
+      <span id="run-loading" class="loading" hidden aria-label="Running"></span>
+      <span id="run-estimate-wrap" hidden>
+        <span id="run-estimate-bar" aria-hidden="true"><span id="run-estimate-fill"></span></span>
+        <span id="run-estimate"></span>
+      </span>
+      <div id="cap-override" hidden>
+        <input name="override_cap" type="checkbox" id="override_cap" style="width:auto">
+        <label for="override_cap" style="margin:0">Override cap</label>
+        <input id="bytes_cap_override_gb" name="bytes_cap_override_gb" type="number" min="1" max="100000" step="1">
+        <span>GB this run</span>
+      </div>
+      <span id="run-status"></span>
+    </div>
     <p id="error"></p>
   </form>
   <div class="results">
     <section class="pane pane-chart">
-      <h2>Chart</h2>
+      <div class="pane-head">
+        <input id="chart-title" class="chart-title" name="chart_title" value="{{ config.chart_title }}" placeholder="Chart title" spellcheck="false">
+        <button type="button" id="reset-title" class="icon-btn" title="Reset title" aria-label="Reset title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.36 6.36L3 16"/><path d="M3 21v-5h5"/></svg>
+        </button>
+        <input type="hidden" id="chart_title_locked" value="{{ 'true' if config.chart_title_locked else 'false' }}">
+        <span class="pane-actions">
+          <select id="chart_type" name="chart_type" title="Auto: bar for 1–2 points, otherwise line">
+            <option value="auto" {% if config.chart_type == "auto" or not config.chart_type %}selected{% endif %}>Auto</option>
+            <option value="line" {% if config.chart_type == "line" %}selected{% endif %}>Line</option>
+            <option value="area" {% if config.chart_type == "area" %}selected{% endif %}>Area</option>
+            <option value="bar" {% if config.chart_type == "bar" %}selected{% endif %}>Bar</option>
+          </select>
+          <details class="format-pop" id="format-pop">
+            <summary class="icon-btn" title="Format chart" aria-label="Format chart">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 14h4M10 8h4M18 16h4"/></svg>
+            </summary>
+            <div class="format-body">
+              <label>Values
+                <select id="chart_value_format" name="chart_value_format">
+                  <option value="auto" {% if config.chart_value_format == "auto" or not config.chart_value_format %}selected{% endif %}>Auto</option>
+                  <option value="int" {% if config.chart_value_format == "int" %}selected{% endif %}>Integer</option>
+                  <option value="dp1" {% if config.chart_value_format == "dp1" %}selected{% endif %}>1 decimal</option>
+                  <option value="dp2" {% if config.chart_value_format == "dp2" %}selected{% endif %}>2 decimals</option>
+                  <option value="compact" {% if config.chart_value_format == "compact" %}selected{% endif %}>Compact (1.2k)</option>
+                  <option value="sci" {% if config.chart_value_format == "sci" %}selected{% endif %}>Scientific</option>
+                </select>
+              </label>
+              <label>Data labels <input id="chart_labels" name="chart_labels" type="checkbox" {% if config.chart_labels %}checked{% endif %} style="width:auto"></label>
+              <label>X-axis labels <input id="chart_axis_x" name="chart_axis_x" type="checkbox" {% if config.chart_axis_x or config.chart_axis_x is not false %}checked{% endif %} style="width:auto"></label>
+              <label>Y-axis labels <input id="chart_axis_y" name="chart_axis_y" type="checkbox" {% if config.chart_axis_y or config.chart_axis_y is not false %}checked{% endif %} style="width:auto"></label>
+              <label>Grid
+                <select id="chart_grid" name="chart_grid">
+                  <option value="off" {% if config.chart_grid == "off" %}selected{% endif %}>Off</option>
+                  <option value="major" {% if config.chart_grid == "major" or not config.chart_grid %}selected{% endif %}>Major</option>
+                  <option value="minor" {% if config.chart_grid == "minor" %}selected{% endif %}>Major and minor</option>
+                </select>
+              </label>
+            </div>
+          </details>
+          <button type="button" id="copy-chart" class="icon-btn" hidden title="Copy chart" aria-label="Copy chart">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button type="button" id="export-png" class="icon-btn" hidden title="Download PNG" aria-label="Download PNG">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+          </button>
+        </span>
+      </div>
       <div class="pane-body chart-body">
         <p class="empty" id="chart-empty">Run to plot.</p>
         <canvas id="chart" hidden></canvas>
+        <p id="incomplete-note" class="incomplete-note" hidden></p>
       </div>
     </section>
     <section class="pane pane-table">
       <div class="pane-head">
         <h2>Table</h2>
         <span class="pane-actions">
-          <button type="button" id="export-csv" hidden>Export CSV</button>
+          <button type="button" id="copy-table" class="icon-btn" hidden title="Copy table" aria-label="Copy table">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+          <button type="button" id="export-csv" class="icon-btn" hidden title="Export CSV" aria-label="Export CSV">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 19h16"/></svg>
+          </button>
         </span>
       </div>
       <div class="pane-body">
         <p class="empty" id="table-empty">Run to see rows.</p>
+        <p id="limit-note" class="incomplete-note" hidden></p>
         <table id="result-table" hidden>
           <thead>
             <tr>
-              <th data-key="bucket">Bucket <span class="grip" data-col="0"></span></th>
-              <th data-key="value">Value <span class="grip" data-col="1"></span></th>
+              <th data-key="bucket">Day <span class="grip" data-col="0"></span></th>
+              <th data-key="value">Volume <span class="grip" data-col="1"></span></th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
@@ -169,7 +335,14 @@
       </div>
     </section>
     <section class="pane pane-sql">
-      <h2>SQL</h2>
+      <div class="pane-head">
+        <h2>SQL</h2>
+        <span class="pane-actions">
+          <button type="button" id="copy-sql" class="icon-btn" hidden title="Copy SQL" aria-label="Copy SQL">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </span>
+      </div>
       <div class="pane-body">
         <pre id="sql" class="empty">Run to see generated SQL.</pre>
       </div>
@@ -179,6 +352,60 @@
 <script>
 const saved = {
   event_value: {{ config.event_value|tojson }},
+  grain: {{ (config.grain or "day")|tojson }},
+  range_mode: {{ (config.range_mode or "last")|tojson }},
+  range_n: {{ (config.range_n or 30)|tojson }},
+  range_unit: {{ (config.range_unit or "day")|tojson }},
+  include_current: {{ (config.include_current or false)|tojson }},
+  custom_kind: {{ (config.custom_kind or "absolute")|tojson }},
+};
+const GRAIN_DEFAULTS = {
+  day: { choice: "last:30:day", n: 30, includeCurrent: true },
+  week: { choice: "last:8:week", n: 8, includeCurrent: false },
+  month: { choice: "last:6:month", n: 6, includeCurrent: false },
+};
+const RANGE_PRESETS = {
+  day: [
+    { value: "last:7:day", label: "Last 7 days" },
+    { value: "last:14:day", label: "Last 14 days" },
+    { value: "last:30:day", label: "Last 30 days" },
+    { value: "last:90:day", label: "Last 90 days" },
+    { value: "last:n", label: "Last N days…" },
+    { value: "this:day", label: "Today" },
+    { value: "this:week", label: "This week" },
+    { value: "this:month", label: "This month" },
+    { value: "previous:day", label: "Yesterday" },
+    { value: "previous:week", label: "Last week" },
+    { value: "previous:month", label: "Last month" },
+    { value: "custom", label: "Custom" },
+  ],
+  week: [
+    { value: "last:4:week", label: "Last 4 weeks" },
+    { value: "last:8:week", label: "Last 8 weeks" },
+    { value: "last:12:week", label: "Last 12 weeks" },
+    { value: "last:n", label: "Last N weeks…" },
+    { value: "this:week", label: "This week" },
+    { value: "previous:week", label: "Last week" },
+    { value: "custom", label: "Custom" },
+  ],
+  month: [
+    { value: "last:3:month", label: "Last 3 months" },
+    { value: "last:6:month", label: "Last 6 months" },
+    { value: "last:12:month", label: "Last 12 months" },
+    { value: "last:n", label: "Last N months…" },
+    { value: "this:month", label: "This month" },
+    { value: "previous:month", label: "Last month" },
+    { value: "custom", label: "Custom" },
+  ],
+};
+const NAMED_LAST = { day: ["7", "14", "30", "90"], week: ["4", "8", "12"], month: ["3", "6", "12"] };
+const UNIT_LABEL = { day: "days", week: "weeks", month: "months" };
+const GRAIN_NOUN = { day: "today", week: "this week", month: "this month" };
+const GRAIN_RANK = { day: 0, week: 1, month: 2 };
+const rangeByGrain = {
+  day: Object.assign({}, GRAIN_DEFAULTS.day),
+  week: Object.assign({}, GRAIN_DEFAULTS.week),
+  month: Object.assign({}, GRAIN_DEFAULTS.month),
 };
 const form = document.getElementById("f");
 const projectEl = document.getElementById("project");
@@ -190,10 +417,24 @@ const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
 const eventValueEl = document.getElementById("event_value");
 const eventValueWrap = document.getElementById("event_value-wrap");
+const grainEl = document.getElementById("grain");
+const rangeChoiceEl = document.getElementById("range_choice");
 const rangeModeEl = document.getElementById("range_mode");
+const rangeNEl = document.getElementById("range_n");
+const rangeUnitEl = document.getElementById("range_unit");
+const includeCurrentEl = document.getElementById("include_current");
+const includeCurrentLabel = document.getElementById("include_current_label");
 const rangeLastEl = document.getElementById("range-last");
-const rangeExcludeEl = document.getElementById("range-exclude");
+const rangeIncludeEl = document.getElementById("range-include");
 const customRangeEl = document.getElementById("custom-range");
+const customKindEl = document.getElementById("custom_kind");
+const customAbsoluteEl = document.getElementById("custom-absolute");
+const customRelativeEl = document.getElementById("custom-relative");
+const customSnapHint = document.getElementById("custom-snap-hint");
+const startDateEl = document.getElementById("start_date");
+const endDateEl = document.getElementById("end_date");
+const titleEl = document.getElementById("chart-title");
+const titleLockedEl = document.getElementById("chart_title_locked");
 const cachedEventNames = {{ config.event_names|tojson }};
 let chart;
 let valGen = 0;
@@ -221,10 +462,12 @@ function fillSelect(sel, items, selected, blankLabel) {
     if (ka > kb) return 1;
     return 0;
   });
-  const blank = document.createElement("option");
-  blank.value = "";
-  blank.textContent = blankLabel || "";
-  sel.appendChild(blank);
+  if (blankLabel) {
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = blankLabel;
+    sel.appendChild(blank);
+  }
   for (const item of ranked) {
     const opt = document.createElement("option");
     if (typeof item === "string") {
@@ -237,7 +480,12 @@ function fillSelect(sel, items, selected, blankLabel) {
     sel.appendChild(opt);
   }
   if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
+  else if (!blankLabel && sel.options.length) sel.selectedIndex = 0;
   sel.hidden = false;
+}
+if (eventColumnEl.value) {
+  eventValueWrap.hidden = false;
+  fillSelect(eventValueEl, cachedEventNames || [], saved.event_value);
 }
 function authBody() {
   return {
@@ -254,11 +502,152 @@ async function post(url, body) {
   });
   return res.json();
 }
-function syncRangeUi() {
-  const mode = rangeModeEl.value;
-  customRangeEl.hidden = mode !== "custom";
-  rangeLastEl.hidden = mode !== "last";
-  rangeExcludeEl.hidden = mode !== "last";
+function currentGrain() {
+  return grainEl.value || "day";
+}
+function fillRangeOptions(grain, selected) {
+  rangeChoiceEl.innerHTML = "";
+  for (const item of RANGE_PRESETS[grain] || RANGE_PRESETS.day) {
+    const opt = document.createElement("option");
+    opt.value = item.value;
+    opt.textContent = item.label;
+    rangeChoiceEl.appendChild(opt);
+  }
+  if (selected && [...rangeChoiceEl.options].some((o) => o.value === selected)) {
+    rangeChoiceEl.value = selected;
+  }
+}
+function choiceFromSaved(grain) {
+  const mode = saved.range_mode || "last";
+  const n = String(saved.range_n || GRAIN_DEFAULTS[grain].n);
+  if (mode === "custom") return "custom";
+  if (mode === "this" || mode === "previous") return mode + ":" + (saved.range_unit || grain);
+  if (mode === "last" && (NAMED_LAST[grain] || []).includes(n)) return "last:" + n + ":" + grain;
+  if (mode === "last") return "last:n";
+  return GRAIN_DEFAULTS[grain].choice;
+}
+function saveRangeForGrain(grain) {
+  rangeByGrain[grain] = {
+    choice: rangeChoiceEl.value || GRAIN_DEFAULTS[grain].choice,
+    n: Number(rangeNEl.value) || GRAIN_DEFAULTS[grain].n,
+    includeCurrent: grain === "day" ? true : includeCurrentEl.checked,
+  };
+}
+function applyRangeChoice() {
+  const grain = currentGrain();
+  const choice = rangeChoiceEl.value || GRAIN_DEFAULTS[grain].choice;
+  const lastN = choice === "last:n";
+  const lastNamed = choice.startsWith("last:") && choice !== "last:n";
+  const custom = choice === "custom";
+  document.getElementById("range_n_unit").textContent = UNIT_LABEL[grain];
+  includeCurrentLabel.textContent = "Include " + GRAIN_NOUN[grain];
+  rangeLastEl.hidden = !lastN;
+  rangeIncludeEl.hidden = grain === "day" || !(lastN || lastNamed);
+  customRangeEl.hidden = !custom;
+  if (custom) {
+    rangeModeEl.value = "custom";
+    rangeUnitEl.value = grain;
+    syncCustomKind();
+    snapCustomDates();
+    saveRangeForGrain(grain);
+    return;
+  }
+  if (lastN) {
+    rangeModeEl.value = "last";
+    rangeUnitEl.value = grain;
+    if (grain !== "day") includeCurrentEl.checked = rangeByGrain[grain].includeCurrent;
+    saveRangeForGrain(grain);
+    return;
+  }
+  const parts = choice.split(":");
+  if (parts[0] === "last") {
+    rangeModeEl.value = "last";
+    rangeNEl.value = parts[1];
+    rangeUnitEl.value = grain;
+    if (grain !== "day") includeCurrentEl.checked = rangeByGrain[grain].includeCurrent;
+    saveRangeForGrain(grain);
+    return;
+  }
+  rangeModeEl.value = parts[0];
+  rangeUnitEl.value = parts[1] || grain;
+  saveRangeForGrain(grain);
+}
+function isoDate(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return y + "-" + m + "-" + day;
+}
+function parseIsoDate(value) {
+  if (!value) return null;
+  const p = value.split("-").map(Number);
+  if (p.length !== 3 || p.some((n) => Number.isNaN(n))) return null;
+  return new Date(p[0], p[1] - 1, p[2]);
+}
+function grainStart(d, grain) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  if (grain === "day") return x;
+  if (grain === "month") return new Date(x.getFullYear(), x.getMonth(), 1);
+  const want = document.getElementById("week_start").value === "sunday" ? 0 : 1;
+  const delta = (x.getDay() - want + 7) % 7;
+  x.setDate(x.getDate() - delta);
+  return x;
+}
+function grainEndInclusive(d, grain) {
+  const start = grainStart(d, grain);
+  if (grain === "day") return start;
+  if (grain === "week") return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  return new Date(start.getFullYear(), start.getMonth() + 1, 0);
+}
+function syncCustomKind() {
+  const rel = customKindEl.value === "relative";
+  customAbsoluteEl.hidden = rel;
+  customRelativeEl.hidden = !rel;
+  const unit = UNIT_LABEL[currentGrain()] || "days";
+  document.getElementById("rel_unit_from").textContent = unit;
+  document.getElementById("rel_unit_to").textContent = unit;
+  document.getElementById("custom-rel-hint").textContent = "0 = this " + currentGrain() + ".";
+}
+function snapCustomDates() {
+  if (customKindEl.value === "relative") return;
+  const grain = currentGrain();
+  const start = parseIsoDate(startDateEl.value);
+  const end = parseIsoDate(endDateEl.value);
+  if (!start || !end) {
+    customSnapHint.hidden = true;
+    return;
+  }
+  const snappedStart = grainStart(start, grain);
+  const snappedEnd = grainEndInclusive(end, grain);
+  const s = isoDate(snappedStart);
+  const e = isoDate(snappedEnd);
+  startDateEl.value = s;
+  endDateEl.value = e;
+  if (grain === "day") {
+    customSnapHint.hidden = true;
+    return;
+  }
+  customSnapHint.hidden = false;
+  customSnapHint.textContent = "Snapped to " + grain + "s " + s + " – " + e + ".";
+}
+function seedRangeChoice() {
+  const grain = currentGrain();
+  const unit = saved.range_unit || "day";
+  const mode = saved.range_mode || "last";
+  const coarserThis = (mode === "this" || mode === "previous")
+    && (GRAIN_RANK[unit] || 0) >= (GRAIN_RANK[grain] || 0);
+  if (mode === "custom" || unit === grain || coarserThis) {
+    rangeByGrain[grain] = {
+      choice: choiceFromSaved(grain),
+      n: Number(saved.range_n) || GRAIN_DEFAULTS[grain].n,
+      includeCurrent: grain === "day" ? true : !!saved.include_current,
+    };
+  }
+  const state = rangeByGrain[grain];
+  fillRangeOptions(grain, state.choice);
+  rangeNEl.value = state.n;
+  includeCurrentEl.checked = state.includeCurrent;
+  applyRangeChoice();
 }
 async function refreshEventNames() {
   const gen = ++valGen;
@@ -283,16 +672,28 @@ async function refreshEventNames() {
     setError(data.error || "Could not refresh events");
     return;
   }
-  fillSelect(eventValueEl, data.values || [], eventValueEl.value || saved.event_value, "All events");
-  await post("/api/save", { event_names: data.values || [] });
+  fillSelect(eventValueEl, data.values || [], eventValueEl.value || saved.event_value);
 }
-rangeModeEl.addEventListener("change", syncRangeUi);
+let activeGrain = currentGrain();
+rangeChoiceEl.addEventListener("change", applyRangeChoice);
+includeCurrentEl.addEventListener("change", () => saveRangeForGrain(currentGrain()));
+rangeNEl.addEventListener("change", () => saveRangeForGrain(currentGrain()));
+startDateEl.addEventListener("change", snapCustomDates);
+endDateEl.addEventListener("change", snapCustomDates);
+customKindEl.addEventListener("change", () => { syncCustomKind(); snapCustomDates(); });
+grainEl.addEventListener("change", () => {
+  saveRangeForGrain(activeGrain);
+  activeGrain = currentGrain();
+  const state = rangeByGrain[activeGrain];
+  fillRangeOptions(activeGrain, state.choice);
+  rangeNEl.value = state.n;
+  includeCurrentEl.checked = state.includeCurrent;
+  applyRangeChoice();
+  syncTableHeaders();
+});
 document.getElementById("refresh-events").addEventListener("click", refreshEventNames);
-syncRangeUi();
-if (eventColumnEl.value) {
-  eventValueWrap.hidden = false;
-  fillSelect(eventValueEl, cachedEventNames || [], saved.event_value, "All events");
-}
+seedRangeChoice();
+activeGrain = currentGrain();
 
 function bucketLabel(raw) {
   const s = String(raw ?? "");
@@ -301,7 +702,8 @@ function bucketLabel(raw) {
 }
 function relabelMeasures() {
   const w = (document.getElementById("entity_label").value || "").trim() || "User";
-  const unique = "Unique " + w;
+  const p = (document.getElementById("entity_label_plural").value || "").trim() || (w + "s");
+  const unique = "Unique " + p;
   const avg = "Average per " + w;
   for (const o of form.measure.options) {
     if (o.value === "total") {
@@ -309,26 +711,179 @@ function relabelMeasures() {
       o.title = "Count of event rows in the bucket";
     } else if (o.value === "uniques") {
       o.textContent = unique;
-      o.title = "Count distinct of the mapped entity id" + (w ? " (" + w + ")" : "");
+      o.title = "Count distinct of the mapped entity id (" + p + ")";
     } else if (o.value === "average") {
       o.textContent = avg;
-      o.title = "Volume divided by " + unique.toLowerCase();
+      o.title = "Volume divided by unique " + p.toLowerCase();
     }
   }
 }
+function syncExact() {
+  document.getElementById("exact-wrap").hidden = form.measure.value === "total";
+}
 relabelMeasures();
+syncExact();
+syncTableHeaders();
+form.measure.addEventListener("change", () => { syncExact(); syncTableHeaders(); });
+
+function defaultTitle() {
+  const measure = (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "Events";
+  const ev = (eventValueEl.value || "").trim();
+  const range = (rangeChoiceEl.selectedOptions[0] && rangeChoiceEl.selectedOptions[0].textContent) || "";
+  return [measure, ev, range].filter(Boolean).join(" · ");
+}
+titleEl.addEventListener("input", () => { titleLockedEl.value = "true"; });
+document.getElementById("reset-title").addEventListener("click", () => {
+  titleLockedEl.value = "false";
+  titleEl.value = defaultTitle();
+});
 
 function payload() {
+  applyRangeChoice();
   const d = Object.fromEntries(new FormData(form).entries());
   d.exact = document.getElementById("exact").checked;
+  d.range_unit = rangeUnitEl.value;
+  d.include_current = currentGrain() === "day" ? true : includeCurrentEl.checked;
+  d.exclude_current = !d.include_current;
+  d.chart_labels = document.getElementById("chart_labels").checked;
+  d.chart_axis_x = document.getElementById("chart_axis_x").checked;
+  d.chart_axis_y = document.getElementById("chart_axis_y").checked;
+  d.chart_title_locked = titleLockedEl.value === "true";
+  d.chart_title = titleLockedEl.value === "true" ? titleEl.value : defaultTitle();
+  d.override_cap = document.getElementById("override_cap").checked;
+  d.query_row_limit_run = String(effectiveRowLimit());
   return d;
 }
+function formatBytes(n) {
+  if (n == null || n === "") return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let x = Number(n);
+  let i = 0;
+  while (x >= 1024 && i < units.length - 1) {
+    x /= 1024;
+    i += 1;
+  }
+  const digits = x >= 10 || i === 0 ? 0 : 1;
+  return "~" + x.toFixed(digits) + "\u00a0" + units[i];
+}
+let estimateGen = 0;
+let estimateTimer = 0;
+function estimateKey(body) {
+  return [
+    body.table, body.event_value, body.grain, body.range_mode, body.range_n,
+    body.range_unit, body.include_current, body.measure, body.custom_kind,
+    body.start_date, body.end_date, body.rel_start_n, body.rel_end_n,
+    body.override_cap, body.bytes_cap_override_gb, body.bytes_cap_gb,
+  ].join("\0");
+}
+let lastEstimateKey = "";
+async function runEstimate() {
+  const wrap = document.getElementById("run-estimate-wrap");
+  const el = document.getElementById("run-estimate");
+  const fill = document.getElementById("run-estimate-fill");
+  const gen = ++estimateGen;
+  const body = payload();
+  const key = estimateKey(body);
+  if (!body.table || !body.entity || !body.event_time) {
+    wrap.hidden = true;
+    return;
+  }
+  if (eventColumnEl.value && !(body.event_value || "").trim()) {
+    wrap.hidden = true;
+    return;
+  }
+  if (key === lastEstimateKey && el.textContent && el.textContent !== "Estimating…") return;
+  wrap.hidden = false;
+  el.textContent = "Estimating…";
+  wrap.classList.remove("over-cap", "warn", "hot");
+  fill.style.width = "0";
+  try {
+    const data = await post("/api/estimate", body);
+    if (gen !== estimateGen) return;
+    if (!data.ok || data.bytes == null) {
+      wrap.hidden = true;
+      return;
+    }
+    lastEstimateKey = key;
+    const cap = data.cap || (10 * 1024 * 1024 * 1024);
+    const frac = cap ? data.bytes / cap : 0;
+    fill.style.width = Math.min(100, Math.max(2, frac * 100)) + "%";
+    wrap.classList.toggle("over-cap", !!data.over_cap);
+    wrap.classList.toggle("hot", !data.over_cap && frac >= 0.25);
+    wrap.classList.toggle("warn", !data.over_cap && frac >= 0.05 && frac < 0.25);
+    el.textContent = formatBytes(data.bytes);
+    const capGb = cap ? (cap / (1024 * 1024 * 1024)) : null;
+    el.title = data.over_cap
+      ? "Would exceed the job scan cap. Override below to run anyway."
+      : ("Estimated bytes scanned (free dry run)" + (capGb != null ? ". Cap " + capGb + " GB." : "."));
+    const ov = document.getElementById("cap-override");
+    ov.hidden = !data.over_cap && !document.getElementById("override_cap").checked;
+    if (data.over_cap && !document.getElementById("bytes_cap_override_gb").value) {
+      document.getElementById("bytes_cap_override_gb").value = String(Math.max(1, Math.ceil(data.bytes / (1024 * 1024 * 1024))));
+    }
+  } catch (err) {
+    if (gen !== estimateGen) return;
+    wrap.hidden = true;
+  }
+}
+function scheduleEstimate() {
+  clearTimeout(estimateTimer);
+  estimateTimer = setTimeout(runEstimate, 400);
+}
+form.addEventListener("change", (e) => {
+  if (e.target && e.target.id === "exact") return;
+  scheduleEstimate();
+});
+form.addEventListener("input", (e) => {
+  if (e.target && e.target.id === "exact") return;
+  scheduleEstimate();
+});
+document.getElementById("override_cap").addEventListener("change", scheduleEstimate);
+document.getElementById("bytes_cap_override_gb").addEventListener("change", scheduleEstimate);
 function csvCell(value) {
   const s = String(value ?? "");
   if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
   return s;
 }
+function grainHeader() {
+  const g = currentGrain();
+  return g ? g.charAt(0).toUpperCase() + g.slice(1) : "Day";
+}
+function valueHeader() {
+  return (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "Value";
+}
+function syncTableHeaders() {
+  document.querySelectorAll("#result-table th[data-key]").forEach((th) => {
+    const grip = th.querySelector(".grip");
+    [...th.childNodes].forEach((n) => {
+      if (n !== grip) n.remove();
+    });
+    const key = th.getAttribute("data-key");
+    const label = key === "bucket" ? grainHeader() : valueHeader();
+    const mark = document.createElement("span");
+    mark.className = "sort";
+    mark.textContent = sortKey === key ? (sortDir === 1 ? " ▲" : " ▼") : "";
+    th.classList.toggle("sorted", sortKey === key);
+    th.insertBefore(document.createTextNode(label), grip);
+    th.insertBefore(mark, grip);
+  });
+}
+function displayBucket(row) {
+  if (!row.incomplete) return row.bucket;
+  return row.bucket + " · incomplete";
+}
+function setupRowLimit() {
+  const n = Number(document.getElementById("query_row_limit").value);
+  if (!Number.isFinite(n) || n < 1) return 1000000;
+  return Math.floor(n);
+}
+let runRowLimit = 0;
+let raiseLimitOnce = false;
+function effectiveRowLimit() {
+  return runRowLimit || setupRowLimit();
+}
 function renderTable() {
+  syncTableHeaders();
   const tbody = document.getElementById("rows");
   tbody.innerHTML = "";
   const ranked = [...tableRows].sort((a, b) => {
@@ -343,17 +898,23 @@ function renderTable() {
   });
   for (const row of ranked) {
     const tr = document.createElement("tr");
+    if (row.incomplete) tr.className = "incomplete";
     const tdBucket = document.createElement("td");
     const tdValue = document.createElement("td");
-    tdBucket.textContent = row.bucket;
-    tdValue.textContent = row.value;
+    tdBucket.textContent = displayBucket(row);
+    tdValue.textContent = formatValue(row.value);
     tr.append(tdBucket, tdValue);
     tbody.appendChild(tr);
   }
 }
+function tableHeaderRow() {
+  return [grainHeader(), valueHeader(), "incomplete"];
+}
 function exportCsv() {
-  const lines = ["bucket,value"];
-  for (const row of tableRows) lines.push(csvCell(row.bucket) + "," + csvCell(row.value));
+  const lines = [tableHeaderRow().map(csvCell).join(",")];
+  for (const row of tableRows) {
+    lines.push(csvCell(row.bucket) + "," + csvCell(row.value) + "," + (row.incomplete ? "true" : "false"));
+  }
   const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -389,49 +950,311 @@ document.querySelectorAll("#result-table .grip").forEach((grip) => {
   });
 });
 document.getElementById("export-csv").addEventListener("click", exportCsv);
+document.getElementById("copy-table").addEventListener("click", async () => {
+  const lines = [grainHeader() + "\t" + valueHeader()];
+  for (const row of tableRows) {
+    lines.push(displayBucket(row) + "\t" + formatValue(row.value));
+  }
+  await navigator.clipboard.writeText(lines.join("\n") + "\n");
+  flashCopied(document.getElementById("copy-table"));
+});
+function flashCopied(btn) {
+  btn.classList.add("copied");
+  const prev = btn.getAttribute("title") || "";
+  btn.setAttribute("title", "Copied");
+  setTimeout(() => {
+    btn.classList.remove("copied");
+    if (prev) btn.setAttribute("title", prev);
+  }, 1200);
+}
+document.getElementById("copy-sql").addEventListener("click", async () => {
+  const text = document.getElementById("sql").textContent || "";
+  if (!text || document.getElementById("sql").classList.contains("empty")) return;
+  await navigator.clipboard.writeText(text);
+  flashCopied(document.getElementById("copy-sql"));
+});
+function thousandChar() {
+  const v = (document.getElementById("thousand_sep") && document.getElementById("thousand_sep").value) || "comma";
+  if (v === "none") return "";
+  if (v === "space") return " ";
+  if (v === "period") return ".";
+  return ",";
+}
+function decimalChar() {
+  const v = (document.getElementById("decimal_sep") && document.getElementById("decimal_sep").value) || "period";
+  return v === "comma" ? "," : ".";
+}
+function applySeps(raw) {
+  const text = String(raw);
+  const m = text.match(/^([+-]?)(\d+)(?:\.(\d+))?(.*)$/);
+  if (!m) return text;
+  const thou = thousandChar();
+  const dec = decimalChar();
+  let intp = m[2];
+  if (thou) intp = intp.replace(/\B(?=(\d{3})+(?!\d))/g, thou);
+  return m[1] + intp + (m[3] != null ? dec + m[3] : "") + (m[4] || "");
+}
+function formatValue(v) {
+  const n = Number(v);
+  if (v === "" || v == null || Number.isNaN(n)) return String(v ?? "");
+  const kind = document.getElementById("chart_value_format").value || "auto";
+  let raw;
+  if (kind === "int") raw = String(Math.round(n));
+  else if (kind === "dp1") raw = n.toFixed(1);
+  else if (kind === "dp2") raw = n.toFixed(2);
+  else if (kind === "sci") raw = n.toExponential(2);
+  else if (kind === "compact") {
+    const abs = Math.abs(n);
+    const units = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "k"]];
+    raw = String(Math.round(n));
+    for (let i = 0; i < units.length; i++) {
+      if (abs >= units[i][0]) {
+        raw = (n / units[i][0]).toFixed(1) + units[i][1];
+        break;
+      }
+    }
+  } else if (Number.isInteger(n) || Math.abs(n - Math.round(n)) < 1e-9) {
+    raw = String(Math.round(n));
+  } else {
+    raw = n.toFixed(2);
+  }
+  return applySeps(raw);
+}
+function effectiveChartType(n) {
+  const chosen = document.getElementById("chart_type").value || "auto";
+  if (chosen !== "auto") return chosen;
+  return n <= 2 ? "bar" : "line";
+}
+function drawChart() {
+  const ctx = document.getElementById("chart");
+  const empty = document.getElementById("chart-empty");
+  const copyBtn = document.getElementById("copy-chart");
+  const pngBtn = document.getElementById("export-png");
+  if (!tableRows.length) {
+    empty.hidden = false;
+    ctx.hidden = true;
+    copyBtn.hidden = true;
+    pngBtn.hidden = true;
+    if (chart) { chart.destroy(); chart = null; }
+    return;
+  }
+  empty.hidden = true;
+  ctx.hidden = false;
+  copyBtn.hidden = false;
+  pngBtn.hidden = false;
+  const shown = tableRows;
+  const labels = shown.map((r) => r.bucket);
+  const values = shown.map((r) => r.value);
+  const showLabels = document.getElementById("chart_labels").checked;
+  const kind = effectiveChartType(shown.length);
+  const isBar = kind === "bar";
+  const isArea = kind === "area";
+  const type = isBar ? "bar" : "line";
+  const measureLabel = titleEl.value || ((form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "");
+  const note = document.getElementById("incomplete-note");
+  const hasIncomplete = shown.some((r) => r.incomplete);
+  note.hidden = !hasIncomplete;
+  note.textContent = hasIncomplete
+    ? (isBar ? "Faded bar is the current " : "Dotted point is the current ") + currentGrain() + " (through today)."
+    : "";
+  if (shown.length <= 2 && (document.getElementById("chart_type").value || "auto") === "auto") {
+    note.hidden = false;
+    const extra = "Few points at this grain — switch Time grain to Day to see days inside the range.";
+    note.textContent = [note.textContent, extra].filter(Boolean).join(" ");
+  }
+  if (chart) chart.destroy();
+  if (!window.Chart) return;
+  const colors = shown.map((r) => r.incomplete ? "#a1a1aa" : "#3b82f6");
+  const gridMode = document.getElementById("chart_grid").value || "major";
+  const showX = document.getElementById("chart_axis_x").checked;
+  const showY = document.getElementById("chart_axis_y").checked;
+  chart = new Chart(ctx, {
+    type,
+    data: {
+      labels,
+      datasets: [{
+        label: measureLabel,
+        data: values,
+        tension: 0.1,
+        fill: isArea ? "origin" : false,
+        backgroundColor: isBar ? colors : (isArea ? "rgba(59, 130, 246, 0.28)" : "transparent"),
+        borderColor: "#3b82f6",
+        pointBackgroundColor: colors,
+        segment: !isBar ? {
+          borderDash: (seg) => shown[seg.p1DataIndex] && shown[seg.p1DataIndex].incomplete ? [5, 4] : undefined,
+        } : undefined,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: {
+          ticks: { display: showX, maxRotation: 0, autoSkip: true },
+          grid: {
+            display: gridMode !== "off",
+            color: (c) => (gridMode === "minor" && c.index % 2 ? "#f4f4f5" : "#e4e4e7"),
+          },
+        },
+        y: {
+          beginAtZero: true,
+          ticks: {
+            display: showY,
+            callback: (v) => formatValue(v),
+            count: gridMode === "minor" ? 9 : 6,
+          },
+          grid: {
+            display: gridMode !== "off",
+            color: (c) => (gridMode === "minor" && c.index % 2 ? "#f4f4f5" : "#e4e4e7"),
+          },
+        },
+      },
+      plugins: {
+        legend: { display: false },
+        filler: { propagate: false },
+        tooltip: {
+          enabled: true,
+          callbacks: { label: (ctx) => formatValue(ctx.parsed.y) },
+        },
+      },
+    },
+    plugins: [{
+      id: "fcLabels",
+      afterDatasetsDraw(c) {
+        if (!showLabels) return;
+        const { ctx: g } = c;
+        const meta = c.getDatasetMeta(0);
+        g.save();
+        g.fillStyle = "#52525b";
+        g.font = "11px ui-sans-serif, system-ui, sans-serif";
+        g.textAlign = "center";
+        meta.data.forEach((el, i) => {
+          const v = c.data.datasets[0].data[i];
+          if (v == null) return;
+          g.fillText(formatValue(v), el.x, el.y - 8);
+        });
+        g.restore();
+      },
+    }],
+  });
+}
+document.addEventListener("click", (e) => {
+  const pop = document.getElementById("format-pop");
+  if (pop.open && !pop.contains(e.target)) pop.removeAttribute("open");
+});
+document.getElementById("chart_type").addEventListener("change", drawChart);
+["chart_labels", "chart_value_format", "chart_axis_x", "chart_axis_y", "chart_grid"].forEach((id) => {
+  document.getElementById(id).addEventListener("change", () => {
+    if (tableRows.length) {
+      drawChart();
+      renderTable();
+    }
+  });
+});
+document.getElementById("export-png").addEventListener("click", () => {
+  if (!chart) return;
+  const a = document.createElement("a");
+  a.href = chart.toBase64Image();
+  a.download = "factcat-chart.png";
+  a.click();
+});
+document.getElementById("copy-chart").addEventListener("click", async () => {
+  if (!chart) return;
+  const blob = await (await fetch(chart.toBase64Image())).blob();
+  try {
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    flashCopied(document.getElementById("copy-chart"));
+  } catch (err) {
+    setError("Could not copy image. Use PNG to download.");
+  }
+});
+function showLimitNote(truncated, limit) {
+  const el = document.getElementById("limit-note");
+  el.innerHTML = "";
+  if (!truncated) {
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  el.appendChild(document.createTextNode(
+    "Results truncated at " + Number(limit).toLocaleString() +
+    " rows (most recent). The grain may be too fine, the range too long, or a group has too many values. "
+  ));
+  const next = limit * 2;
+  if (Number.isFinite(next) && next > limit) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "linkish";
+    btn.textContent = "Load more (" + next.toLocaleString() + ")";
+    btn.addEventListener("click", () => {
+      raiseLimitOnce = true;
+      runRowLimit = next;
+      document.getElementById("run").click();
+    });
+    el.appendChild(btn);
+  }
+}
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   setError("");
+  if (!raiseLimitOnce) runRowLimit = 0;
+  raiseLimitOnce = false;
   const body = payload();
   if (!body.table || !body.entity || !body.event_time) {
     setError("Mapping is incomplete. Open Setup.");
     return;
   }
-  const res = await fetch("/api/run", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!data.ok) {
-    setError(data.error || res.statusText);
+  if (eventColumnEl.value && !(body.event_value || "").trim()) {
+    setError("Pick an event.");
     return;
   }
-  const sqlEl = document.getElementById("sql");
-  sqlEl.textContent = data.sql || "";
-  sqlEl.classList.remove("empty");
-  document.getElementById("table-empty").hidden = true;
-  document.getElementById("result-table").hidden = false;
-  document.getElementById("export-csv").hidden = false;
-  tableRows = (data.rows || []).map((row) => ({
-    bucket: bucketLabel(row.bucket),
-    value: row.value,
-  }));
-  renderTable();
-  const labels = tableRows.map((r) => r.bucket);
-  const values = tableRows.map((r) => r.value);
-  document.getElementById("chart-empty").hidden = true;
-  const ctx = document.getElementById("chart");
-  ctx.hidden = false;
-  if (chart) chart.destroy();
-  if (window.Chart) {
-    const measureLabel = (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || body.measure;
-    chart = new Chart(ctx, {
-      type: "line",
-      data: { labels, datasets: [{ label: measureLabel, data: values, tension: 0.1 }] },
-      options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } },
+  const runBtn = document.getElementById("run");
+  const runLoad = document.getElementById("run-loading");
+  const runStatus = document.getElementById("run-status");
+  const empty = document.getElementById("chart-empty");
+  runBtn.disabled = true;
+  runBtn.textContent = "Running…";
+  runLoad.hidden = false;
+  runStatus.textContent = "Querying…";
+  empty.textContent = "Running…";
+  try {
+    const res = await fetch("/api/run", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
     });
+    const data = await res.json();
+    if (!data.ok) {
+      setError(data.error || res.statusText);
+      runStatus.textContent = "";
+      empty.textContent = "Run to plot.";
+      return;
+    }
+    if (titleLockedEl.value !== "true") titleEl.value = body.chart_title || defaultTitle();
+    const sqlEl = document.getElementById("sql");
+    sqlEl.textContent = data.sql || "";
+    sqlEl.classList.remove("empty");
+    document.getElementById("copy-sql").hidden = false;
+    document.getElementById("table-empty").hidden = true;
+    document.getElementById("result-table").hidden = false;
+    document.getElementById("export-csv").hidden = false;
+    document.getElementById("copy-table").hidden = false;
+    tableRows = (data.rows || []).map((row) => ({
+      bucket: bucketLabel(row.bucket),
+      value: row.value,
+      incomplete: !!row.incomplete,
+    }));
+    renderTable();
+    drawChart();
+    showLimitNote(!!data.truncated, data.limit || effectiveRowLimit());
+    runStatus.textContent = tableRows.length + " row" + (tableRows.length === 1 ? "" : "s");
+  } finally {
+    runBtn.disabled = false;
+    runBtn.textContent = "Run";
+    runLoad.hidden = true;
+    if (!tableRows.length) empty.textContent = "Run to plot.";
   }
 });
+scheduleEstimate();
 </script>
 {% endblock %}

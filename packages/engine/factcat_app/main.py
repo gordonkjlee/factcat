@@ -8,8 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from factcat import events_sql
-from factcat.warehouses import AdapterError, connect
+from factcat.warehouses import AdapterError, BytesCapError, connect
 
 from .catalog import (
     ENTITY_TYPES,
@@ -21,7 +20,14 @@ from .catalog import (
     tables_from_form,
 )
 from .config import load, mapping_ready, save
-from .query import connection_from_form, event_values_sql, spec_from_form
+from .query import (
+    annotate_incomplete,
+    connection_from_form,
+    event_values_sql,
+    events_sql_from_form,
+    job_bytes_cap,
+    query_row_limit,
+)
 
 APP_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
@@ -117,6 +123,8 @@ async def api_event_values(request: Request) -> JSONResponse:
         if text:
             seen.add(text)
     values = sorted(seen, key=str.lower)
+    if form.get("catalog") in (True, "true", "on", "1", 1):
+        save({"event_names": values})
     return JSONResponse({"ok": True, "sql": sql, "values": values})
 
 
@@ -127,17 +135,65 @@ async def api_save(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+def _estimate_payload(processed: int | None, cap: int | None, *, over_cap: bool) -> dict:
+    return {
+        "ok": True,
+        "bytes": processed,
+        "cap": cap,
+        "over_cap": over_cap
+        or (
+            processed is not None
+            and cap is not None
+            and processed > cap
+        ),
+    }
+
+
+@app.post("/api/estimate")
+async def api_estimate(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        conn = connection_from_form(form)
+        sql = events_sql_from_form(form)
+        warehouse = connect("bigquery", **conn)
+        result = warehouse.run(sql, dry_run=True)
+    except BytesCapError as exc:
+        return JSONResponse(
+            _estimate_payload(
+                exc.bytes_processed,
+                exc.maximum_bytes_billed if exc.maximum_bytes_billed is not None else job_bytes_cap(form),
+                over_cap=True,
+            )
+        )
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse(
+        _estimate_payload(
+            result.bytes_processed, conn.get("maximum_bytes_billed"), over_cap=False
+        )
+    )
+
+
 @app.post("/api/run")
 async def api_run(request: Request) -> JSONResponse:
     form = await request.json()
     try:
-        spec = spec_from_form(form)
         conn = connection_from_form(form)
         save(form)
-        sql = events_sql(spec, dialect="bigquery")
+        sql = events_sql_from_form(form)
         warehouse = connect("bigquery", **conn)
         result = warehouse.run(sql)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
-    rows = [{"bucket": str(r.get("bucket", "")), "value": r.get("value")} for r in result.rows]
-    return JSONResponse({"ok": True, "sql": sql, "rows": rows})
+    rows = annotate_incomplete(
+        [{"bucket": str(r.get("bucket", "")), "value": r.get("value")} for r in result.rows],
+        form,
+    )
+    limit = query_row_limit(form)
+    return JSONResponse({
+        "ok": True,
+        "sql": sql,
+        "rows": rows,
+        "truncated": len(rows) >= limit,
+        "limit": limit,
+    })

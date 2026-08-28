@@ -7,7 +7,8 @@ from typing import Any
 
 from datetime import date, timedelta
 
-from factcat import EVENT_MEASURES, EventsSpec
+from factcat import EVENT_MEASURES, EventsSpec, events_sql
+from factcat.warehouses.bigquery import DEFAULT_MAXIMUM_BYTES_BILLED
 from factcat._emit import transpile
 from factcat.dialects import splice_placeholders
 
@@ -15,10 +16,18 @@ _TABLE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_]+)+$")
 _COLUMN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _GRAINS = ("day", "week", "month")
+_GRAIN_RANK = {"day": 0, "week": 1, "month": 2, "quarter": 3, "year": 4}
 _UNITS = frozenset({"day", "week", "month", "quarter", "year"})
 _MODES = frozenset({"last", "this", "previous", "custom"})
 _LAST_N = frozenset({"7", "30", "90", "365"})
+# Last-N defaults when the saved window unit does not match the chart grain.
+_DEFAULT_LAST = {"day": 30, "week": 8, "month": 6}
 EVENT_VALUE_LIMIT = 1000
+# Crash fuse, not a display cap. Slice-and-dice (grain × property)
+# is routinely tens of thousands of rows; grouping by a near-unique
+# key is when you hit seven figures. No product max: a report can
+# double the LIMIT until the result fits or the process/tab dies.
+DEFAULT_QUERY_ROW_LIMIT = 1_000_000
 # Catalog DISTINCT is not all-time: unbounded scans blow the 10 GiB job cap.
 CATALOG_LOOKBACK_DAYS = 90
 
@@ -92,8 +101,74 @@ def _range_n(form: dict[str, Any]) -> int:
     return n
 
 
+def _rel_n(form: dict[str, Any], key: str, default: int) -> int:
+    raw = form.get(key, default)
+    if raw in (None, ""):
+        raw = default
+    try:
+        n = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{key} must be an integer") from exc
+    if n < 0 or n > 3650:
+        raise ValueError(f"{key} must be between 0 and 3650")
+    return n
+
+
+def _grain(form: dict[str, Any]) -> str:
+    raw = str(form.get("grain") or "day").strip().lower()
+    if raw not in _GRAINS:
+        raise ValueError("grain must be day, week, or month")
+    return raw
+
+
+def _include_current(form: dict[str, Any], grain: str) -> bool:
+    """Day windows include today. Week/month last-N is complete periods
+    unless include_current is set. Not a library period enum."""
+    if grain == "day":
+        return True
+    raw = form.get("include_current")
+    if raw is not None and raw != "":
+        return raw in (True, "true", "on", "1", 1)
+    if "exclude_current" in form:
+        return form.get("exclude_current") not in (True, "true", "on", "1", 1)
+    return False
+
+
 def _exclude_current(form: dict[str, Any]) -> bool:
-    return form.get("exclude_current") in (True, "true", "on", "1", 1)
+    """Last-N complete periods: week/month default on, day never."""
+    grain = str(form.get("grain") or "day").strip().lower()
+    if grain not in _GRAINS:
+        grain = "day"
+    return not _include_current(form, grain)
+
+
+def _grain_start(d: date, grain: str, week_start: str) -> date:
+    if grain == "day":
+        return d
+    if grain == "month":
+        return d.replace(day=1)
+    weekday = d.weekday()
+    delta = (weekday + 1) % 7 if week_start == "sunday" else weekday
+    return d - timedelta(days=delta)
+
+
+def _grain_next(d: date, grain: str, week_start: str) -> date:
+    start = _grain_start(d, grain, week_start)
+    if grain == "day":
+        return start + timedelta(days=1)
+    if grain == "week":
+        return start + timedelta(days=7)
+    month = 1 if start.month == 12 else start.month + 1
+    year = start.year + 1 if start.month == 12 else start.year
+    return date(year, month, 1)
+
+
+def _parse_bucket(value: Any) -> date | None:
+    raw = str(value or "")
+    match = _ISO_DATE.match(raw[:10]) if raw else None
+    if not match:
+        return None
+    return date.fromisoformat(match.group(0))
 
 
 def _ps(expr: str, unit: str, form: dict[str, Any], n: int) -> str:
@@ -106,35 +181,74 @@ def _ps(expr: str, unit: str, form: dict[str, Any], n: int) -> str:
 def _normalize_range(
     form: dict[str, Any],
 ) -> tuple[str, str, int]:
+    grain = str(form.get("grain") or "day").strip().lower()
+    if grain not in _GRAINS:
+        grain = "day"
     mode = str(form.get("range_mode") or "").strip().lower()
-    if mode in _MODES:
+    if mode not in _MODES:
+        preset = str(form.get("range_preset") or "").strip()
+        if preset in _LAST_N:
+            mode, unit, n = "last", "day", int(preset)
+        elif preset == "this_week":
+            mode, unit, n = "this", "week", 1
+        elif preset == "this_month":
+            mode, unit, n = "this", "month", 1
+        elif preset == "custom":
+            mode, unit, n = "custom", "day", 1
+        else:
+            mode, unit, n = "last", "day", _lookback_days(form)
+    else:
         unit = _range_unit(form)
         n = _range_n(form) if mode == "last" else 1
-        return mode, unit, n
-    preset = str(form.get("range_preset") or "").strip()
-    if preset in _LAST_N:
-        return "last", "day", int(preset)
-    if preset == "this_week":
-        return "this", "week", 1
-    if preset == "this_month":
-        return "this", "month", 1
-    if preset == "custom":
-        return "custom", "day", 1
-    return "last", "day", _lookback_days(form)
+    if mode == "custom":
+        return mode, grain, 1
+    if mode == "last":
+        if unit != grain:
+            n = _DEFAULT_LAST[grain]
+        return mode, grain, n
+    # this / previous: window may be coarser than the chart grain
+    # (this week, daily bars). A finer window than the grain is the
+    # partial-bucket trap — bump it up.
+    if _GRAIN_RANK.get(unit, -1) < _GRAIN_RANK.get(grain, 0):
+        unit = grain
+    return mode, unit, 1
 
 
 def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
-    """Sugar on event_time. Not a library period enum."""
+    """Sugar on event_time. Window unit follows the chart grain."""
     mode, unit, n = _normalize_range(form)
     if mode == "custom":
-        start = _iso_date(str(form.get("start_date") or ""), "start_date")
-        end = _iso_date(str(form.get("end_date") or ""), "end_date")
+        kind = str(form.get("custom_kind") or "absolute").strip().lower()
+        if kind == "relative":
+            start_n = _rel_n(form, "rel_start_n", 12)
+            end_n = _rel_n(form, "rel_end_n", 0)
+            if start_n < end_n:
+                raise ValueError("relative from must be at least as far back as to")
+            if unit == "day":
+                clauses = [f"{event_time} >= current_date - {start_n}"]
+                if end_n > 0:
+                    clauses.append(f"{event_time} < current_date - {end_n - 1}")
+                return clauses
+            clauses = [f"{event_time} >= {_ps('current_date', unit, form, -start_n)}"]
+            if end_n > 0:
+                clauses.append(
+                    f"{event_time} < {_ps('current_date', unit, form, -(end_n - 1))}"
+                )
+            return clauses
+        start = date.fromisoformat(
+            _iso_date(str(form.get("start_date") or ""), "start_date")
+        )
+        end = date.fromisoformat(
+            _iso_date(str(form.get("end_date") or ""), "end_date")
+        )
         if start > end:
             raise ValueError("start_date must be on or before end_date")
-        end_exclusive = (date.fromisoformat(end) + timedelta(days=1)).isoformat()
+        week_start = _week_start(form)
+        start = _grain_start(start, unit, week_start)
+        end_exclusive = _grain_next(end, unit, week_start)
         return [
-            f"{event_time} >= DATE {_sql_string(start)}",
-            f"{event_time} < DATE {_sql_string(end_exclusive)}",
+            f"{event_time} >= DATE {_sql_string(start.isoformat())}",
+            f"{event_time} < DATE {_sql_string(end_exclusive.isoformat())}",
         ]
     if mode == "this":
         return [f"{event_time} >= {_ps('current_date', unit, form, 0)}"]
@@ -143,13 +257,7 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
             f"{event_time} >= {_ps('current_date', unit, form, -1)}",
             f"{event_time} < {_ps('current_date', unit, form, 0)}",
         ]
-    # last N units
     if unit == "day":
-        if _exclude_current(form):
-            return [
-                f"{event_time} >= current_date - {n}",
-                f"{event_time} < current_date",
-            ]
         return [f"{event_time} >= current_date - {n}"]
     if _exclude_current(form):
         return [
@@ -157,6 +265,33 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
             f"{event_time} < {_ps('current_date', unit, form, 0)}",
         ]
     return [f"{event_time} >= {_ps('current_date', unit, form, -(n - 1))}"]
+
+
+def annotate_incomplete(
+    rows: list[dict[str, Any]],
+    form: dict[str, Any],
+    *,
+    today: date | None = None,
+) -> list[dict[str, Any]]:
+    """Mark the current grain when the window includes it. Trailing only."""
+    today = today or date.today()
+    grain = str(form.get("grain") or "day").strip().lower()
+    if grain not in _GRAINS:
+        grain = "day"
+    current = _grain_start(today, grain, _week_start(form))
+    mode, _unit, _n = _normalize_range(form)
+    hide_current = mode == "previous" or (
+        mode == "last" and not _include_current(form, grain)
+    )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        bucket = _parse_bucket(row.get("bucket"))
+        item = dict(row)
+        item["incomplete"] = bool(
+            bucket is not None and bucket == current and not hide_current
+        )
+        out.append(item)
+    return out
 
 
 def spec_from_form(form: dict[str, Any]) -> EventsSpec:
@@ -169,9 +304,7 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     measure = str(form.get("measure") or "uniques")
     if measure not in EVENT_MEASURES:
         raise ValueError("measure must be total, uniques, or average")
-    grain = str(form.get("grain") or "day")
-    if grain not in _GRAINS:
-        raise ValueError("grain must be day, week, or month")
+    grain = _grain(form)
     exact_raw = form.get("exact")
     exact = exact_raw in (True, "true", "on", "1", 1)
 
@@ -201,6 +334,51 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     )
 
 
+def query_row_limit(form: dict[str, Any]) -> int:
+    """Crash fuse on aggregated result rows. Most recent N."""
+    raw = form.get("query_row_limit_run")
+    if raw in (None, ""):
+        raw = form.get("query_row_limit", DEFAULT_QUERY_ROW_LIMIT)
+    if raw in (None, ""):
+        raw = DEFAULT_QUERY_ROW_LIMIT
+    try:
+        n = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("query_row_limit must be an integer") from exc
+    if n < 1:
+        raise ValueError("query_row_limit must be at least 1")
+    return n
+
+
+def events_sql_from_form(form: dict[str, Any]) -> str:
+    """Events SQL with a result-row crash fuse (most recent rows)."""
+    sql = events_sql(spec_from_form(form), dialect="bigquery").rstrip()
+    n = query_row_limit(form)
+    return (
+        f"SELECT * FROM (\n"
+        f"  SELECT * FROM (\n{sql}\n  )\n"
+        f"  ORDER BY bucket DESC\n"
+        f"  LIMIT {n}\n"
+        f")\n"
+        f"ORDER BY bucket"
+    )
+
+
+def job_bytes_cap(form: dict[str, Any]) -> int | None:
+    """Factcat job cap in bytes. None is unlimited. Not a GCP default."""
+    override = form.get("override_cap") in (True, "true", "on", "1", 1)
+    raw = form.get("bytes_cap_override_gb" if override else "bytes_cap_gb")
+    if raw in (None, ""):
+        return None if override else DEFAULT_MAXIMUM_BYTES_BILLED
+    try:
+        gb = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("bytes cap must be a number of GB") from exc
+    if gb <= 0:
+        return None
+    return int(gb * (1024**3))
+
+
 def event_values_sql(form: dict[str, Any]) -> str:
     """DISTINCT event names. Catalog mode is last 90 days on event_time so
     a partitioned events table can prune; it is not an all-time scan.
@@ -228,14 +406,18 @@ def event_values_sql(form: dict[str, Any]) -> str:
     return splice_placeholders(transpile(sql, "bigquery"), "bigquery")
 
 
-def connection_from_form(form: dict[str, Any]) -> dict[str, str]:
+def connection_from_form(form: dict[str, Any]) -> dict[str, Any]:
     project = (form.get("project") or "").strip()
     location = (form.get("location") or "").strip()
     if not project:
         raise ValueError("project is required")
     if not location:
         raise ValueError("location is required")
-    out = {"project": project, "location": location}
+    out: dict[str, Any] = {
+        "project": project,
+        "location": location,
+        "maximum_bytes_billed": job_bytes_cap(form),
+    }
     credentials = (form.get("credentials") or "").strip()
     if credentials:
         out["credentials"] = credentials

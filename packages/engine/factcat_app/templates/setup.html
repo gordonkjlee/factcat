@@ -2,6 +2,7 @@
 {% block title %}Factcat — Setup{% endblock %}
 {% block extra_css %}
     .setup-form { max-width: 28rem; padding: 1.5rem; background: #fff; min-height: 100%; }
+    #status { color: #166534; font-size: 0.85rem; }
 {% endblock %}
 {% block body %}
 <form id="f" class="setup-form">
@@ -25,7 +26,7 @@
   <h2>Grain</h2>
   <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="entity" name="entity" required hidden></select>
-  <label for="entity_label_choice">Entity name</label>
+  <label for="entity_label_choice">Entity name (singular)</label>
   <select id="entity_label_choice">
     <option value="User">User</option>
     <option value="Customer">Customer</option>
@@ -34,24 +35,47 @@
     <option value="__other__">Other</option>
   </select>
   <div id="entity_label_other_wrap" hidden>
-    <label for="entity_label_other">Custom entity name</label>
+    <label for="entity_label_other">Custom singular</label>
     <input id="entity_label_other" autocomplete="off">
   </div>
   <input type="hidden" name="entity_label" id="entity_label" value="{{ config.entity_label or 'User' }}">
-  <span class="hint">Display only. Does not choose the id column.</span>
+  <label for="entity_label_plural">Plural</label>
+  <input id="entity_label_plural" name="entity_label_plural" autocomplete="off" value="{{ config.entity_label_plural or 'Users' }}">
+  <span class="hint">Display only (Unique Users, Average per User). Does not choose the id column.</span>
   <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="event_time" name="event_time" required hidden></select>
   <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="event_column" name="event_column" hidden></select>
-  <span class="hint">STRING column of event names. The Events page picks which name to chart.</span>
+  <span class="hint">STRING column of event names. Save runs DISTINCT on the last 90 days and caches the list for Events.</span>
+  <h2>Formatting</h2>
   <label for="week_start">Week starts on</label>
   <select id="week_start" name="week_start">
     <option value="monday" {% if config.week_start != "sunday" %}selected{% endif %}>Monday</option>
     <option value="sunday" {% if config.week_start == "sunday" %}selected{% endif %}>Sunday</option>
   </select>
   <span class="hint">Used for weekly buckets and this/previous week. Does not use the warehouse default.</span>
+  <label for="thousand_sep">Thousand separator</label>
+  <select id="thousand_sep" name="thousand_sep">
+    <option value="comma" {% if config.thousand_sep == "comma" or not config.thousand_sep %}selected{% endif %}>Comma (1,234)</option>
+    <option value="period" {% if config.thousand_sep == "period" %}selected{% endif %}>Period (1.234)</option>
+    <option value="space" {% if config.thousand_sep == "space" %}selected{% endif %}>Space (1 234)</option>
+    <option value="none" {% if config.thousand_sep == "none" %}selected{% endif %}>None (1234)</option>
+  </select>
+  <label for="decimal_sep">Decimal separator</label>
+  <select id="decimal_sep" name="decimal_sep">
+    <option value="period" {% if config.decimal_sep == "period" or not config.decimal_sep %}selected{% endif %}>Period (1.23)</option>
+    <option value="comma" {% if config.decimal_sep == "comma" %}selected{% endif %}>Comma (1,23)</option>
+  </select>
+  <span class="hint" id="num-example">Example: 1,234.56</span>
+  <label for="bytes_cap_gb">Job scan cap (GB)</label>
+  <input id="bytes_cap_gb" name="bytes_cap_gb" type="number" min="0" step="1" value="{{ config.bytes_cap_gb if config.bytes_cap_gb is not none else 10 }}">
+  <span class="hint">Factcat sets this on the BigQuery job (<code>maximum_bytes_billed</code>). 0 is unlimited. A report can override it for one run.</span>
+  <label for="query_row_limit">Result row limit</label>
+  <input id="query_row_limit" name="query_row_limit" type="number" min="1" step="1" value="{{ config.query_row_limit or 1000000 }}">
+  <span class="hint">Crash fuse in SQL after aggregation (most recent rows). A normal chart never hits this; grouping by a high-cardinality property might. It does not reduce bytes scanned. A report can raise it if results are truncated.</span>
 
-  <button type="submit">Save and open Events</button>
+  <button type="submit" id="save">Save</button>
+  <p id="status"></p>
   <p id="error"></p>
 
   <details>
@@ -94,6 +118,9 @@ let suppressChange = false;
 
 function setError(text) {
   document.getElementById("error").textContent = text || "";
+}
+function setStatus(text) {
+  document.getElementById("status").textContent = text || "";
 }
 function setLoading(sel, on) {
   const hint = document.getElementById(sel.id + "-loading");
@@ -294,11 +321,17 @@ seedSelect(eventTimeEl, saved.event_time);
 seedSelect(eventColumnEl, saved.event_column);
 tableEl.value = combinedTable();
 
-const ENTITY_NAME_PRESETS = ["User", "Customer", "Account", "Subscription"];
+const ENTITY_NAME_PRESETS = {
+  User: "Users",
+  Customer: "Customers",
+  Account: "Accounts",
+  Subscription: "Subscriptions",
+};
 const labelChoiceEl = document.getElementById("entity_label_choice");
 const labelOtherWrap = document.getElementById("entity_label_other_wrap");
 const labelOtherEl = document.getElementById("entity_label_other");
 const labelEl = document.getElementById("entity_label");
+const labelPluralEl = document.getElementById("entity_label_plural");
 function syncEntityName() {
   if (labelChoiceEl.value === "__other__") {
     labelOtherWrap.hidden = false;
@@ -306,11 +339,12 @@ function syncEntityName() {
   } else {
     labelOtherWrap.hidden = true;
     labelEl.value = labelChoiceEl.value;
+    labelPluralEl.value = ENTITY_NAME_PRESETS[labelChoiceEl.value] || labelPluralEl.value;
   }
 }
 function seedEntityName() {
   const raw = (labelEl.value || "").trim() || "User";
-  const preset = ENTITY_NAME_PRESETS.find((p) => p.toLowerCase() === raw.toLowerCase());
+  const preset = Object.keys(ENTITY_NAME_PRESETS).find((p) => p.toLowerCase() === raw.toLowerCase());
   if (preset) {
     labelChoiceEl.value = preset;
     labelOtherEl.value = "";
@@ -324,10 +358,41 @@ labelChoiceEl.addEventListener("change", syncEntityName);
 labelOtherEl.addEventListener("input", syncEntityName);
 seedEntityName();
 
+function thousandChar() {
+  const v = document.getElementById("thousand_sep").value;
+  if (v === "none") return "";
+  if (v === "space") return " ";
+  if (v === "period") return ".";
+  return ",";
+}
+function decimalChar() {
+  return document.getElementById("decimal_sep").value === "comma" ? "," : ".";
+}
+function syncNumExample() {
+  const thou = thousandChar();
+  const dec = decimalChar();
+  const el = document.getElementById("num-example");
+  if ((thou === "." || thou === ",") && thou === dec) {
+    el.textContent = "Thousand and decimal separators must differ.";
+    return false;
+  }
+  el.textContent = "Example: 1" + (thou || "") + "234" + dec + "56";
+  return true;
+}
+["thousand_sep", "decimal_sep"].forEach((id) => {
+  document.getElementById(id).addEventListener("change", syncNumExample);
+});
+syncNumExample();
+
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   setError("");
+  setStatus("");
   syncEntityName();
+  if (!syncNumExample()) {
+    setError("Thousand and decimal separators must differ.");
+    return;
+  }
   tableEl.value = combinedTable();
   const body = Object.fromEntries(new FormData(form).entries());
   if (!body.table || !body.entity || !body.event_time || !body.project || !body.location) {
@@ -338,29 +403,39 @@ form.addEventListener("submit", async (e) => {
     setError("Pick an entity name, or Other and type one.");
     return;
   }
-  if (body.event_column) {
-    const ev = await post("/api/event_values", {
-      ...authBody(),
-      table: body.table,
-      location: body.location,
-      event_column: body.event_column,
-      event_time: body.event_time,
-      catalog: true,
-    });
-    if (!ev.ok) {
-      setError(ev.error || "Could not cache event names");
+  const saveBtn = document.getElementById("save");
+  saveBtn.disabled = true;
+  saveBtn.textContent = "Saving…";
+  if (!body.event_column) body.event_names = [];
+  try {
+    const data = await post("/api/save", body);
+    if (!data.ok) {
+      setError(data.error || "Could not save mapping");
       return;
     }
-    body.event_names = ev.values || [];
-  } else {
-    body.event_names = [];
+    if (body.event_column) {
+      const ev = await post("/api/event_values", {
+        ...authBody(),
+        table: body.table,
+        location: body.location,
+        event_column: body.event_column,
+        event_time: body.event_time,
+        catalog: true,
+      });
+      if (!ev.ok) {
+        setStatus("Saved");
+        setError(ev.error || "Could not cache event names");
+        return;
+      }
+      const n = (ev.values || []).length;
+      setStatus("Saved. Cached " + n + " event name" + (n === 1 ? "" : "s") + ".");
+      return;
+    }
+    setStatus("Saved");
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = "Save";
   }
-  const data = await post("/api/save", body);
-  if (!data.ok) {
-    setError(data.error || "Could not save mapping");
-    return;
-  }
-  window.location.href = "/";
 });
 </script>
 {% endblock %}

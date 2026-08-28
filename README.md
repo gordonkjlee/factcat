@@ -214,17 +214,26 @@ factcat-app
 Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): billing
 project from ADC, then dataset → table → entity id and timestamp. Catalog
 lists load when you open a dropdown, not when you visit the page. Location
-is taken from the dataset (do not guess `US`). **Save and open Events**
-writes `.factcat.json` and goes to the Events chart (`/`). Setup is a
-separate control at the bottom of the left rail, not an analysis.
+is taken from the dataset (do not guess `US`). **Save** writes
+`.factcat.json` and, if an event-name column is mapped, runs DISTINCT on
+the last 90 days and caches the names. It stays on Setup and shows
+**Saved**. Setup is a separate control at the bottom of the left rail, not
+an analysis.
 Advanced is only if you use a key file instead of ADC.
 
 Map the event-name column on **Setup** (STRING). Event names are cached
-when you save Setup. On Events, **Event** is which name to chart
-(**All events** = no filter); **Refresh list** reloads names from the last
-90 days of the timestamp column (not an all-time scan). **Date range** is Last N days/weeks/months (optional exclude current
-period), This/Previous period, or custom from/to — sugar on `event_time`,
-not a period enum. **Week starts on** is set in Setup (Monday by default). Catalog dropdowns are alphabetical.
+on **Save** (DISTINCT, last 90 days of the timestamp). On Events, **Event**
+is which name to chart (a specific event; served from that cache).
+**Refresh list** reloads the same DISTINCT and rewrites the cache. **Time grain**
+(day / week / month) comes first; **date range** is then in that grain
+(Last 30 days, Last 8 weeks, Last 6 months). Day grain also offers This
+week / Last week / This month as *windows of days*. Week and month last-N
+default to complete periods so the first bar is a full week or month.
+Include this week/month is opt-in and the current bar is marked incomplete.
+Custom is specific dates (snapped to the grain) or relative (12 weeks ago
+to 3 weeks ago; 0 = this grain). Sugar on `event_time`, not a period enum.
+**Refresh list** always writes the event-name cache. **Formatting** on Setup is week start plus thousand/decimal separators
+for chart and table numbers. Catalog dropdowns are alphabetical.
 Entity lists string and integer columns; timestamp lists TIMESTAMP /
 DATETIME.
 
@@ -233,18 +242,31 @@ If the table lives in another GCP project (billing in `dev`, data in `prod`), se
 
 There is no `user_id` default. **Entity name** on Setup is a display label
 (default User; Other is free text). It does not pick the id column.
-**Volume** is row count, **Unique User** (or Unique Customer, …) is distinct
-of the mapped id, **Average per User** is Volume / that unique count (hover
-the measure names). Day/week/month buckets are dates, not timestamps. The
-filter pane sits beside Chart, Table, and SQL result panes.
+**Volume** is row count, **Unique Users** (or Unique Customers, …) is distinct
+of the mapped id, **Average per User** is Volume / that unique count. Entity
+singular and plural are set on Setup. Day/week/month buckets are dates, not
+timestamps. Chart type is Auto (bar when there are one or two points, else
+line), Line, Area, or Bar. **Format** on the chart sets value format, data
+labels, axis labels, and grid (major / major+minor). Copy and PNG sit
+beside it. The title updates only after a successful Run (unless you have
+edited it). Next to **Run**, a dry-run **bytes scanned** estimate (free; not billed)
+updates when the scan would change. The 10 GB cap is Factcat's
+`maximum_bytes_billed` on the job, not a GCP project default. Exact unique
+counts do not change bytes scanned (same columns), so they do not
+re-estimate. **Result row limit** is a Setup crash fuse (default 1,000,000) in
+SQL: most recent aggregated rows, `ORDER BY bucket DESC LIMIT n`. A time
+series never hits it; a slice by a high-cardinality property might. If it
+does, a warning offers **Load more**, which doubles the cap for that run
+rather than removing LIMIT. There is no hard max. Sort is among loaded
+rows and does not re-query. **Job scan
+cap** is set in Setup (default 10 GB on the BigQuery job). If an estimate
+exceeds it, the report can override the cap for that run. The filter pane
+sits beside Chart, Table, and SQL result panes.
 
 Click **Run**. The mapping is written to `.factcat.json` in the directory where you started
 `factcat-app`, so the next start is already filled in. Add `.factcat.json` to that repo’s
 `.gitignore`. ADC lives in your user profile; you do not log in to Google every time you
 start the app.
-
-Queries are capped at 10 GiB scanned (the BigQuery adapter default). The form does not
-expose that cap; raise `maximum_bytes_billed` from Python if a table needs more.
 
 Stop the server with Ctrl+C. To use a key file instead of ADC, paste the JSON path in the
 form. The app never copies your events off BigQuery.
