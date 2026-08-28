@@ -179,10 +179,26 @@ To hack on the library:
 pip install -e "packages/engine[dev]"
 ```
 
+## Local app
+
+A FastAPI page that fills `EventsSpec` and runs it in **your** BigQuery. No Docker.
+Connection and column mapping persist in `.factcat.json` in the working directory.
+Google login is ADC (`gcloud auth application-default login`), not re-entered every start.
+
+```bash
+pip install -e "packages/engine[bigquery]" -e "packages/app"
+gcloud auth application-default login
+factcat-app
+```
+
+Open http://127.0.0.1:8000 — map table / entity / timestamp, pick Total, Uniques or
+Average, optionally Exact.
+
 ## Tests
 
 ```bash
 cd packages/engine && python -m pytest
+cd packages/app && python -m pytest
 ```
 
 The suite runs against DuckDB with hand-computed ground truth, and every expected number in

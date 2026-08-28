@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Factcat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #111; }
+    body { margin: 0; background: #f4f4f5; }
+    main { display: grid; grid-template-columns: 22rem 1fr; min-height: 100vh; }
+    form { background: #fff; padding: 1.25rem; border-right: 1px solid #e4e4e7; }
+    h1 { font-size: 1.1rem; margin: 0 0 1rem; }
+    label { display: block; font-size: 0.75rem; font-weight: 600; margin: 0.65rem 0 0.2rem; }
+    input, select { width: 100%; box-sizing: border-box; padding: 0.4rem 0.5rem; }
+    .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
+    button { margin-top: 1rem; padding: 0.5rem 0.9rem; }
+    #chart-wrap { padding: 1.25rem; }
+    #error { color: #b91c1c; white-space: pre-wrap; }
+    table { border-collapse: collapse; margin-top: 1rem; font-size: 0.85rem; }
+    td, th { border-bottom: 1px solid #e4e4e7; padding: 0.25rem 0.75rem 0.25rem 0; text-align: left; }
+    details { margin-top: 1rem; font-size: 0.75rem; }
+    pre { overflow: auto; background: #fff; padding: 0.75rem; }
+  </style>
+</head>
+<body>
+<main>
+  <form id="f">
+    <h1>Factcat — Events</h1>
+    <p style="font-size:0.8rem;color:#52525b;margin:0 0 0.75rem">
+      Runs in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code>.
+    </p>
+    <label>GCP project</label>
+    <input name="project" required value="{{ config.project }}">
+    <label>Location</label>
+    <input name="location" required placeholder="EU" value="{{ config.location }}">
+    <label>Service-account JSON (optional; ADC if empty)</label>
+    <input name="credentials" placeholder="/path/to/key.json" value="{{ config.credentials }}">
+    <label>Table</label>
+    <input name="table" required placeholder="dataset.events" value="{{ config.table }}">
+    <label>Entity column</label>
+    <input name="entity" required placeholder="subscription_id" value="{{ config.entity }}">
+    <label>Timestamp column</label>
+    <input name="event_time" required placeholder="occurred_at" value="{{ config.event_time }}">
+    <label>Event name column (optional)</label>
+    <input name="event_column" placeholder="event_name" value="{{ config.event_column }}">
+    <label>Event name value (optional)</label>
+    <input name="event_value" placeholder="paid" value="{{ config.event_value }}">
+    <label>Measure</label>
+    <select name="measure">
+      <option value="total" {% if config.measure == "total" %}selected{% endif %}>Total</option>
+      <option value="uniques" {% if config.measure == "uniques" %}selected{% endif %}>Uniques</option>
+      <option value="average" {% if config.measure == "average" %}selected{% endif %}>Average</option>
+    </select>
+    <label>Bucket</label>
+    <select name="grain">
+      <option value="day" {% if config.grain == "day" %}selected{% endif %}>Day</option>
+      <option value="week" {% if config.grain == "week" %}selected{% endif %}>Week</option>
+      <option value="month" {% if config.grain == "month" %}selected{% endif %}>Month</option>
+    </select>
+    <label>Lookback (days)</label>
+    <input name="lookback_days" type="number" min="1" max="3650" value="{{ config.lookback_days }}">
+    <div class="row">
+      <input name="exact" type="checkbox" id="exact" {% if config.exact %}checked{% endif %} style="width:auto">
+      <label for="exact" style="margin:0">Exact (off = approx Uniques)</label>
+    </div>
+    <button type="submit">Run</button>
+    <p id="error"></p>
+  </form>
+  <div id="chart-wrap">
+    <canvas id="chart" height="120"></canvas>
+    <table>
+      <thead><tr><th>Bucket</th><th>Value</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <details>
+      <summary>SQL</summary>
+      <pre id="sql"></pre>
+    </details>
+  </div>
+</main>
+<script>
+const form = document.getElementById("f");
+let chart;
+function payload() {
+  const d = Object.fromEntries(new FormData(form).entries());
+  d.exact = document.getElementById("exact").checked;
+  d.lookback_days = Number(d.lookback_days);
+  return d;
+}
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  document.getElementById("error").textContent = "";
+  const body = payload();
+  const res = await fetch("/api/run", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!data.ok) {
+    document.getElementById("error").textContent = data.error || res.statusText;
+    return;
+  }
+  document.getElementById("sql").textContent = data.sql || "";
+  const tbody = document.getElementById("rows");
+  tbody.innerHTML = "";
+  const labels = [];
+  const values = [];
+  for (const row of data.rows || []) {
+    labels.push(row.bucket);
+    values.push(row.value);
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td>" + row.bucket + "</td><td>" + row.value + "</td>";
+    tbody.appendChild(tr);
+  }
+  const ctx = document.getElementById("chart");
+  if (chart) chart.destroy();
+  if (window.Chart) {
+    chart = new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets: [{ label: body.measure, data: values, tension: 0.1 }] },
+      options: { responsive: true, scales: { y: { beginAtZero: true } } },
+    });
+  }
+});
+</script>
+</body>
+</html>
