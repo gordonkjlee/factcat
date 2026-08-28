@@ -27,8 +27,14 @@ DEFAULTS: dict[str, Any] = {
     "exact": False,
     "lookback_days": 30,
     "range_preset": "30",
+    "range_mode": "last",
+    "range_n": 30,
+    "range_unit": "day",
+    "exclude_current": False,
+    "week_start": "monday",
     "start_date": "",
     "end_date": "",
+    "event_names": [],
 }
 
 

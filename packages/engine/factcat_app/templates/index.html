@@ -54,6 +54,13 @@
     }
     #custom-range label { display: inline-block; width: auto; margin-right: 0.35rem; }
     #custom-range input { width: auto; }
+    .range-row { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.35rem; }
+    .range-row input[type="number"] { width: 4.5rem; }
+    .linkish {
+      background: none; border: none; padding: 0; margin-left: 0.5rem;
+      color: #52525b; text-decoration: underline; font-size: 0.75rem;
+      font-weight: 400; cursor: pointer;
+    }
 {% endblock %}
 {% block body %}
 <main class="workspace">
@@ -77,23 +84,37 @@
     <input type="hidden" name="entity_label" id="entity_label" value="{{ config.entity_label }}">
     <input type="hidden" name="event_time" id="event_time" value="{{ config.event_time }}">
     <input type="hidden" name="event_column" id="event_column" value="{{ config.event_column }}">
+    <input type="hidden" name="week_start" id="week_start" value="{{ config.week_start or 'monday' }}">
 
     <div id="event_value-wrap" {% if not config.event_column %}hidden{% endif %}>
-      <label for="event_value">Event <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span></label>
+      <label for="event_value">Event <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span>
+        <button type="button" id="refresh-events" class="linkish">Refresh</button>
+      </label>
       <select id="event_value" name="event_value"></select>
     </div>
 
-    <label for="range_preset">Date range</label>
-    <select id="range_preset" name="range_preset">
-      <option value="7" {% if config.range_preset == "7" %}selected{% endif %}>Last 7 days</option>
-      <option value="30" {% if config.range_preset == "30" or not config.range_preset %}selected{% endif %}>Last 30 days</option>
-      <option value="90" {% if config.range_preset == "90" %}selected{% endif %}>Last 90 days</option>
-      <option value="365" {% if config.range_preset == "365" %}selected{% endif %}>Last 365 days</option>
-      <option value="this_week" {% if config.range_preset == "this_week" %}selected{% endif %}>This week</option>
-      <option value="this_month" {% if config.range_preset == "this_month" %}selected{% endif %}>This month</option>
-      <option value="custom" {% if config.range_preset == "custom" %}selected{% endif %}>Custom</option>
+    <label for="range_mode">Date range</label>
+    <select id="range_mode" name="range_mode">
+      <option value="last" {% if config.range_mode == "last" or not config.range_mode %}selected{% endif %}>Last</option>
+      <option value="this" {% if config.range_mode == "this" %}selected{% endif %}>This</option>
+      <option value="previous" {% if config.range_mode == "previous" %}selected{% endif %}>Previous</option>
+      <option value="custom" {% if config.range_mode == "custom" %}selected{% endif %}>Custom</option>
     </select>
-    <div id="custom-range" {% if config.range_preset != "custom" %}hidden{% endif %}>
+    <div id="range-last" class="range-row">
+      <input id="range_n" name="range_n" type="number" min="1" max="3650" value="{{ config.range_n or 30 }}">
+      <select id="range_unit" name="range_unit">
+        <option value="day" {% if config.range_unit == "day" or not config.range_unit %}selected{% endif %}>days</option>
+        <option value="week" {% if config.range_unit == "week" %}selected{% endif %}>weeks</option>
+        <option value="month" {% if config.range_unit == "month" %}selected{% endif %}>months</option>
+        <option value="quarter" {% if config.range_unit == "quarter" %}selected{% endif %}>quarters</option>
+        <option value="year" {% if config.range_unit == "year" %}selected{% endif %}>years</option>
+      </select>
+    </div>
+    <div id="range-exclude" class="row">
+      <input name="exclude_current" type="checkbox" id="exclude_current" {% if config.exclude_current %}checked{% endif %} style="width:auto">
+      <label for="exclude_current" style="margin:0">Exclude current period</label>
+    </div>
+    <div id="custom-range" {% if config.range_mode != "custom" %}hidden{% endif %}>
       <label for="start_date">From</label>
       <input id="start_date" name="start_date" type="date" value="{{ config.start_date }}">
       <label for="end_date">To</label>
@@ -169,8 +190,11 @@ const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
 const eventValueEl = document.getElementById("event_value");
 const eventValueWrap = document.getElementById("event_value-wrap");
-const rangePresetEl = document.getElementById("range_preset");
+const rangeModeEl = document.getElementById("range_mode");
+const rangeLastEl = document.getElementById("range-last");
+const rangeExcludeEl = document.getElementById("range-exclude");
 const customRangeEl = document.getElementById("custom-range");
+const cachedEventNames = {{ config.event_names|tojson }};
 let chart;
 let valGen = 0;
 let tableRows = [];
@@ -230,49 +254,44 @@ async function post(url, body) {
   });
   return res.json();
 }
-function rangeBody() {
-  return {
-    range_preset: rangePresetEl.value,
-    start_date: form.start_date.value,
-    end_date: form.end_date.value,
-  };
+function syncRangeUi() {
+  const mode = rangeModeEl.value;
+  customRangeEl.hidden = mode !== "custom";
+  rangeLastEl.hidden = mode !== "last";
+  rangeExcludeEl.hidden = mode !== "last";
 }
-function syncCustomRange() {
-  customRangeEl.hidden = rangePresetEl.value !== "custom";
-}
-async function loadEventValues() {
+async function refreshEventNames() {
   const gen = ++valGen;
   if (!eventColumnEl.value) {
     eventValueWrap.hidden = true;
     return;
   }
   eventValueWrap.hidden = false;
-  if (!eventTimeEl.value || !tableEl.value || !locationEl.value) return;
+  if (!tableEl.value || !locationEl.value) return;
   setLoading(eventValueEl, true);
   const data = await post("/api/event_values", {
     ...authBody(),
-    ...rangeBody(),
     table: tableEl.value,
     location: locationEl.value,
     event_column: eventColumnEl.value,
-    event_time: eventTimeEl.value,
+    catalog: true,
   });
   if (gen !== valGen) return;
   setLoading(eventValueEl, false);
   if (!data.ok) {
-    setError(data.error || "Could not list events");
+    setError(data.error || "Could not refresh events");
     return;
   }
-  fillSelect(eventValueEl, data.values || [], saved.event_value, "All events");
+  fillSelect(eventValueEl, data.values || [], eventValueEl.value || saved.event_value, "All events");
+  await post("/api/save", { event_names: data.values || [] });
 }
-rangePresetEl.addEventListener("change", () => {
-  syncCustomRange();
-  loadEventValues();
-});
-form.start_date.addEventListener("change", loadEventValues);
-form.end_date.addEventListener("change", loadEventValues);
-syncCustomRange();
-if (eventColumnEl.value) loadEventValues();
+rangeModeEl.addEventListener("change", syncRangeUi);
+document.getElementById("refresh-events").addEventListener("click", refreshEventNames);
+syncRangeUi();
+if (eventColumnEl.value) {
+  eventValueWrap.hidden = false;
+  fillSelect(eventValueEl, cachedEventNames || [], saved.event_value, "All events");
+}
 
 function bucketLabel(raw) {
   const s = String(raw ?? "");

@@ -49,6 +49,7 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "This grain is called" not in res.text
     assert "Entity name" in res.text
     assert "Event name column" in res.text
+    assert "Week starts on" in res.text
     assert ">Other<" in res.text
     assert 'value="User"' in res.text
     assert "Volume" not in res.text
@@ -81,9 +82,10 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Only this event" not in res.text
     assert "Event name column" not in res.text
     assert "Date range" in res.text
-    assert "Last 30 days" in res.text
+    assert "Exclude current period" in res.text
     assert "Export CSV" in res.text
     assert "All events" in res.text
+    assert "Refresh" in res.text
     assert "/api/event_values" in res.text
     assert "<h1>Project setup</h1>" not in res.text
     assert "GCP project that runs" not in res.text

@@ -38,9 +38,14 @@ def test_does_not_default_entity_to_user_id():
         spec_from_form(_form(entity="   "))
 
 
-def test_week_bucket_is_date_trunc_sugar():
+def test_week_bucket_uses_explicit_week_start():
     spec = spec_from_form(_form(grain="week"))
-    assert spec.bucket == "CAST(date_trunc('week', occurred_at) AS DATE)"
+    assert "factcat_period_start_shifted(occurred_at, 'week', 'monday', 0)" in spec.bucket
+    sql = events_sql(spec, dialect="bigquery")
+    assert "WEEK(MONDAY)" in sql.upper().replace(" ", "")
+    assert "factcat_period_start_shifted" not in sql
+    sun = spec_from_form(_form(grain="week", week_start="sunday"))
+    assert "WEEK(SUNDAY)" in events_sql(sun, dialect="bigquery").upper().replace(" ", "")
 
 
 def test_range_preset_7_is_last_n_days():
@@ -49,8 +54,24 @@ def test_range_preset_7_is_last_n_days():
 
 
 def test_this_month_is_anchored_date_trunc():
-    spec = spec_from_form(_form(range_preset="this_month"))
-    assert "date_trunc('month', current_date)" in spec.where
+    spec = spec_from_form(_form(range_mode="this", range_unit="month"))
+    assert "factcat_period_start_shifted(current_date, 'month'" in spec.where
+    sql = events_sql(spec, dialect="bigquery").upper()
+    assert "MONTH" in sql
+
+
+def test_last_weeks_exclude_current():
+    spec = spec_from_form(
+        _form(range_mode="last", range_n=5, range_unit="week", exclude_current=True)
+    )
+    assert "factcat_period_start_shifted(current_date, 'week', 'monday', -5)" in spec.where
+    assert "factcat_period_start_shifted(current_date, 'week', 'monday', 0)" in spec.where
+
+
+def test_catalog_event_values_skip_time_window():
+    sql = event_values_sql(_form(event_column="event_name", catalog=True))
+    assert "DISTINCT" in sql.upper()
+    assert "current_date" not in sql.lower()
 
 
 def test_custom_range_is_inclusive_dates():

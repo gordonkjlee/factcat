@@ -44,6 +44,12 @@
   <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="event_column" name="event_column" hidden></select>
   <span class="hint">STRING column of event names. The Events page picks which name to chart.</span>
+  <label for="week_start">Week starts on</label>
+  <select id="week_start" name="week_start">
+    <option value="monday" {% if config.week_start != "sunday" %}selected{% endif %}>Monday</option>
+    <option value="sunday" {% if config.week_start == "sunday" %}selected{% endif %}>Sunday</option>
+  </select>
+  <span class="hint">Used for weekly buckets and this/previous week. Does not use the warehouse default.</span>
 
   <button type="submit">Save and open Events</button>
   <p id="error"></p>
@@ -331,6 +337,22 @@ form.addEventListener("submit", async (e) => {
   if (!body.entity_label) {
     setError("Pick an entity name, or Other and type one.");
     return;
+  }
+  if (body.event_column) {
+    const ev = await post("/api/event_values", {
+      ...authBody(),
+      table: body.table,
+      location: body.location,
+      event_column: body.event_column,
+      catalog: true,
+    });
+    if (!ev.ok) {
+      setError(ev.error || "Could not cache event names");
+      return;
+    }
+    body.event_names = ev.values || [];
+  } else {
+    body.event_names = [];
   }
   const data = await post("/api/save", body);
   if (!data.ok) {

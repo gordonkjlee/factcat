@@ -219,10 +219,11 @@ writes `.factcat.json` and goes to the Events chart (`/`). Setup is a
 separate control at the bottom of the left rail, not an analysis.
 Advanced is only if you use a key file instead of ADC.
 
-Map the event-name column on **Setup** (STRING). On Events, **Event** is
-which name to chart (**All events** = no filter). **Date range** is last
-7/30/90/365 days, this week, this month, or a custom from/to — sugar on
-`event_time`, not a period enum. Catalog dropdowns are alphabetical.
+Map the event-name column on **Setup** (STRING). Event names are cached
+when you save Setup. On Events, **Event** is which name to chart
+(**All events** = no filter); **Refresh** reloads the cached list. **Date range** is Last N days/weeks/months (optional exclude current
+period), This/Previous period, or custom from/to — sugar on `event_time`,
+not a period enum. **Week starts on** is set in Setup (Monday by default). Catalog dropdowns are alphabetical.
 Entity lists string and integer columns; timestamp lists TIMESTAMP /
 DATETIME.
 

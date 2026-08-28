@@ -11,10 +11,16 @@ window functions. Two constructs do not survive cleanly:
    ``PERCENTILE_CONT(x, 0.5) OVER (PARTITION BY ...)``. Approx is
    ``APPROX_QUANTILES``. Runners execute SQL; they do not translate it.
 
+3. **Week-start DATE_TRUNC.** DuckDB ``date_trunc('week', x)`` is Monday;
+   sqlglot emits BigQuery ``TIMESTAMP_TRUNC(x, WEEK)``, which is Sunday.
+   ``WEEK(MONDAY)`` / ``WEEK(SUNDAY)`` must be spliced.
+
 Everything else is one emitter.
 """
 
 from __future__ import annotations
+
+import re
 
 SUPPORTED: tuple[str, ...] = (
     "duckdb",
@@ -139,3 +145,85 @@ def period_grid(n_periods: int, dialect: str) -> str:
 
     # Redshift and anything unrecognised. Correct everywhere, ugly above ~200.
     return _union_all_grid(n)
+
+
+def period_start_shifted(
+    expr: str,
+    unit: str,
+    week_start: str,
+    n: int,
+    dialect: str,
+) -> str:
+    """Trunc ``expr`` to ``unit`` then shift ``n`` periods (negative = back).
+
+    Week start is explicit so BigQuery does not inherit Sunday ``WEEK``.
+    """
+    unit = unit.lower()
+    week_start = week_start.lower()
+    if unit not in {"day", "week", "month", "quarter", "year"}:
+        raise ValueError("unit must be day, week, month, quarter, or year")
+    if week_start not in {"monday", "sunday"}:
+        raise ValueError("week_start must be monday or sunday")
+    if type(n) is not int:
+        raise TypeError("n must be int")
+    bq_week = "MONDAY" if week_start == "monday" else "SUNDAY"
+    if dialect == "bigquery":
+        if unit == "day":
+            trunc = f"CAST({expr} AS DATE)"
+        elif unit == "week":
+            trunc = f"CAST(DATE_TRUNC({expr}, WEEK({bq_week})) AS DATE)"
+        else:
+            trunc = f"CAST(DATE_TRUNC({expr}, {unit.upper()}) AS DATE)"
+        if n == 0:
+            return trunc
+        op = "DATE_ADD" if n > 0 else "DATE_SUB"
+        return f"{op}({trunc}, INTERVAL {abs(n)} {unit.upper()})"
+    if dialect == "duckdb":
+        if unit == "day":
+            trunc = f"CAST({expr} AS DATE)"
+        elif unit == "week" and week_start == "sunday":
+            trunc = f"(CAST(date_trunc('week', CAST({expr} AS DATE) + 1) AS DATE) - 1)"
+        elif unit == "week":
+            trunc = f"CAST(date_trunc('week', {expr}) AS DATE)"
+        else:
+            trunc = f"CAST(date_trunc('{unit}', {expr}) AS DATE)"
+        if n == 0:
+            return trunc
+        if unit == "day":
+            return f"({trunc} + {n})"
+        if unit == "week":
+            return f"({trunc} + {n * 7})"
+        return f"({trunc} + INTERVAL {n} {unit})"
+    # Fallback: ISO week (Monday) via date_trunc.
+    if unit == "day":
+        trunc = f"CAST({expr} AS DATE)"
+    else:
+        trunc = f"CAST(date_trunc('{unit}', {expr}) AS DATE)"
+    if n == 0:
+        return trunc
+    return f"({trunc} + INTERVAL {n} {unit})"
+
+
+_PERIOD_RE = re.compile(
+    r"factcat_period_start_shifted\(\s*"
+    r"([A-Za-z_][A-Za-z0-9_.]*)\s*,\s*"
+    r"'(day|week|month|quarter|year)'\s*,\s*"
+    r"'(monday|sunday)'\s*,\s*"
+    r"(-?\d+)\s*\)",
+    re.IGNORECASE,
+)
+
+
+def splice_placeholders(sql: str, dialect: str) -> str:
+    """Replace app placeholders sqlglot cannot emit (week start, period shift)."""
+
+    def repl(match: re.Match[str]) -> str:
+        return period_start_shifted(
+            match.group(1),
+            match.group(2),
+            match.group(3),
+            int(match.group(4)),
+            dialect,
+        )
+
+    return _PERIOD_RE.sub(repl, sql)

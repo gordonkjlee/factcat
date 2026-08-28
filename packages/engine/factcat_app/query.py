@@ -9,11 +9,14 @@ from datetime import date, timedelta
 
 from factcat import EVENT_MEASURES, EventsSpec
 from factcat._emit import transpile
+from factcat.dialects import splice_placeholders
 
 _TABLE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_]+)+$")
 _COLUMN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _GRAINS = ("day", "week", "month")
+_UNITS = frozenset({"day", "week", "month", "quarter", "year"})
+_MODES = frozenset({"last", "this", "previous", "custom"})
 _LAST_N = frozenset({"7", "30", "90", "365"})
 EVENT_VALUE_LIMIT = 1000
 
@@ -60,19 +63,68 @@ def _iso_date(value: str, label: str) -> str:
     return value
 
 
+def _week_start(form: dict[str, Any]) -> str:
+    raw = str(form.get("week_start") or "monday").strip().lower()
+    if raw not in {"monday", "sunday"}:
+        raise ValueError("week_start must be monday or sunday")
+    return raw
+
+
+def _range_unit(form: dict[str, Any], default: str = "day") -> str:
+    raw = str(form.get("range_unit") or default).strip().lower()
+    if raw not in _UNITS:
+        raise ValueError("range_unit must be day, week, month, quarter, or year")
+    return raw
+
+
+def _range_n(form: dict[str, Any]) -> int:
+    raw = form.get("range_n", 30)
+    if raw in (None, ""):
+        raw = 30
+    try:
+        n = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("range_n must be an integer") from exc
+    if n < 1 or n > 3650:
+        raise ValueError("range_n must be between 1 and 3650")
+    return n
+
+
+def _exclude_current(form: dict[str, Any]) -> bool:
+    return form.get("exclude_current") in (True, "true", "on", "1", 1)
+
+
+def _ps(expr: str, unit: str, form: dict[str, Any], n: int) -> str:
+    return (
+        f"factcat_period_start_shifted({expr}, '{unit}', "
+        f"'{_week_start(form)}', {n})"
+    )
+
+
+def _normalize_range(
+    form: dict[str, Any],
+) -> tuple[str, str, int]:
+    mode = str(form.get("range_mode") or "").strip().lower()
+    if mode in _MODES:
+        unit = _range_unit(form)
+        n = _range_n(form) if mode == "last" else 1
+        return mode, unit, n
+    preset = str(form.get("range_preset") or "").strip()
+    if preset in _LAST_N:
+        return "last", "day", int(preset)
+    if preset == "this_week":
+        return "this", "week", 1
+    if preset == "this_month":
+        return "this", "month", 1
+    if preset == "custom":
+        return "custom", "day", 1
+    return "last", "day", _lookback_days(form)
+
+
 def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
     """Sugar on event_time. Not a library period enum."""
-    preset = str(form.get("range_preset") or "").strip()
-    if not preset:
-        lookback = _lookback_days(form)
-        return [f"{event_time} >= current_date - {lookback}"]
-    if preset in _LAST_N:
-        return [f"{event_time} >= current_date - {int(preset)}"]
-    if preset == "this_week":
-        return [f"{event_time} >= CAST(date_trunc('week', current_date) AS DATE)"]
-    if preset == "this_month":
-        return [f"{event_time} >= CAST(date_trunc('month', current_date) AS DATE)"]
-    if preset == "custom":
+    mode, unit, n = _normalize_range(form)
+    if mode == "custom":
         start = _iso_date(str(form.get("start_date") or ""), "start_date")
         end = _iso_date(str(form.get("end_date") or ""), "end_date")
         if start > end:
@@ -82,9 +134,27 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
             f"{event_time} >= DATE {_sql_string(start)}",
             f"{event_time} < DATE {_sql_string(end_exclusive)}",
         ]
-    raise ValueError(
-        "range_preset must be 7, 30, 90, 365, this_week, this_month, or custom"
-    )
+    if mode == "this":
+        return [f"{event_time} >= {_ps('current_date', unit, form, 0)}"]
+    if mode == "previous":
+        return [
+            f"{event_time} >= {_ps('current_date', unit, form, -1)}",
+            f"{event_time} < {_ps('current_date', unit, form, 0)}",
+        ]
+    # last N units
+    if unit == "day":
+        if _exclude_current(form):
+            return [
+                f"{event_time} >= current_date - {n}",
+                f"{event_time} < current_date",
+            ]
+        return [f"{event_time} >= current_date - {n}"]
+    if _exclude_current(form):
+        return [
+            f"{event_time} >= {_ps('current_date', unit, form, -n)}",
+            f"{event_time} < {_ps('current_date', unit, form, 0)}",
+        ]
+    return [f"{event_time} >= {_ps('current_date', unit, form, -(n - 1))}"]
 
 
 def spec_from_form(form: dict[str, Any]) -> EventsSpec:
@@ -119,20 +189,28 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
         event_time=event_time,
         measure=measure,  # type: ignore[arg-type]
         on="events",
-        bucket=f"CAST(date_trunc('{grain}', {event_time}) AS DATE)",
+        bucket=(
+            f"CAST({_ps(event_time, 'week', form, 0)} AS DATE)"
+            if grain == "week"
+            else f"CAST(date_trunc('{grain}', {event_time}) AS DATE)"
+        ),
         where=" AND ".join(clauses),
         exact=exact,
     )
 
 
 def event_values_sql(form: dict[str, Any]) -> str:
-    """DISTINCT event names in the lookback window. Identifiers only."""
+    """DISTINCT event names. Catalog mode skips the report time window."""
     table = _ident_table(str(form.get("table") or ""), "table")
     event_column = _ident_column(str(form.get("event_column") or ""), "event_column")
-    event_time = _ident_column(str(form.get("event_time") or ""), "event_time")
-    where = " AND ".join(
-        [f"{event_column} IS NOT NULL"] + _time_clauses(form, event_time)
-    )
+    catalog = form.get("catalog") in (True, "true", "on", "1", 1)
+    if catalog:
+        where = f"{event_column} IS NOT NULL"
+    else:
+        event_time = _ident_column(str(form.get("event_time") or ""), "event_time")
+        where = " AND ".join(
+            [f"{event_column} IS NOT NULL"] + _time_clauses(form, event_time)
+        )
     sql = (
         f"SELECT DISTINCT {event_column} AS fc_value "
         f"FROM {table} "
@@ -140,7 +218,7 @@ def event_values_sql(form: dict[str, Any]) -> str:
         f"ORDER BY 1 "
         f"LIMIT {EVENT_VALUE_LIMIT}"
     )
-    return transpile(sql, "bigquery")
+    return splice_placeholders(transpile(sql, "bigquery"), "bigquery")
 
 
 def connection_from_form(form: dict[str, Any]) -> dict[str, str]:
