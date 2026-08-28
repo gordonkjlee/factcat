@@ -21,7 +21,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: pip install -e "packages/engine[dev,app]"
+        run: pip install -e "packages/engine[dev,all]"
 
       - name: Test
         working-directory: packages/engine

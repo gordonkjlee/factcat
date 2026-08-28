@@ -149,9 +149,9 @@ integers for the period grid - and it lives in
 **Execute adapters** push that SQL into the caller's warehouse through its official
 client. Factcat has no warehouse of its own. BigQuery ships today. The contract is
 `dialect` plus `run(sql)` - identity, auth, and cost knobs stay on the concrete class so
-Snowflake does not inherit `project` / `location` / `maximum_bytes_billed`. Adding an
-adapter is a module, an optional extra, and one line in the registry; see the docstring
-on `factcat.warehouses`.
+Snowflake does not inherit `project` / `location` / `maximum_bytes_billed`. A later
+warehouse is a module and one line in the registry; see the docstring on
+`factcat.warehouses`.
 
 ```python
 from factcat import RetentionSpec, retention_sql
@@ -169,20 +169,22 @@ unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` 
 
 ## Install
 
-One project: [factcat](https://pypi.org/project/factcat/). Pick the extra that matches what you want:
+One project: [factcat](https://pypi.org/project/factcat/).
 
-| You want | Install |
-|---|---|
-| Generate SQL from Python | `pip install factcat` |
-| Run that SQL on BigQuery | `pip install factcat[bigquery]` |
-| The local Events chart | `pip install factcat[app]` |
+```bash
+pip install factcat              # SQL generation + the local chart
+pip install factcat[bigquery]    # run queries in BigQuery
+```
 
-`[app]` already includes the BigQuery extra. You do not install all three.
+`pip install factcat[bigquery]` is one command (it installs factcat plus the
+driver). The default has **no** warehouse SDK. Later warehouses are extras
+named the same way (`factcat[snowflake]`). `factcat[all]` is every execute
+adapter we ship.
 
 To hack on the library:
 
 ```bash
-pip install -e "packages/engine[dev,app]"
+pip install -e "packages/engine[dev,all]"
 ```
 
 ## Run the app
@@ -201,7 +203,7 @@ python -m venv .venv
 # macOS/Linux:
 source .venv/bin/activate
 
-pip install factcat[app]
+pip install factcat[bigquery]
 gcloud auth application-default login
 gcloud config set project YOUR_GCP_PROJECT
 

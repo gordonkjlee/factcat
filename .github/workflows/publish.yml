@@ -78,7 +78,7 @@ jobs:
       - if: steps.release.outputs.found == 'true'
         name: Run tests before publishing
         run: |
-          pip install -e "packages/engine[dev,app]"
+          pip install -e "packages/engine[dev,all]"
           cd packages/engine && python -m pytest
 
       - if: steps.release.outputs.found == 'true'
@@ -151,7 +151,7 @@ jobs:
           fi
 
           python -m venv /tmp/smoke
-          /tmp/smoke/bin/pip install --quiet "factcat[app]==${VERSION}"
+          /tmp/smoke/bin/pip install --quiet "factcat==${VERSION}"
           /tmp/smoke/bin/python - <<'EOF'
           import shutil
           from factcat import EventsSpec, RetentionSpec, events_sql, retention_sql
@@ -181,7 +181,7 @@ jobs:
           })
           assert form.entity == "subscription_id"
           assert shutil.which("factcat-app"), "factcat-app console script missing"
-          print("Smoke test passed: factcat[app] from PyPI generates SQL and has factcat-app.")
+          print("Smoke test passed: factcat from PyPI generates SQL and has factcat-app.")
           EOF
 
       - name: Open an issue if the release never landed

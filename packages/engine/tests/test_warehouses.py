@@ -119,9 +119,21 @@ def test_core_init_does_not_import_execute_layer():
 def test_google_is_optional_extra_not_a_core_dependency():
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     text = pyproject.read_text(encoding="utf-8")
-    core, _, extras = text.partition("[project.optional-dependencies]")
+    core, _, rest = text.partition("[project.optional-dependencies]")
+    extras, _, _ = rest.partition("\n[")
     assert "google" not in core
     assert "google-cloud-bigquery" in extras
+    # Product (the app) is default; warehouse SDKs are not.
+    assert "fastapi" in core
+    # Extra names minus dev/all match connect(kind=). Privileging the first
+    # warehouse as a core dep, or shipping an adapter with no extra, goes red.
+    extra_names = {
+        line.split("=")[0].strip()
+        for line in extras.splitlines()
+        if "=" in line and not line.lstrip().startswith("#")
+    }
+    assert extra_names == {"dev", "all", *ADAPTERS}
+    assert "factcat[bigquery]" in extras
 
 
 def test_adapter_error_hierarchy():
