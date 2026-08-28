@@ -85,7 +85,7 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Exclude current period" in res.text
     assert "Export CSV" in res.text
     assert "All events" in res.text
-    assert "Refresh" in res.text
+    assert "Refresh list" in res.text
     assert "/api/event_values" in res.text
     assert "<h1>Project setup</h1>" not in res.text
     assert "GCP project that runs" not in res.text

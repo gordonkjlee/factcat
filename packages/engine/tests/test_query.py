@@ -68,10 +68,12 @@ def test_last_weeks_exclude_current():
     assert "factcat_period_start_shifted(current_date, 'week', 'monday', 0)" in spec.where
 
 
-def test_catalog_event_values_skip_time_window():
+def test_catalog_event_values_uses_recent_window():
     sql = event_values_sql(_form(event_column="event_name", catalog=True))
-    assert "DISTINCT" in sql.upper()
-    assert "current_date" not in sql.lower()
+    compact = " ".join(sql.split()).upper()
+    assert "DISTINCT" in compact
+    assert "CURRENT_DATE - 90" in compact.replace("CURRENT_DATE()", "CURRENT_DATE")
+    assert "OCCURRED_AT" in compact
 
 
 def test_custom_range_is_inclusive_dates():

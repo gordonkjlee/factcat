@@ -221,7 +221,8 @@ Advanced is only if you use a key file instead of ADC.
 
 Map the event-name column on **Setup** (STRING). Event names are cached
 when you save Setup. On Events, **Event** is which name to chart
-(**All events** = no filter); **Refresh** reloads the cached list. **Date range** is Last N days/weeks/months (optional exclude current
+(**All events** = no filter); **Refresh list** reloads names from the last
+90 days of the timestamp column (not an all-time scan). **Date range** is Last N days/weeks/months (optional exclude current
 period), This/Previous period, or custom from/to — sugar on `event_time`,
 not a period enum. **Week starts on** is set in Setup (Monday by default). Catalog dropdowns are alphabetical.
 Entity lists string and integer columns; timestamp lists TIMESTAMP /

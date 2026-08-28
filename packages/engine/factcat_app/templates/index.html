@@ -88,7 +88,7 @@
 
     <div id="event_value-wrap" {% if not config.event_column %}hidden{% endif %}>
       <label for="event_value">Event <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span>
-        <button type="button" id="refresh-events" class="linkish">Refresh</button>
+        <button type="button" id="refresh-events" class="linkish">Refresh list</button>
       </label>
       <select id="event_value" name="event_value"></select>
     </div>
@@ -274,6 +274,7 @@ async function refreshEventNames() {
     table: tableEl.value,
     location: locationEl.value,
     event_column: eventColumnEl.value,
+    event_time: eventTimeEl.value,
     catalog: true,
   });
   if (gen !== valGen) return;

@@ -19,6 +19,8 @@ _UNITS = frozenset({"day", "week", "month", "quarter", "year"})
 _MODES = frozenset({"last", "this", "previous", "custom"})
 _LAST_N = frozenset({"7", "30", "90", "365"})
 EVENT_VALUE_LIMIT = 1000
+# Catalog DISTINCT is not all-time: unbounded scans blow the 10 GiB job cap.
+CATALOG_LOOKBACK_DAYS = 90
 
 
 def _ident_table(value: str, label: str) -> str:
@@ -200,14 +202,19 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
 
 
 def event_values_sql(form: dict[str, Any]) -> str:
-    """DISTINCT event names. Catalog mode skips the report time window."""
+    """DISTINCT event names. Catalog mode is last 90 days on event_time so
+    a partitioned events table can prune; it is not an all-time scan.
+    """
     table = _ident_table(str(form.get("table") or ""), "table")
     event_column = _ident_column(str(form.get("event_column") or ""), "event_column")
+    event_time = _ident_column(str(form.get("event_time") or ""), "event_time")
     catalog = form.get("catalog") in (True, "true", "on", "1", 1)
     if catalog:
-        where = f"{event_column} IS NOT NULL"
+        where = (
+            f"{event_column} IS NOT NULL "
+            f"AND {event_time} >= current_date - {CATALOG_LOOKBACK_DAYS}"
+        )
     else:
-        event_time = _ident_column(str(form.get("event_time") or ""), "event_time")
         where = " AND ".join(
             [f"{event_column} IS NOT NULL"] + _time_clauses(form, event_time)
         )
