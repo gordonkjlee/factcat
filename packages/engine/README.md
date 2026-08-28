@@ -33,9 +33,10 @@ print(events_sql(EventsSpec(
 )))
 ```
 
-`measure` is `total`, `uniques`, `average`, `sum`, `min` or `max`. Uniques is
-`COUNT DISTINCT` of `entity`. Average/sum/min/max take `of=` a numeric SQL
-expression.
+Event measures: `total`, `uniques`, `average` (Total / Uniques). Property
+measures (`on="property"`, `of=` a column): `sum`, `average`, `median`,
+`distinct` (mean distinct values per entity). Uniques is `COUNT DISTINCT` of
+`entity`.
 
 `retained` is arbitrary SQL over any column in your table, plus the derived columns
 `offset_days`, `period_index` and `within_period_offset`.

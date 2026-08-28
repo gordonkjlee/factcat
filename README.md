@@ -68,7 +68,10 @@ spec = FunnelSpec(
 )
 ```
 
-The everyday report is a time series of **Total**, **Uniques**, **Average**, **Sum**, **Minimum** or **Maximum**. Uniques is `COUNT DISTINCT` of your entity, not of users:
+The everyday report is a time series. **Total**, **Uniques**, and **Average**
+(Total / Uniques: events per unique entity). Uniques is `COUNT DISTINCT` of your
+entity, not of users. On a numeric column: **Sum**, **Average**, **Median**, and
+**Distinct** (mean distinct values per entity). Not min/max.
 
 ```python
 from factcat import EventsSpec, events_sql

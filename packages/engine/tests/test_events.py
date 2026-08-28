@@ -1,9 +1,7 @@
 """Ground-truth tests for the Events time series.
 
-Uniques is COUNT DISTINCT of the caller entity. On the payments fixture U1
-holds two subscriptions, so the same day has two unique subscriptions and
-one unique user. Average/sum/min/max use a separate amounts table so the
-numbers can be worked out by hand.
+Uniques is COUNT DISTINCT of the caller entity. Average (on=events) is
+Total / Uniques. Property Average/Sum/Median/Distinct are of ``of``.
 """
 
 from __future__ import annotations
@@ -61,6 +59,17 @@ def test_uniques_at_subscription_grain_differs_from_user_grain(con):
     assert by_user["2026-01-01"] == 1
 
 
+def test_event_average_is_total_over_uniques(con):
+    """Average is events per unique entity, not AVG of a column."""
+    total = _by_day(con, _spec(measure="total"))
+    uniques = _by_day(con, _spec(measure="uniques"))
+    average = _by_day(con, _spec(measure="average"))
+    assert average["2026-01-01"] == total["2026-01-01"] / uniques["2026-01-01"]
+    assert average["2026-01-01"] == 1.0
+    by_user = _by_day(con, _spec(measure="average", entity="user_id"))
+    assert by_user["2026-01-01"] == 2.0
+
+
 def test_total_is_at_least_uniques(con):
     totals = _by_day(con, _spec(measure="total"))
     uniques = _by_day(con, _spec(measure="uniques"))
@@ -84,24 +93,41 @@ def test_null_entity_is_in_total_not_uniques(amounts):
     )
     total = _by_day(amounts, EventsSpec(measure="total", **spec))
     uniques = _by_day(amounts, EventsSpec(measure="uniques", **spec))
-    # 4 rows on 2026-01-05, three with an id (S1 twice + S2).
+    average = _by_day(amounts, EventsSpec(measure="average", **spec))
+    # 4 rows on 2026-01-05, two uniques (S1, S2). Average = 4/2.
     assert total["2026-01-05"] == 4
     assert uniques["2026-01-05"] == 2
+    assert average["2026-01-05"] == 2.0
 
 
-def test_average_sum_min_max_are_hand_computed(amounts):
+def test_property_sum_average_median(amounts):
     spec = dict(
         table="amounts",
         entity="entity_id",
         event_time="occurred_at",
+        on="property",
         of="amount",
     )
-    # 10 + 30 + 20 + 5 = 65 over 4 rows; min 5, max 30.
+    # 10, 30, 20, 5 → sum 65, mean 16.25, median 15 (mean of 10 and 20).
     assert _by_day(amounts, EventsSpec(measure="sum", **spec))["2026-01-05"] == 65
-    assert _by_day(amounts, EventsSpec(measure="min", **spec))["2026-01-05"] == 5
-    assert _by_day(amounts, EventsSpec(measure="max", **spec))["2026-01-05"] == 30
     assert _by_day(amounts, EventsSpec(measure="average", **spec))["2026-01-05"] == 16.25
+    assert _by_day(amounts, EventsSpec(measure="median", **spec))["2026-01-05"] == 15
     assert _by_day(amounts, EventsSpec(measure="sum", **spec))["2026-01-12"] == 40
+
+
+def test_distinct_property_values_per_entity(amounts):
+    """S1 has two amounts (10, 30), S2 has one (20). Mean distinct = 1.5."""
+    spec = EventsSpec(
+        table="amounts",
+        entity="entity_id",
+        event_time="occurred_at",
+        on="property",
+        measure="distinct",
+        of="amount",
+    )
+    got = _by_day(amounts, spec)
+    assert got["2026-01-05"] == 1.5
+    assert got["2026-01-12"] == 1.0
 
 
 def test_default_bucket_is_calendar_day(con):
@@ -140,24 +166,48 @@ def test_unknown_measure_is_rejected():
         )
 
 
-def test_average_requires_of():
-    with pytest.raises(ValueError, match="requires of"):
+def test_min_max_are_not_measures():
+    with pytest.raises(ValueError, match="allows measures"):
         EventsSpec(
             table="amounts",
             entity="entity_id",
             event_time="occurred_at",
+            on="property",
+            measure="min",  # type: ignore[arg-type]
+            of="amount",
+        )
+
+
+def test_property_requires_of():
+    with pytest.raises(ValueError, match="require of"):
+        EventsSpec(
+            table="amounts",
+            entity="entity_id",
+            event_time="occurred_at",
+            on="property",
             measure="average",
         )
 
 
-def test_total_rejects_of():
-    with pytest.raises(ValueError, match="does not take of"):
+def test_event_average_rejects_of():
+    with pytest.raises(ValueError, match="do not take of"):
         EventsSpec(
             table="payments",
             entity="subscription_id",
             event_time="paid_at",
-            measure="total",
+            measure="average",
             of="amount",
+        )
+
+
+def test_events_do_not_take_sum():
+    with pytest.raises(ValueError, match="allows measures"):
+        EventsSpec(
+            table="payments",
+            entity="subscription_id",
+            event_time="paid_at",
+            on="events",
+            measure="sum",
         )
 
 

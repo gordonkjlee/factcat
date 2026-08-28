@@ -53,8 +53,27 @@ EVENTS_AVG = EventsSpec(
     table="events",
     entity="entity_id",
     event_time="occurred_at",
+    on="property",
     measure="average",
     of="amount",
+)
+
+EVENTS_MEDIAN = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="median",
+    of="amount",
+)
+
+EVENTS_DISTINCT = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="distinct",
+    of="country",
 )
 
 
@@ -100,10 +119,23 @@ def test_funnel_emits_without_warnings(dialect, sqlglot_warnings):
 def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS, dialect=dialect)
     events_sql(EVENTS_AVG, dialect=dialect)
+    events_sql(EVENTS_MEDIAN, dialect=dialect)
+    events_sql(EVENTS_DISTINCT, dialect=dialect)
 
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
     )
+
+
+def test_bigquery_median_uses_approx_quantiles():
+    sql = events_sql(EVENTS_MEDIAN, dialect="bigquery")
+    assert "APPROX_QUANTILES" in sql.upper()
+    assert "factcat_median" not in sql.lower()
+
+
+def test_duckdb_median_uses_median():
+    sql = events_sql(EVENTS_MEDIAN, dialect="duckdb")
+    assert "median(fc_of)" in sql.lower()
 
 
 @pytest.mark.parametrize("dialect", SUPPORTED)

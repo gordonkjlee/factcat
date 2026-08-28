@@ -1,15 +1,15 @@
 """Per-dialect SQL that cannot be transpiled.
 
 sqlglot handles almost everything: date arithmetic, casting, string functions,
-window functions. Measured across the retention query, exactly one construct
-does not survive transpilation cleanly - **generating a series of integers**.
+window functions. Two constructs do not survive cleanly:
 
-    duckdb      UNNEST(GENERATE_SERIES(0, n))
-    snowflake   renders as a double FLATTEN over ARRAY_GENERATE_RANGE
-    redshift    fails outright: "Unsupported EXPLODE() function"
+1. **Generating a series of integers** (the retention period grid).
+   DuckDB ``UNNEST(GENERATE_SERIES)``; Redshift has no reachable generator.
+2. **Median as an aggregate.** sqlglot emits ``MEDIAN`` / ``PERCENTILE_CONT
+   WITHIN GROUP`` which is not valid BigQuery (PERCENTILE_CONT is a window
+   function there). Proved before this helper was added.
 
-So the period grid is written by hand per dialect, and that is the entire
-per-warehouse surface area of this engine. Everything else is one emitter.
+Everything else is one emitter.
 """
 
 from __future__ import annotations
@@ -35,6 +35,30 @@ def _union_all_grid(n: int) -> str:
     which has no row generator reachable without a system table.
     """
     return " UNION ALL ".join(f"SELECT {i} AS period_index" for i in range(n + 1))
+
+
+def median_agg(expr: str, dialect: str) -> str:
+    """Aggregate median of ``expr`` in ``dialect``.
+
+    BigQuery has no aggregate ``MEDIAN`` / ``PERCENTILE_CONT``; it gets
+    ``APPROX_QUANTILES``. Exact medians elsewhere use ``percentile_cont`` or
+    native ``median``.
+    """
+    if dialect == "duckdb":
+        return f"median({expr})"
+    if dialect in ("postgres", "redshift"):
+        return f"percentile_cont(0.5) WITHIN GROUP (ORDER BY {expr})"
+    if dialect == "bigquery":
+        return f"APPROX_QUANTILES({expr}, 100)[OFFSET(50)]"
+    if dialect == "snowflake":
+        return f"median({expr})"
+    if dialect in ("databricks", "spark"):
+        return f"percentile_approx({expr}, 0.5)"
+    if dialect in ("trino", "presto"):
+        return f"approx_percentile({expr}, 0.5)"
+    if dialect == "clickhouse":
+        return f"median({expr})"
+    return f"median({expr})"
 
 
 def period_grid(n_periods: int, dialect: str) -> str:
