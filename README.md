@@ -212,11 +212,12 @@ factcat-app
 ```
 
 Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): billing
-project from ADC, then dataset → table → entity id and timestamp. Location
+project from ADC, then dataset → table → entity id and timestamp. Catalog
+lists load when you open a dropdown, not when you visit the page. Location
 is taken from the dataset (do not guess `US`). **Save and open Events**
-writes `.factcat.json` and goes to the Events chart (`/`). Change mapping
-later via Setup in the header. Advanced is only if you use a key file
-instead of ADC.
+writes `.factcat.json` and goes to the Events chart (`/`). Setup is a
+separate control at the bottom of the left rail, not an analysis.
+Advanced is only if you use a key file instead of ADC.
 
 On Events, optional event-name column is STRING only; **Only this event**
 is a DISTINCT of that column in the lookback window (blank = every event).

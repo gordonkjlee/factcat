@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Factcat — Setup{% endblock %}
 {% block extra_css %}
-    .setup-form { max-width: 28rem; padding: 1.5rem; background: #fff; min-height: calc(100vh - 2.75rem); }
+    .setup-form { max-width: 28rem; padding: 1.5rem; background: #fff; min-height: 100%; }
 {% endblock %}
 {% block body %}
 <form id="f" class="setup-form">
@@ -70,14 +70,11 @@ const TIME_TYPES = new Set({{ time_types|tojson }});
 let dsGen = 0;
 let tblGen = 0;
 let colGen = 0;
+let datasetsFetched = false;
+let tablesFetched = false;
+let columnsFetched = false;
+let suppressChange = false;
 
-function debounce(fn, ms) {
-  let t;
-  return () => {
-    clearTimeout(t);
-    t = setTimeout(fn, ms);
-  };
-}
 function setError(text) {
   document.getElementById("error").textContent = text || "";
 }
@@ -99,6 +96,7 @@ function typedOptions(cols, allowed) {
     }));
 }
 function fillSelect(sel, items, selected) {
+  suppressChange = true;
   const cur = selected || sel.value;
   sel.innerHTML = "";
   if (!items.length) {
@@ -128,6 +126,20 @@ function fillSelect(sel, items, selected) {
   }
   if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
   sel.hidden = false;
+  suppressChange = false;
+}
+function seedSelect(sel, value) {
+  suppressChange = true;
+  sel.innerHTML = "";
+  if (value) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = value;
+    sel.appendChild(opt);
+    sel.value = value;
+  }
+  sel.hidden = false;
+  suppressChange = false;
 }
 function catalogProject() {
   return dataProjectEl.value.trim() || projectEl.value.trim();
@@ -163,60 +175,37 @@ async function post(url, body) {
 }
 async function loadDatasets() {
   const gen = ++dsGen;
-  tblGen++;
-  colGen++;
   setError("");
-  hideSelect(tableNameEl);
-  clearColumns();
-  if (!catalogProject()) {
-    hideSelect(datasetEl);
-    return;
-  }
-  hideSelect(datasetEl);
+  if (!catalogProject()) return;
   setLoading(datasetEl, true);
   const data = await post("/api/datasets", authBody());
   if (gen !== dsGen) return;
   setLoading(datasetEl, false);
   if (!data.ok) {
-    hideSelect(datasetEl);
     setError(data.error || "Could not list datasets");
     return;
   }
-  fillSelect(datasetEl, (data.datasets || []).map((d) => d.id), saved.dataset);
-  if (datasetEl.value) await loadTables();
+  fillSelect(datasetEl, (data.datasets || []).map((d) => d.id), datasetEl.value || saved.dataset);
 }
 async function loadTables() {
   const gen = ++tblGen;
-  colGen++;
   setError("");
-  clearColumns();
-  if (!datasetEl.value) {
-    hideSelect(tableNameEl);
-    return;
-  }
-  hideSelect(tableNameEl);
+  if (!datasetEl.value) return;
   setLoading(tableNameEl, true);
   const data = await post("/api/tables", {...authBody(), dataset: datasetEl.value});
   if (gen !== tblGen) return;
   setLoading(tableNameEl, false);
   if (!data.ok) {
-    hideSelect(tableNameEl);
     setError(data.error || "Could not list tables");
     return;
   }
   if (data.location) locationEl.value = data.location;
-  fillSelect(tableNameEl, data.tables || [], saved.table_name);
-  if (tableNameEl.value) await loadColumns();
+  fillSelect(tableNameEl, data.tables || [], tableNameEl.value || saved.table_name);
 }
 async function loadColumns() {
   const gen = ++colGen;
   setError("");
-  if (!datasetEl.value || !tableNameEl.value) {
-    clearColumns();
-    return;
-  }
-  hideSelect(entityEl);
-  hideSelect(eventTimeEl);
+  if (!datasetEl.value || !tableNameEl.value) return;
   setLoading(entityEl, true);
   setLoading(eventTimeEl, true);
   const data = await post("/api/columns", {
@@ -228,25 +217,59 @@ async function loadColumns() {
   setLoading(entityEl, false);
   setLoading(eventTimeEl, false);
   if (!data.ok) {
-    clearColumns();
     setError(data.error || "Could not list columns");
     return;
   }
   if (data.location) locationEl.value = data.location;
   const cols = data.columns || [];
-  fillSelect(entityEl, typedOptions(cols, ENTITY_TYPES), saved.entity);
-  fillSelect(eventTimeEl, typedOptions(cols, TIME_TYPES), saved.event_time);
+  fillSelect(entityEl, typedOptions(cols, ENTITY_TYPES), entityEl.value || saved.entity);
+  fillSelect(eventTimeEl, typedOptions(cols, TIME_TYPES), eventTimeEl.value || saved.event_time);
   tableEl.value = combinedTable();
 }
 
-datasetEl.addEventListener("change", loadTables);
-tableNameEl.addEventListener("change", loadColumns);
-const scheduleDatasets = debounce(loadDatasets, 400);
-[projectEl, dataProjectEl, credentialsEl].forEach((el) => {
-  el.addEventListener("input", scheduleDatasets);
-  el.addEventListener("change", scheduleDatasets);
+datasetEl.addEventListener("mousedown", () => {
+  if (datasetsFetched) return;
+  datasetsFetched = true;
+  loadDatasets();
 });
-if (catalogProject()) loadDatasets();
+tableNameEl.addEventListener("mousedown", () => {
+  if (tablesFetched) return;
+  tablesFetched = true;
+  loadTables();
+});
+function fetchColumnsOnce() {
+  if (columnsFetched) return;
+  columnsFetched = true;
+  loadColumns();
+}
+entityEl.addEventListener("mousedown", fetchColumnsOnce);
+eventTimeEl.addEventListener("mousedown", fetchColumnsOnce);
+datasetEl.addEventListener("change", () => {
+  if (suppressChange) return;
+  tablesFetched = false;
+  columnsFetched = false;
+  seedSelect(tableNameEl, "");
+  clearColumns();
+  tableEl.value = "";
+});
+tableNameEl.addEventListener("change", () => {
+  if (suppressChange) return;
+  columnsFetched = false;
+  clearColumns();
+  tableEl.value = combinedTable();
+});
+[projectEl, dataProjectEl, credentialsEl].forEach((el) => {
+  el.addEventListener("input", () => {
+    datasetsFetched = false;
+    tablesFetched = false;
+    columnsFetched = false;
+  });
+});
+seedSelect(datasetEl, saved.dataset);
+seedSelect(tableNameEl, saved.table_name);
+seedSelect(entityEl, saved.entity);
+seedSelect(eventTimeEl, saved.event_time);
+tableEl.value = combinedTable();
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();

@@ -59,6 +59,10 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert 'aria-label="Loading"' in res.text
     assert 'value="adc-project"' in res.text
     assert 'href="/setup"' in res.text
+    assert "rail-setup" in res.text
+    assert "if (catalogProject()) loadDatasets()" not in res.text
+    assert 'addEventListener("mousedown"' in res.text
+    assert ">Analysis<" not in res.text
 
 
 def test_events_renders_when_mapped(monkeypatch, tmp_path):
@@ -72,7 +76,7 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert ">Uniques<" not in res.text
     assert "Only this event" in res.text
     assert "/api/event_values" in res.text
-    assert "Project setup" not in res.text
+    assert "<h1>Project setup</h1>" not in res.text
     assert "GCP project that runs" not in res.text
     assert "account_id" in res.text
     assert 'value="user_id"' not in res.text

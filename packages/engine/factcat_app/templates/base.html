@@ -8,18 +8,43 @@
   <style>
     :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #111; }
     html, body { height: 100%; margin: 0; }
-    body { background: #f4f4f5; display: flex; flex-direction: column; }
+    body { background: #f4f4f5; display: flex; flex-direction: row; }
     body.events { overflow: hidden; }
-    body.setup { overflow: auto; }
-    header {
-      display: flex; align-items: center; gap: 1rem;
-      height: 2.75rem; padding: 0 1rem; flex-shrink: 0;
-      background: #fff; border-bottom: 1px solid #e4e4e7;
+    body.setup { overflow: hidden; }
+    .rail {
+      width: 4.5rem;
+      flex-shrink: 0;
+      background: #fff;
+      border-right: 1px solid #e4e4e7;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      padding: 0.65rem 0.3rem;
     }
-    .brand { font-weight: 700; font-size: 0.95rem; color: #111; text-decoration: none; }
-    header nav { display: flex; gap: 0.75rem; }
-    header a { color: #52525b; text-decoration: none; font-size: 0.85rem; }
-    header a.active { color: #111; font-weight: 600; }
+    .brand {
+      display: block;
+      text-align: center;
+      font-weight: 700;
+      font-size: 0.75rem;
+      color: #111;
+      text-decoration: none;
+      padding: 0.35rem 0 0.75rem;
+    }
+    .rail-reports { display: flex; flex-direction: column; gap: 0.25rem; flex: 1; }
+    .rail-item {
+      display: block;
+      text-align: center;
+      font-size: 0.7rem;
+      line-height: 1.2;
+      padding: 0.5rem 0.15rem;
+      color: #52525b;
+      text-decoration: none;
+      border-radius: 0.3rem;
+    }
+    .rail-item.active { background: #f4f4f5; color: #111; font-weight: 600; }
+    .rail-setup { margin-top: auto; }
+    .app { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+    body.setup .app { overflow: auto; }
     h1 { font-size: 1.1rem; margin: 0 0 0.35rem; }
     h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; margin: 1.1rem 0 0.4rem; }
     .lede { font-size: 0.8rem; color: #52525b; margin: 0 0 0.75rem; }
@@ -36,7 +61,7 @@
       border-radius: 50%; vertical-align: -0.1em;
       animation: spin 0.35s linear infinite;
     }
-    .loading[hidden], select[hidden], #event_value-wrap[hidden] { display: none !important; }
+    .loading[hidden], #event_value-wrap[hidden] { display: none !important; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) {
       .loading { animation: none; border-top-color: #52525b; }
@@ -49,13 +74,15 @@
   </style>
 </head>
 <body class="{{ screen }}">
-<header>
-  <a class="brand" href="/">Factcat</a>
-  <nav>
-    <a href="/" class="{% if screen == 'events' %}active{% endif %}">Events</a>
-    <a href="/setup" class="{% if screen == 'setup' %}active{% endif %}">Setup</a>
+<aside class="rail">
+  <a class="brand" href="/" title="Factcat">Fc</a>
+  <nav class="rail-reports" aria-label="Reports">
+    <a href="/" class="rail-item{% if screen == 'events' %} active{% endif %}">Events</a>
   </nav>
-</header>
+  <a href="/setup" class="rail-item rail-setup{% if screen == 'setup' %} active{% endif %}" title="Project setup">Setup</a>
+</aside>
+<div class="app">
 {% block body %}{% endblock %}
+</div>
 </body>
 </html>
