@@ -22,7 +22,9 @@ def test_index_renders(monkeypatch, tmp_path):
     assert "/path/to/key.json" not in res.text
     assert "dataset.events" not in res.text
     assert "subscription_id" not in res.text
-    assert "Load datasets" in res.text
+    assert "Load datasets" not in res.text
+    assert "form.dataset" not in res.text
+    assert 'getElementById("dataset")' in res.text
     assert 'value="adc-project"' in res.text
 
 

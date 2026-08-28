@@ -212,8 +212,9 @@ factcat-app
 ```
 
 Open http://127.0.0.1:8000. The billing project is filled from ADC when possible.
-Click **Load datasets**, pick dataset → table → entity and timestamp columns. Location
-is taken from the dataset (do not guess `US`). Advanced is only if you use a
+Dataset, table, and column lists load when the project (then each parent
+field) is set. Pick dataset → table → entity and timestamp. Location is
+taken from the dataset (do not guess `US`). Advanced is only if you use a
 key file instead of ADC.
 
 If the table lives in another GCP project (billing in `dev`, data in `prod`), set

@@ -17,7 +17,6 @@
     input, select { width: 100%; box-sizing: border-box; padding: 0.4rem 0.5rem; }
     .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
     button { margin-top: 0.75rem; padding: 0.5rem 0.9rem; }
-    button.secondary { background: #fff; }
     #chart-wrap { padding: 1.25rem; }
     #error { color: #b91c1c; white-space: pre-wrap; font-size: 0.85rem; }
     #status { color: #52525b; font-size: 0.8rem; min-height: 1.2em; }
@@ -40,7 +39,6 @@
     <input id="data_project" name="data_project" autocomplete="off" value="{{ config.data_project }}">
     <input type="hidden" name="location" id="location" value="{{ config.location }}">
     <input type="hidden" name="table" id="table" value="{{ config.table }}">
-    <button type="button" id="load-datasets" class="secondary">Load datasets</button>
 
     <h2>2. Table</h2>
     <label for="dataset">Dataset</label>
@@ -108,8 +106,30 @@ const saved = {
   event_column: {{ config.event_column|tojson }},
 };
 const form = document.getElementById("f");
+// HTMLElement.dataset is data-* attributes. Access the BigQuery dataset
+// select by id, not as a property of the form.
+const projectEl = document.getElementById("project");
+const dataProjectEl = document.getElementById("data_project");
+const datasetEl = document.getElementById("dataset");
+const tableNameEl = document.getElementById("table_name");
+const tableEl = document.getElementById("table");
+const locationEl = document.getElementById("location");
+const entityEl = document.getElementById("entity");
+const eventTimeEl = document.getElementById("event_time");
+const eventColumnEl = document.getElementById("event_column");
+const credentialsEl = document.getElementById("credentials");
 let chart;
+let dsGen = 0;
+let tblGen = 0;
+let colGen = 0;
 
+function debounce(fn, ms) {
+  let t;
+  return () => {
+    clearTimeout(t);
+    t = setTimeout(fn, ms);
+  };
+}
 function setStatus(text) {
   document.getElementById("status").textContent = text || "";
 }
@@ -138,21 +158,30 @@ function fillSelect(sel, items, selected, blankLabel) {
   }
   if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
 }
+function catalogProject() {
+  return dataProjectEl.value.trim() || projectEl.value.trim();
+}
 function authBody() {
   return {
-    project: form.project.value.trim(),
-    data_project: form.data_project.value.trim(),
-    credentials: form.credentials.value.trim(),
+    project: projectEl.value.trim(),
+    data_project: dataProjectEl.value.trim(),
+    credentials: credentialsEl.value.trim(),
   };
 }
 function combinedTable() {
-  const billing = form.project.value.trim();
-  const data = form.data_project.value.trim() || billing;
-  const dataset = form.dataset.value.trim();
-  const tableName = form.table_name.value.trim();
+  const billing = projectEl.value.trim();
+  const data = dataProjectEl.value.trim() || billing;
+  const dataset = datasetEl.value.trim();
+  const tableName = tableNameEl.value.trim();
   if (!dataset || !tableName) return "";
   if (data && data !== billing) return data + "." + dataset + "." + tableName;
   return dataset + "." + tableName;
+}
+function clearColumns() {
+  fillSelect(entityEl, [], "", "Select entity column");
+  fillSelect(eventTimeEl, [], "", "Select timestamp column");
+  fillSelect(eventColumnEl, [], "", "(none)");
+  tableEl.value = "";
 }
 async function post(url, body) {
   const res = await fetch(url, {
@@ -163,65 +192,104 @@ async function post(url, body) {
   return res.json();
 }
 async function loadDatasets() {
+  const gen = ++dsGen;
+  tblGen++;
+  colGen++;
   setError("");
+  if (!catalogProject()) {
+    fillSelect(datasetEl, [], "", "Select a dataset");
+    fillSelect(tableNameEl, [], "", "Select a table");
+    clearColumns();
+    setStatus("");
+    return;
+  }
   setStatus("Loading datasets…");
   const data = await post("/api/datasets", authBody());
+  if (gen !== dsGen) return;
   if (!data.ok) {
+    fillSelect(datasetEl, [], "", "Select a dataset");
+    fillSelect(tableNameEl, [], "", "Select a table");
+    clearColumns();
     setStatus("");
     setError(data.error || "Could not list datasets");
     return;
   }
-  fillSelect(form.dataset, (data.datasets || []).map((d) => d.id), saved.dataset, "Select a dataset");
+  fillSelect(datasetEl, (data.datasets || []).map((d) => d.id), saved.dataset, "Select a dataset");
   setStatus((data.datasets || []).length + " datasets");
-  if (form.dataset.value) await loadTables();
+  if (datasetEl.value) await loadTables();
+  else {
+    fillSelect(tableNameEl, [], "", "Select a table");
+    clearColumns();
+  }
 }
 async function loadTables() {
+  const gen = ++tblGen;
+  colGen++;
   setError("");
-  if (!form.dataset.value) return;
+  if (!datasetEl.value) {
+    fillSelect(tableNameEl, [], "", "Select a table");
+    clearColumns();
+    return;
+  }
   setStatus("Loading tables…");
-  const data = await post("/api/tables", {...authBody(), dataset: form.dataset.value});
+  const data = await post("/api/tables", {...authBody(), dataset: datasetEl.value});
+  if (gen !== tblGen) return;
   if (!data.ok) {
+    fillSelect(tableNameEl, [], "", "Select a table");
+    clearColumns();
     setStatus("");
     setError(data.error || "Could not list tables");
     return;
   }
-  if (data.location) form.location.value = data.location;
-  fillSelect(form.table_name, data.tables || [], saved.table_name, "Select a table");
+  if (data.location) locationEl.value = data.location;
+  fillSelect(tableNameEl, data.tables || [], saved.table_name, "Select a table");
   setStatus((data.tables || []).length + " tables" + (data.location ? " · " + data.location : ""));
-  if (form.table_name.value) await loadColumns();
+  if (tableNameEl.value) await loadColumns();
+  else clearColumns();
 }
 async function loadColumns() {
+  const gen = ++colGen;
   setError("");
-  if (!form.dataset.value || !form.table_name.value) return;
+  if (!datasetEl.value || !tableNameEl.value) {
+    clearColumns();
+    return;
+  }
   setStatus("Loading columns…");
   const data = await post("/api/columns", {
     ...authBody(),
-    dataset: form.dataset.value,
-    table_name: form.table_name.value,
+    dataset: datasetEl.value,
+    table_name: tableNameEl.value,
   });
+  if (gen !== colGen) return;
   if (!data.ok) {
+    clearColumns();
     setStatus("");
     setError(data.error || "Could not list columns");
     return;
   }
-  if (data.location) form.location.value = data.location;
+  if (data.location) locationEl.value = data.location;
   const cols = (data.columns || []).map((c) => ({
     value: c.name,
     label: c.type ? c.name + " (" + c.type + ")" : c.name,
   }));
-  fillSelect(form.entity, cols, saved.entity, "Select entity column");
-  fillSelect(form.event_time, cols, saved.event_time, "Select timestamp column");
-  fillSelect(form.event_column, cols, saved.event_column, "(none)");
-  form.table.value = combinedTable();
+  fillSelect(entityEl, cols, saved.entity, "Select entity column");
+  fillSelect(eventTimeEl, cols, saved.event_time, "Select timestamp column");
+  fillSelect(eventColumnEl, cols, saved.event_column, "(none)");
+  tableEl.value = combinedTable();
   setStatus((data.columns || []).length + " columns");
 }
 
-document.getElementById("load-datasets").addEventListener("click", loadDatasets);
-form.dataset.addEventListener("change", loadTables);
-form.table_name.addEventListener("change", loadColumns);
+datasetEl.addEventListener("change", loadTables);
+tableNameEl.addEventListener("change", loadColumns);
+const scheduleDatasets = debounce(loadDatasets, 400);
+[projectEl, dataProjectEl, credentialsEl].forEach((el) => {
+  el.addEventListener("input", scheduleDatasets);
+  el.addEventListener("change", scheduleDatasets);
+});
+if (catalogProject()) loadDatasets();
 
 function payload() {
-  form.table.value = combinedTable();
+  tableEl.value = combinedTable();
   const d = Object.fromEntries(new FormData(form).entries());
   d.exact = document.getElementById("exact").checked;
   d.lookback_days = Number(d.lookback_days);
@@ -271,8 +339,6 @@ form.addEventListener("submit", async (e) => {
     });
   }
 });
-
-if (form.project.value) loadDatasets();
 </script>
 </body>
 </html>
