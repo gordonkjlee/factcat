@@ -111,7 +111,11 @@ form.addEventListener("submit", async (e) => {
     labels.push(row.bucket);
     values.push(row.value);
     const tr = document.createElement("tr");
-    tr.innerHTML = "<td>" + row.bucket + "</td><td>" + row.value + "</td>";
+    const tdBucket = document.createElement("td");
+    const tdValue = document.createElement("td");
+    tdBucket.textContent = row.bucket;
+    tdValue.textContent = row.value;
+    tr.append(tdBucket, tdValue);
     tbody.appendChild(tr);
   }
   const ctx = document.getElementById("chart");

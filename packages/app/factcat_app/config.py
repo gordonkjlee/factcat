@@ -30,6 +30,14 @@ def config_path() -> Path:
     return Path(raw)
 
 
+def _merge(raw: dict[str, Any]) -> dict[str, Any]:
+    data = dict(DEFAULTS)
+    for key in DEFAULTS:
+        if key in raw and raw[key] is not None:
+            data[key] = raw[key]
+    return data
+
+
 def load() -> dict[str, Any]:
     path = config_path()
     data = dict(DEFAULTS)
@@ -37,12 +45,11 @@ def load() -> dict[str, Any]:
         loaded = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(loaded, dict):
             raise ValueError("config must be a JSON object")
-        data.update(loaded)
+        data = _merge(loaded)
     return data
 
 
 def save(data: dict[str, Any]) -> None:
-    merged = dict(DEFAULTS)
-    merged.update(data)
+    merged = _merge(data)
     path = config_path()
     path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")

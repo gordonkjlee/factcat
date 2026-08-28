@@ -5,12 +5,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from factcat import EventsSpec
+from factcat import EVENT_MEASURES, EventsSpec
 
 _TABLE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_]+)+$")
 _COLUMN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _GRAINS = ("day", "week", "month")
-_MEASURES = ("total", "uniques", "average")
 
 
 def _ident_table(value: str, label: str) -> str:
@@ -19,7 +18,9 @@ def _ident_table(value: str, label: str) -> str:
         raise ValueError(
             f"{label} must be dataset.table or project.dataset.table"
         )
-    return value
+    # DuckDB-quoted so sqlglot can parse hyphenated GCP project ids, then
+    # emit BigQuery backticks. Unquoted my-proj.ds.t is subtraction.
+    return ".".join(f'"{part}"' for part in value.split("."))
 
 
 def _ident_column(value: str, label: str) -> str:
@@ -41,13 +42,16 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     entity = _ident_column(entity, "entity")
     event_time = _ident_column(str(form.get("event_time") or ""), "event_time")
     measure = str(form.get("measure") or "uniques")
-    if measure not in _MEASURES:
+    if measure not in EVENT_MEASURES:
         raise ValueError("measure must be total, uniques, or average")
     grain = str(form.get("grain") or "day")
     if grain not in _GRAINS:
         raise ValueError("grain must be day, week, or month")
+    raw_lookback = form.get("lookback_days", 30)
+    if raw_lookback in (None, ""):
+        raw_lookback = 30
     try:
-        lookback = int(form.get("lookback_days") or 30)
+        lookback = int(raw_lookback)
     except (TypeError, ValueError) as exc:
         raise ValueError("lookback_days must be an integer") from exc
     if lookback < 1 or lookback > 3650:
@@ -56,7 +60,9 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     exact_raw = form.get("exact")
     exact = exact_raw in (True, "true", "on", "1", 1)
 
-    clauses = [f"{event_time} >= current_date - INTERVAL {lookback} DAY"]
+    # Integer days, not INTERVAL: sqlglot's INTERVAL '30' DAY is not BigQuery.
+    # DuckDB and BigQuery both treat DATE - INT as days.
+    clauses = [f"{event_time} >= current_date - {lookback}"]
     event_column = (form.get("event_column") or "").strip()
     event_value = (form.get("event_value") or "").strip()
     if event_column or event_value:

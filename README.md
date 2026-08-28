@@ -87,11 +87,12 @@ print(events_sql(spec, dialect="bigquery"))
 ```
 
 Uniques, Distinct, and Median default to **approx** (`exact=False`):
-`APPROX_COUNT_DISTINCT` / `APPROX_QUANTILES` on BigQuery. A later chart toggle
-sets `exact=True` for `COUNT DISTINCT` / `PERCENTILE_CONT`. Total, Sum, and
-property Average stay exact either way.
+`APPROX_COUNT_DISTINCT` / `APPROX_QUANTILES` on BigQuery. The local app’s
+Exact toggle sets `exact=True` for `COUNT DISTINCT` / `PERCENTILE_CONT`.
+Total, Sum, and property Average stay exact either way.
 
-Day/week/month in a later UI fill a `bucket` expression such as `date_trunc('week', occurred_at)`. There is no `period: day|week|month` field.
+Day/week/month buttons in the app fill a `bucket` expression such as
+`date_trunc('week', occurred_at)`. There is no `period: day|week|month` field.
 
 ## Why the entity matters
 
@@ -223,6 +224,9 @@ Open http://127.0.0.1:8000. On first run the form is empty. Fill in:
 Click **Run**. The mapping is written to `.factcat.json` in the directory where you started
 `factcat-app`, so the next start is already filled in. ADC lives in your user profile; you
 do not log in to Google every time you start the app.
+
+Queries are capped at 10 GiB scanned (the BigQuery adapter default). The form does not
+expose that cap; raise `maximum_bytes_billed` from Python if a table needs more.
 
 Stop the server with Ctrl+C. To use a key file instead of ADC, paste the JSON path in the
 form. The app never copies your events off BigQuery.

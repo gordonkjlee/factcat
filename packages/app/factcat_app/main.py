@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from factcat import events_sql
-from factcat.warehouses import connect
+from factcat.warehouses import AdapterError, connect
 
 from .config import load, save
 from .query import connection_from_form, spec_from_form
@@ -43,7 +42,7 @@ async def api_run(request: Request) -> JSONResponse:
         sql = events_sql(spec, dialect="bigquery")
         warehouse = connect("bigquery", **conn)
         result = warehouse.run(sql)
-    except Exception as exc:
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     rows = [{"bucket": str(r.get("bucket", "")), "value": r.get("value")} for r in result.rows]
     return JSONResponse({"ok": True, "sql": sql, "rows": rows})
