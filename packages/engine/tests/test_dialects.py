@@ -12,7 +12,15 @@ import logging
 
 import pytest
 
-from factcat import SUPPORTED, FunnelSpec, RetentionSpec, funnel_sql, retention_sql
+from factcat import (
+    SUPPORTED,
+    EventsSpec,
+    FunnelSpec,
+    RetentionSpec,
+    events_sql,
+    funnel_sql,
+    retention_sql,
+)
 from factcat._emit import GRID_RELATION, transpile_with_grid
 
 RETENTION = RetentionSpec(
@@ -31,6 +39,22 @@ FUNNEL = FunnelSpec(
     event_time="occurred_at",
     steps=("event_name = 'view'", "event_name = 'cart'"),
     within_days=7,
+)
+
+EVENTS = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="uniques",
+    where="event_name = 'view'",
+)
+
+EVENTS_AVG = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="average",
+    of="amount",
 )
 
 
@@ -66,6 +90,16 @@ def test_retention_emits_without_warnings(dialect, sqlglot_warnings):
 @pytest.mark.parametrize("dialect", SUPPORTED)
 def test_funnel_emits_without_warnings(dialect, sqlglot_warnings):
     funnel_sql(FUNNEL, dialect=dialect)
+
+    assert sqlglot_warnings.messages == [], (
+        f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
+    )
+
+
+@pytest.mark.parametrize("dialect", SUPPORTED)
+def test_events_emits_without_warnings(dialect, sqlglot_warnings):
+    events_sql(EVENTS, dialect=dialect)
+    events_sql(EVENTS_AVG, dialect=dialect)
 
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"

@@ -22,6 +22,21 @@ spec = RetentionSpec(
 print(retention_sql(spec, dialect="snowflake"))
 ```
 
+```python
+from factcat import EventsSpec, events_sql
+
+print(events_sql(EventsSpec(
+    table="analytics.fct_events",
+    entity="subscription_id",
+    event_time="occurred_at",
+    measure="uniques",
+)))
+```
+
+`measure` is `total`, `uniques`, `average`, `sum`, `min` or `max`. Uniques is
+`COUNT DISTINCT` of `entity`. Average/sum/min/max take `of=` a numeric SQL
+expression.
+
 `retained` is arbitrary SQL over any column in your table, plus the derived columns
 `offset_days`, `period_index` and `within_period_offset`.
 

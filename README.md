@@ -68,6 +68,23 @@ spec = FunnelSpec(
 )
 ```
 
+The everyday report is a time series of **Total**, **Uniques**, **Average**, **Sum**, **Minimum** or **Maximum**. Uniques is `COUNT DISTINCT` of your entity, not of users:
+
+```python
+from factcat import EventsSpec, events_sql
+
+spec = EventsSpec(
+    table="analytics.fct_events",
+    entity="subscription_id",
+    event_time="occurred_at",
+    measure="uniques",
+    where="event_name = 'paid'",
+)
+print(events_sql(spec, dialect="bigquery"))
+```
+
+Day/week/month in a later UI fill a `bucket` expression such as `date_trunc('week', occurred_at)`. There is no `period: day|week|month` field.
+
 ## Why the entity matters
 
 The same table, the same predicate, two grains, two different answers:

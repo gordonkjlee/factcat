@@ -8,6 +8,13 @@ document as much as the code is.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+Measure = Literal["total", "uniques", "average", "sum", "min", "max"]
+
+# One definition: UI labels live in the README, not here.
+MEASURES: tuple[Measure, ...] = ("total", "uniques", "average", "sum", "min", "max")
+_OF_MEASURES: frozenset[str] = frozenset({"average", "sum", "min", "max"})
 
 
 @dataclass(frozen=True)
@@ -100,3 +107,60 @@ class FunnelSpec:
         if self.step_labels is not None:
             return self.step_labels
         return tuple(f"step_{i}" for i in range(len(self.steps)))
+
+
+@dataclass(frozen=True)
+class EventsSpec:
+    """A time-series count / uniques / numeric aggregation.
+
+    This is the everyday report (how many, how many unique, average of a
+    number). The chart labels Total, Uniques, Average, Sum, Minimum, Maximum
+    are sugar. The API is ``measure`` plus caller ``entity`` — Uniques is
+    ``COUNT DISTINCT`` of that entity, not of a column called ``user_id``.
+
+    The x-axis is ``bucket``, a SQL expression. Day/week/month buttons in a
+    later UI fill ``date_trunc(...)``. There is no ``period: day|week|month``
+    field.
+
+    Attributes:
+        table:      source relation.
+        entity:     grain for Uniques. Caller-supplied.
+        event_time: expression giving the observation instant (also used in
+                    the default day bucket).
+        measure:    ``total`` / ``uniques`` / ``average`` / ``sum`` / ``min``
+                    / ``max``.
+        of:         numeric SQL expression. Required for average/sum/min/max;
+                    forbidden for total/uniques.
+        bucket:     SQL expression for the time axis. Default is
+                    ``date_trunc('day', {event_time})``.
+        where:      optional filter on the source relation.
+    """
+
+    table: str
+    entity: str
+    event_time: str
+    measure: Measure
+    of: str | None = None
+    bucket: str | None = None
+    where: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.measure not in MEASURES:
+            raise ValueError(f"measure must be one of {MEASURES}")
+        of_set = self.of is not None and bool(self.of.strip())
+        if self.measure in _OF_MEASURES:
+            if not of_set:
+                raise ValueError(f"{self.measure} requires of= a numeric SQL expression")
+        elif of_set:
+            raise ValueError(f"{self.measure} does not take of=")
+        if not self.entity.strip():
+            raise ValueError("entity is required")
+        if not self.event_time.strip():
+            raise ValueError("event_time is required")
+        if self.bucket is not None and not self.bucket.strip():
+            raise ValueError("bucket must be a SQL expression if set")
+
+    def bucket_sql(self) -> str:
+        if self.bucket is not None:
+            return self.bucket
+        return f"date_trunc('day', {self.event_time})"
