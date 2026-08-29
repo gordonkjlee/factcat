@@ -4,18 +4,38 @@
   <meta charset="utf-8">
   <title>{% block title %}Factcat{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
   {% block extra_head %}{% endblock %}
   <style>
-    :root { font-family: ui-sans-serif, system-ui, sans-serif; color: #111; }
+    :root {
+      --fc-ink: #1C1917;
+      --fc-ink-soft: #44403C;
+      --fc-paper: #F4EFE6;
+      --fc-snow: #FFFCF7;
+      --fc-slate: #5C6B73;
+      --fc-slate-deep: #3D4A52;
+      --fc-ochre: #C4841D;
+      --fc-ochre-deep: #9A6814;
+      --fc-line: #E6DCCF;
+      --fc-alert: #B42318;
+      --fc-ok: #3F6B4B;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      color: var(--fc-ink);
+    }
     html, body { height: 100%; margin: 0; }
-    body { background: #f4f4f5; display: flex; flex-direction: row; }
+    body {
+      background: var(--fc-paper);
+      display: flex;
+      flex-direction: row;
+    }
     body.events { overflow: hidden; }
     body.setup { overflow: hidden; }
     .rail {
       width: 4.5rem;
       flex-shrink: 0;
-      background: #fff;
-      border-right: 1px solid #e4e4e7;
+      background: var(--fc-slate-deep);
+      color: var(--fc-snow);
       display: flex;
       flex-direction: column;
       align-items: stretch;
@@ -24,12 +44,10 @@
     .brand {
       display: block;
       text-align: center;
-      font-weight: 700;
-      font-size: 0.75rem;
-      color: #111;
       text-decoration: none;
       padding: 0.35rem 0 0.75rem;
     }
+    .brand img { width: 2.1rem; height: 2.1rem; display: block; margin: 0 auto; }
     .rail-reports { display: flex; flex-direction: column; gap: 0.25rem; flex: 1; }
     .rail-item {
       display: block;
@@ -37,45 +55,67 @@
       font-size: 0.7rem;
       line-height: 1.2;
       padding: 0.5rem 0.15rem;
-      color: #52525b;
+      color: rgba(255, 252, 247, 0.72);
       text-decoration: none;
       border-radius: 0.3rem;
     }
-    .rail-item.active { background: #f4f4f5; color: #111; font-weight: 600; }
+    .rail-item:hover { color: var(--fc-snow); background: rgba(255, 252, 247, 0.08); }
+    .rail-item.active {
+      background: rgba(196, 132, 29, 0.22);
+      color: var(--fc-snow);
+      font-weight: 600;
+    }
     .rail-setup { margin-top: auto; }
     .app { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
     body.setup .app { overflow: auto; }
     h1 { font-size: 1.1rem; margin: 0 0 0.35rem; }
-    h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; margin: 1.1rem 0 0.4rem; }
-    .lede { font-size: 0.8rem; color: #52525b; margin: 0 0 0.75rem; }
+    h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fc-slate); margin: 1.1rem 0 0.4rem; }
+    .lede { font-size: 0.8rem; color: var(--fc-ink-soft); margin: 0 0 0.75rem; }
     label { display: block; font-size: 0.75rem; font-weight: 600; margin: 0.65rem 0 0.2rem; }
-    input, select { width: 100%; box-sizing: border-box; padding: 0.4rem 0.5rem; }
+    input, select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid var(--fc-line);
+      background: var(--fc-snow);
+      color: var(--fc-ink);
+    }
     .row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem; }
-    button { margin-top: 0.75rem; padding: 0.5rem 0.9rem; }
-    #error { color: #b91c1c; white-space: pre-wrap; font-size: 0.85rem; }
-    .hint { display: block; font-weight: 400; color: #71717a; font-size: 0.7rem; margin: 0.15rem 0 0.35rem; }
+    button {
+      margin-top: 0.75rem;
+      padding: 0.5rem 0.9rem;
+      background: var(--fc-ink);
+      color: var(--fc-snow);
+      border: 0;
+      border-radius: 0.25rem;
+    }
+    button.secondary { background: var(--fc-snow); color: var(--fc-ink); border: 1px solid var(--fc-line); }
+    #error { color: var(--fc-alert); white-space: pre-wrap; font-size: 0.85rem; }
+    .hint { display: block; font-weight: 400; color: var(--fc-slate); font-size: 0.7rem; margin: 0.15rem 0 0.35rem; }
     .loading {
       display: inline-block;
       width: 0.7em; height: 0.7em; margin-left: 0.45rem;
-      border: 2px solid #e4e4e7; border-top-color: #52525b;
+      border: 2px solid var(--fc-line); border-top-color: var(--fc-ochre);
       border-radius: 50%; vertical-align: -0.1em;
       animation: spin 0.35s linear infinite;
     }
     .loading[hidden], #event_value-wrap[hidden] { display: none !important; }
     @keyframes spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) {
-      .loading { animation: none; border-top-color: #52525b; }
+      .loading { animation: none; border-top-color: var(--fc-ochre); }
     }
     table { border-collapse: collapse; margin-top: 1rem; font-size: 0.85rem; }
-    td, th { border-bottom: 1px solid #e4e4e7; padding: 0.25rem 0.75rem 0.25rem 0; text-align: left; }
+    td, th { border-bottom: 1px solid var(--fc-line); padding: 0.25rem 0.75rem 0.25rem 0; text-align: left; }
     details { margin-top: 0.75rem; font-size: 0.75rem; }
-    pre { overflow: auto; background: #fff; padding: 0.75rem; }
+    pre { overflow: auto; background: var(--fc-snow); padding: 0.75rem; }
     {% block extra_css %}{% endblock %}
   </style>
 </head>
 <body class="{{ screen }}">
 <aside class="rail">
-  <a class="brand" href="/" title="Factcat">Fc</a>
+  <a class="brand" href="/" title="Factcat">
+    <img src="/static/logo.svg" width="34" height="34" alt="Factcat">
+  </a>
   <nav class="rail-reports" aria-label="Reports">
     <a href="/" class="rail-item{% if screen == 'events' %} active{% endif %}">Events</a>
   </nav>

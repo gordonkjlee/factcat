@@ -182,7 +182,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "pane-chart" in res.text
     assert "pane-table" in res.text
     assert "pane-sql" in res.text
-    assert "Run to plot." in res.text
+    assert "The cat is waiting." in res.text
+    assert "Run to plot." not in res.text
     assert "Run to see rows." in res.text
     assert "Run to see generated SQL." in res.text
     assert "<summary>SQL</summary>" not in res.text
@@ -546,6 +547,47 @@ def test_template_ships_with_package():
     assert (templates / "index.html").is_file()
     assert (templates / "setup.html").is_file()
     assert (templates / "base.html").is_file()
+    static = Path(APP_DIR) / "static"
+    assert (static / "logo.svg").is_file()
+    assert (static / "favicon.ico").is_file()
+    assert (static / "waiting.jpg").is_file()
+
+
+def test_favicon_and_mark_are_served(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    ico = client.get("/favicon.ico")
+    assert ico.status_code == 200
+    assert ico.content[:4] == b"\x00\x00\x01\x00"
+    mark = client.get("/static/logo.svg")
+    assert mark.status_code == 200
+    assert b"#5C6B73" in mark.content
+    assert b"#C4841D" in mark.content
+
+
+def test_chrome_uses_tokens_and_empty_state(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr("factcat_app.main.bootstrap_project", lambda: "adc-project")
+    client = TestClient(app)
+    setup = client.get("/setup").text
+    assert "--fc-ochre: #C4841D" in setup
+    assert "/static/logo.svg" in setup
+    assert "purrfect" not in setup.lower()
+    _map_cfg(tmp_path, monkeypatch)
+    events = client.get("/").text
+    assert "--fc-ochre: #C4841D" in events
+    assert "/static/logo.svg" in events
+    assert "/static/waiting.jpg" in events
+    assert "The cat is waiting." in events
+    assert "purrfect" not in events.lower()
+    assert "Fc</a>" not in events
+
+
+def test_readme_keeps_etymology_and_points_at_the_mark():
+    readme = Path(APP_DIR).resolve().parents[2] / "README.md"
+    text = readme.read_text(encoding="utf-8")
+    assert "cat** is how you read a file" in text
+    assert "packages/engine/factcat_app/static/logo.svg" in text
 
 
 def test_mapping_ready_requires_table_entity_and_time():
