@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/gordonkjlee/factcat/compare/v0.4.0...v0.4.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **app:** include Setup guide once in the wheel ([#23](https://github.com/gordonkjlee/factcat/issues/23)) ([a4d6a55](https://github.com/gordonkjlee/factcat/commit/a4d6a55b6183cbfc7ac618c0f2ad8207a3c3f7de))
+
 ## [0.4.0](https://github.com/gordonkjlee/factcat/compare/v0.3.0...v0.4.0) (2026-08-29)
 
 
