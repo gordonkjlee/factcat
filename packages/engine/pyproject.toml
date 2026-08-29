@@ -44,10 +44,6 @@ Source = "https://github.com/gordonkjlee/factcat"
 [tool.hatch.build.targets.wheel]
 packages = ["factcat", "factcat_app"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"factcat_app/static" = "factcat_app/static"
-"factcat_app/guides" = "factcat_app/guides"
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
