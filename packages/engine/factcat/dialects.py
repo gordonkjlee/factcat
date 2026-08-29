@@ -14,6 +14,8 @@ window functions. Two constructs do not survive cleanly:
 3. **Week-start DATE_TRUNC.** DuckDB ``date_trunc('week', x)`` is Monday;
    sqlglot emits BigQuery ``TIMESTAMP_TRUNC(x, WEEK)``, which is Sunday.
    ``WEEK(MONDAY)`` / ``WEEK(SUNDAY)`` must be spliced.
+4. **Top-N category labels.** BigQuery ``APPROX_TOP_COUNT`` does not transpile
+   from DuckDB ``GROUP BY … LIMIT``. Exact pick is ordinary SQL.
 
 Everything else is one emitter.
 """
@@ -68,34 +70,46 @@ def count_distinct(expr: str, dialect: str, *, exact: bool) -> str:
     return f"COUNT(DISTINCT {expr})"
 
 
-def median_select_from_base(dialect: str, *, exact: bool) -> str:
-    """``SELECT bucket, value`` from ``base`` (columns ``fc_bucket``, ``fc_of``).
+def median_select_from_base(
+    dialect: str,
+    *,
+    exact: bool,
+    extra_group: tuple[str, ...] = (),
+    relation: str = "base",
+) -> str:
+    """``SELECT bucket, [extra…,] value`` from ``relation`` (``fc_bucket``, ``fc_of``).
 
     Exact BigQuery: ``PERCENTILE_CONT(fc_of, 0.5)`` window. Approx BigQuery:
     ``APPROX_QUANTILES``. Elsewhere exact is ``median``; approx is
     ``approx_quantile`` where it exists, else exact.
     """
+    extras = ", ".join(extra_group)
+    extra_select = f", {extras}" if extras else ""
+    extra_part = f", {extras}" if extras else ""
+    n_group = 1 + len(extra_group)
+    group_by = ", ".join(str(i) for i in range(1, n_group + 1))
     if dialect == "bigquery":
+        inner_keys = "fc_bucket" + extra_select
         if exact:
-            return """SELECT
-        fc_bucket AS bucket,
+            return f"""SELECT
+        fc_bucket AS bucket{extra_select},
         MIN(fc_p) AS value
     FROM (
         SELECT
-            fc_bucket,
+            {inner_keys},
             PERCENTILE_CONT(fc_of, 0.5 IGNORE NULLS) OVER (
-                PARTITION BY fc_bucket
+                PARTITION BY fc_bucket{extra_part}
             ) AS fc_p
-        FROM base
+        FROM {relation}
     )
-    GROUP BY 1
-    ORDER BY 1"""
-        return """SELECT
-        fc_bucket AS bucket,
+    GROUP BY {group_by}
+    ORDER BY {group_by}"""
+        return f"""SELECT
+        fc_bucket AS bucket{extra_select},
         APPROX_QUANTILES(fc_of, 100)[OFFSET(50)] AS value
-    FROM base
-    GROUP BY 1
-    ORDER BY 1"""
+    FROM {relation}
+    GROUP BY {group_by}
+    ORDER BY {group_by}"""
     if exact or dialect == "postgres":
         agg = "median(fc_of)"
     elif dialect == "duckdb":
@@ -109,11 +123,46 @@ def median_select_from_base(dialect: str, *, exact: bool) -> str:
     else:
         agg = "median(fc_of)"
     return f"""SELECT
-        fc_bucket AS bucket,
+        fc_bucket AS bucket{extra_select},
         {agg} AS value
-    FROM base
-    GROUP BY 1
-    ORDER BY 1"""
+    FROM {relation}
+    GROUP BY {group_by}
+    ORDER BY {group_by}"""
+
+
+def top_labels_select(
+    source: str,
+    cols: tuple[str, ...],
+    n: int,
+    *,
+    dialect: str,
+    exact: bool,
+    rank_sql: str,
+) -> str:
+    """SQL that returns the top ``n`` category keys from ``source``.
+
+    Exact pick is ``GROUP BY cols ORDER BY rank LIMIT n``. BigQuery ``exact=False``
+    and a single column ranked by ``COUNT(*)`` uses ``APPROX_TOP_COUNT``.
+    ``APPROX_TOP_COUNT`` skips NULL; the fold never maps NULL to ``(other)``.
+    """
+    if n < 1:
+        raise ValueError("n must be >= 1")
+    col_csv = ", ".join(cols)
+    n_cols = len(cols)
+    group_by = ", ".join(str(i) for i in range(1, n_cols + 1))
+    if dialect == "bigquery" and not exact and len(cols) == 1 and rank_sql == "COUNT(*)":
+        col = cols[0]
+        return (
+            f"SELECT rec.value AS {col} "
+            f"FROM (SELECT APPROX_TOP_COUNT({col}, {n}) AS fc_tops FROM {source}) t, "
+            f"UNNEST(t.fc_tops) rec"
+        )
+    return (
+        f"SELECT {col_csv} FROM {source} "
+        f"GROUP BY {group_by} "
+        f"ORDER BY {rank_sql} DESC, {col_csv} "
+        f"LIMIT {n}"
+    )
 
 
 def period_grid(n_periods: int, dialect: str) -> str:

@@ -12,6 +12,9 @@ from typing import Literal
 
 On = Literal["events", "property"]
 Measure = Literal["total", "uniques", "average", "sum", "median", "distinct"]
+BreakdownAt = Literal["rows", "first", "last"]
+BREAKDOWN_AT: tuple[BreakdownAt, ...] = ("rows", "first", "last")
+OTHER_LABEL = "(other)"
 
 # UI labels live in the README. Two families so "Average" is not two APIs.
 EVENT_MEASURES: tuple[Measure, ...] = ("total", "uniques", "average")
@@ -142,6 +145,17 @@ class EventsSpec:
         exact:      False (default) uses approx NDV / approx median where the
                     dialect has them. True is COUNT DISTINCT / PERCENTILE_CONT.
                     A later chart toggle sets this; Total/Sum/AVG are unchanged.
+        breakdowns: caller SQL expressions to split the series. Empty is today's
+                    one-line chart. Interpolated, never rewritten.
+        breakdown_at: ``rows`` (value on the metric row), ``first`` / ``last``
+                    (one non-null value per entity from the unfiltered table,
+                    ordered by ``event_time``). Ignored when ``breakdowns`` is empty.
+                    Sugar; does not replace the expression.
+        breakdown_labels: public column names. Default ``breakdown_0``, …
+        top_n:      fold the category axis to this many values plus ``(other)``.
+                    Default 8. Ignored when ``breakdowns`` is empty.
+        include_other: True (default) emits an ``(other)`` series for the tail.
+                    False drops the tail. Ignored when ``breakdowns`` is empty.
     """
 
     table: str
@@ -153,6 +167,11 @@ class EventsSpec:
     bucket: str | None = None
     where: str | None = None
     exact: bool = False
+    breakdowns: tuple[str, ...] = ()
+    breakdown_at: BreakdownAt = "rows"
+    breakdown_labels: tuple[str, ...] | None = None
+    top_n: int = 8
+    include_other: bool = True
 
     def __post_init__(self) -> None:
         if self.on not in ONS:
@@ -172,8 +191,24 @@ class EventsSpec:
             raise ValueError("event_time is required")
         if self.bucket is not None and not self.bucket.strip():
             raise ValueError("bucket must be a SQL expression if set")
+        if self.breakdown_at not in BREAKDOWN_AT:
+            raise ValueError("breakdown_at must be 'rows', 'first', or 'last'")
+        if self.breakdown_labels is not None and len(self.breakdown_labels) != len(
+            self.breakdowns
+        ):
+            raise ValueError("breakdown_labels must match breakdowns in length")
+        if self.top_n < 1:
+            raise ValueError("top_n must be >= 1")
+        for expr in self.breakdowns:
+            if not expr or not str(expr).strip():
+                raise ValueError("breakdowns must be SQL expressions")
 
     def bucket_sql(self) -> str:
         if self.bucket is not None:
             return self.bucket
         return f"date_trunc('day', {self.event_time})"
+
+    def bd_labels(self) -> tuple[str, ...]:
+        if self.breakdown_labels is not None:
+            return self.breakdown_labels
+        return tuple(f"breakdown_{i}" for i in range(len(self.breakdowns)))

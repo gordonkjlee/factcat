@@ -128,6 +128,9 @@
     .range-row[hidden], #range-include[hidden], #custom-range[hidden],
     #custom-absolute[hidden], #custom-relative[hidden] { display: none !important; }
     .range-row input[type="number"] { width: 4.5rem; }
+    #breakdown-extra[hidden] { display: none !important; }
+    #breakdown-extra .range-row { margin-top: 0.5rem; }
+    #top_n { width: 4.5rem; }
     .incomplete-note { font-size: 0.75rem; color: #52525b; margin: 0.35rem 0 0; }
     #result-table tr.incomplete td { color: #71717a; font-style: italic; }
     #custom-snap-hint { margin: 0.35rem 0 0; }
@@ -235,6 +238,23 @@
       </div>
       <span class="hint" id="exact-hint">Same bytes scanned; more CPU. Off is HyperLogLog (faster).</span>
     </div>
+    <label for="breakdown_column">Break down by <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <select name="breakdown_column" id="breakdown_column"></select>
+    <div id="breakdown-expr-wrap" hidden>
+      <label for="breakdown_expr">SQL expression</label>
+      <input id="breakdown_expr" name="breakdown_expr" autocomplete="off" value="{{ config.breakdown_expr }}" placeholder="country">
+      <span class="hint">Fills the spec expression. Does not replace it with a property store.</span>
+    </div>
+    <div id="breakdown-extra" hidden>
+      <span class="hint" id="breakdown-hint">Value on each event in this date range. First/last for an entity (chart window vs all history vs cohort) is a later control — it is not this dropdown.</span>
+      <input type="hidden" name="breakdown_at" id="breakdown_at" value="rows">
+      <div class="range-row">
+        <label for="top_n" style="margin:0">Top N</label>
+        <input id="top_n" name="top_n" type="number" min="1" max="1000" value="{{ config.top_n or 8 }}">
+        <input name="include_other" type="checkbox" id="include_other" {% if config.include_other or config.include_other is not false %}checked{% endif %} style="width:auto">
+        <label for="include_other" style="margin:0">Show (other)</label>
+      </div>
+    </div>
     <div id="run-row">
       <button type="submit" id="run">Run</button>
       <span id="run-loading" class="loading" hidden aria-label="Running"></span>
@@ -327,7 +347,8 @@
           <thead>
             <tr>
               <th data-key="bucket">Day <span class="grip" data-col="0"></span></th>
-              <th data-key="value">Volume <span class="grip" data-col="1"></span></th>
+              <th data-key="series" id="th-series" hidden>Break down <span class="grip" data-col="1"></span></th>
+              <th data-key="value">Volume <span class="grip" data-col="2"></span></th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
@@ -352,6 +373,8 @@
 <script>
 const saved = {
   event_value: {{ config.event_value|tojson }},
+  breakdown_column: {{ (config.breakdown_column or "")|tojson }},
+  breakdown_expr: {{ (config.breakdown_expr or "")|tojson }},
   grain: {{ (config.grain or "day")|tojson }},
   range_mode: {{ (config.range_mode or "last")|tojson }},
   range_n: {{ (config.range_n or 30)|tojson }},
@@ -487,6 +510,42 @@ if (eventColumnEl.value) {
   eventValueWrap.hidden = false;
   fillSelect(eventValueEl, cachedEventNames || [], saved.event_value);
 }
+const CUSTOM_BREAKDOWN = "__expr__";
+const breakdownColumnEl = document.getElementById("breakdown_column");
+function syncBreakdownUi() {
+  const col = breakdownColumnEl.value;
+  document.getElementById("breakdown-expr-wrap").hidden = col !== CUSTOM_BREAKDOWN;
+  document.getElementById("breakdown-extra").hidden = !col;
+}
+async function loadBreakdownColumns() {
+  setLoading(breakdownColumnEl, true);
+  try {
+    const data = await post("/api/columns", {
+      project: projectEl.value.trim(),
+      data_project: dataProjectEl.value.trim(),
+      credentials: credentialsEl.value.trim(),
+      dataset: form.dataset.value,
+      table_name: form.table_name.value,
+    });
+    const skip = new Set([form.entity.value, form.event_time.value, eventColumnEl.value].filter(Boolean));
+    const cols = (data.columns || []).map((c) => c.name || c).filter((n) => n && !skip.has(n));
+    const cur = saved.breakdown_expr ? CUSTOM_BREAKDOWN : (saved.breakdown_column || "");
+    fillSelect(breakdownColumnEl, cols, cur === CUSTOM_BREAKDOWN ? "" : cur, "(none)");
+    const custom = document.createElement("option");
+    custom.value = CUSTOM_BREAKDOWN;
+    custom.textContent = "SQL expression…";
+    breakdownColumnEl.appendChild(custom);
+    if (cur === CUSTOM_BREAKDOWN) breakdownColumnEl.value = CUSTOM_BREAKDOWN;
+    breakdownColumnEl.hidden = false;
+  } catch (err) {
+    fillSelect(breakdownColumnEl, [], saved.breakdown_column || "", "(none)");
+  } finally {
+    setLoading(breakdownColumnEl, false);
+    syncBreakdownUi();
+  }
+}
+breakdownColumnEl.addEventListener("change", syncBreakdownUi);
+loadBreakdownColumns();
 function authBody() {
   return {
     project: projectEl.value.trim(),
@@ -729,8 +788,10 @@ form.measure.addEventListener("change", () => { syncExact(); syncTableHeaders();
 function defaultTitle() {
   const measure = (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "Events";
   const ev = (eventValueEl.value || "").trim();
+  const bd = breakdownColumnEl.value;
+  const by = !bd ? "" : (bd === CUSTOM_BREAKDOWN ? "by expression" : "by " + bd);
   const range = (rangeChoiceEl.selectedOptions[0] && rangeChoiceEl.selectedOptions[0].textContent) || "";
-  return [measure, ev, range].filter(Boolean).join(" · ");
+  return [measure, ev, by, range].filter(Boolean).join(" · ");
 }
 titleEl.addEventListener("input", () => { titleLockedEl.value = "true"; });
 document.getElementById("reset-title").addEventListener("click", () => {
@@ -752,6 +813,9 @@ function payload() {
   d.chart_title = titleLockedEl.value === "true" ? titleEl.value : defaultTitle();
   d.override_cap = document.getElementById("override_cap").checked;
   d.query_row_limit_run = String(effectiveRowLimit());
+  d.include_other = document.getElementById("include_other").checked;
+  if (d.breakdown_column === CUSTOM_BREAKDOWN) d.breakdown_column = "";
+  else d.breakdown_expr = "";
   return d;
 }
 function formatBytes(n) {
@@ -774,6 +838,7 @@ function estimateKey(body) {
     body.range_unit, body.include_current, body.measure, body.custom_kind,
     body.start_date, body.end_date, body.rel_start_n, body.rel_end_n,
     body.override_cap, body.bytes_cap_override_gb, body.bytes_cap_gb,
+    body.breakdown_column, body.breakdown_expr, body.breakdown_at, body.top_n, body.include_other,
   ].join("\0");
 }
 let lastEstimateKey = "";
@@ -852,14 +917,25 @@ function grainHeader() {
 function valueHeader() {
   return (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "Value";
 }
+function seriesHeader() {
+  const col = (form.breakdown_column && form.breakdown_column.value) || "";
+  if (col && col !== CUSTOM_BREAKDOWN) return col;
+  return "Break down";
+}
+function hasSeries() {
+  return tableRows.some((r) => r.series);
+}
 function syncTableHeaders() {
+  const seriesTh = document.getElementById("th-series");
+  if (seriesTh) seriesTh.hidden = !hasSeries();
   document.querySelectorAll("#result-table th[data-key]").forEach((th) => {
+    if (th.hidden) return;
     const grip = th.querySelector(".grip");
     [...th.childNodes].forEach((n) => {
       if (n !== grip) n.remove();
     });
     const key = th.getAttribute("data-key");
-    const label = key === "bucket" ? grainHeader() : valueHeader();
+    const label = key === "bucket" ? grainHeader() : (key === "series" ? seriesHeader() : valueHeader());
     const mark = document.createElement("span");
     mark.className = "sort";
     mark.textContent = sortKey === key ? (sortDir === 1 ? " ▲" : " ▼") : "";
@@ -903,17 +979,27 @@ function renderTable() {
     const tdValue = document.createElement("td");
     tdBucket.textContent = displayBucket(row);
     tdValue.textContent = formatValue(row.value);
-    tr.append(tdBucket, tdValue);
+    if (hasSeries()) {
+      const tdSeries = document.createElement("td");
+      tdSeries.textContent = row.series;
+      tr.append(tdBucket, tdSeries, tdValue);
+    } else {
+      tr.append(tdBucket, tdValue);
+    }
     tbody.appendChild(tr);
   }
 }
 function tableHeaderRow() {
+  if (hasSeries()) return [grainHeader(), seriesHeader(), valueHeader(), "incomplete"];
   return [grainHeader(), valueHeader(), "incomplete"];
 }
 function exportCsv() {
   const lines = [tableHeaderRow().map(csvCell).join(",")];
   for (const row of tableRows) {
-    lines.push(csvCell(row.bucket) + "," + csvCell(row.value) + "," + (row.incomplete ? "true" : "false"));
+    const cells = hasSeries()
+      ? [row.bucket, row.series, row.value, row.incomplete ? "true" : "false"]
+      : [row.bucket, row.value, row.incomplete ? "true" : "false"];
+    lines.push(cells.map(csvCell).join(","));
   }
   const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
   const a = document.createElement("a");
@@ -951,9 +1037,13 @@ document.querySelectorAll("#result-table .grip").forEach((grip) => {
 });
 document.getElementById("export-csv").addEventListener("click", exportCsv);
 document.getElementById("copy-table").addEventListener("click", async () => {
-  const lines = [grainHeader() + "\t" + valueHeader()];
+  const lines = [hasSeries()
+    ? grainHeader() + "\t" + seriesHeader() + "\t" + valueHeader()
+    : grainHeader() + "\t" + valueHeader()];
   for (const row of tableRows) {
-    lines.push(displayBucket(row) + "\t" + formatValue(row.value));
+    lines.push(hasSeries()
+      ? displayBucket(row) + "\t" + row.series + "\t" + formatValue(row.value)
+      : displayBucket(row) + "\t" + formatValue(row.value));
   }
   await navigator.clipboard.writeText(lines.join("\n") + "\n");
   flashCopied(document.getElementById("copy-table"));
@@ -1020,6 +1110,24 @@ function formatValue(v) {
   }
   return applySeps(raw);
 }
+function seriesFromRow(row) {
+  const skip = new Set(["bucket", "value", "incomplete"]);
+  const keys = Object.keys(row).filter((k) => !skip.has(k));
+  if (!keys.length) return "";
+  const v = row[keys[0]];
+  if (v == null || v === "") return "(null)";
+  return String(v);
+}
+const SERIES_COLORS = ["#3b82f6", "#c4841d", "#5c6b73", "#059669", "#7c3aed", "#db2777", "#0e7490", "#b42318", "#a1a1aa"];
+function seriesNames() {
+  const names = [];
+  const seen = new Set();
+  for (const row of tableRows) {
+    const s = row.series || "";
+    if (!seen.has(s)) { seen.add(s); names.push(s); }
+  }
+  return names;
+}
 function effectiveChartType(n) {
   const chosen = document.getElementById("chart_type").value || "auto";
   if (chosen !== "auto") return chosen;
@@ -1043,10 +1151,15 @@ function drawChart() {
   copyBtn.hidden = false;
   pngBtn.hidden = false;
   const shown = tableRows;
-  const labels = shown.map((r) => r.bucket);
-  const values = shown.map((r) => r.value);
+  const names = seriesNames();
+  const multi = names.length > 1 || (names.length === 1 && names[0] !== "");
+  const labels = [];
+  const seenBucket = new Set();
+  for (const r of shown) {
+    if (!seenBucket.has(r.bucket)) { seenBucket.add(r.bucket); labels.push(r.bucket); }
+  }
   const showLabels = document.getElementById("chart_labels").checked;
-  const kind = effectiveChartType(shown.length);
+  const kind = effectiveChartType(labels.length);
   const isBar = kind === "bar";
   const isArea = kind === "area";
   const type = isBar ? "bar" : "line";
@@ -1057,34 +1170,43 @@ function drawChart() {
   note.textContent = hasIncomplete
     ? (isBar ? "Faded bar is the current " : "Dotted point is the current ") + currentGrain() + " (through today)."
     : "";
-  if (shown.length <= 2 && (document.getElementById("chart_type").value || "auto") === "auto") {
+  if (labels.length <= 2 && (document.getElementById("chart_type").value || "auto") === "auto") {
     note.hidden = false;
     const extra = "Few points at this grain — switch Time grain to Day to see days inside the range.";
     note.textContent = [note.textContent, extra].filter(Boolean).join(" ");
   }
   if (chart) chart.destroy();
   if (!window.Chart) return;
-  const colors = shown.map((r) => r.incomplete ? "#a1a1aa" : "#3b82f6");
   const gridMode = document.getElementById("chart_grid").value || "major";
   const showX = document.getElementById("chart_axis_x").checked;
   const showY = document.getElementById("chart_axis_y").checked;
+  const datasets = names.map((name, i) => {
+    const color = name === "(other)" ? "#a1a1aa" : SERIES_COLORS[i % SERIES_COLORS.length];
+    const byBucket = {};
+    for (const r of shown) {
+      if ((r.series || "") === name) byBucket[r.bucket] = r;
+    }
+    const data = labels.map((b) => (byBucket[b] ? byBucket[b].value : null));
+    const pointColors = labels.map((b) => (byBucket[b] && byBucket[b].incomplete ? "#a1a1aa" : color));
+    return {
+      label: name || measureLabel,
+      data,
+      tension: 0.1,
+      fill: isArea ? "origin" : false,
+      backgroundColor: isBar ? pointColors : (isArea ? color + "47" : "transparent"),
+      borderColor: color,
+      pointBackgroundColor: pointColors,
+      segment: !isBar ? {
+        borderDash: (seg) => {
+          const row = byBucket[labels[seg.p1DataIndex]];
+          return row && row.incomplete ? [5, 4] : undefined;
+        },
+      } : undefined,
+    };
+  });
   chart = new Chart(ctx, {
     type,
-    data: {
-      labels,
-      datasets: [{
-        label: measureLabel,
-        data: values,
-        tension: 0.1,
-        fill: isArea ? "origin" : false,
-        backgroundColor: isBar ? colors : (isArea ? "rgba(59, 130, 246, 0.28)" : "transparent"),
-        borderColor: "#3b82f6",
-        pointBackgroundColor: colors,
-        segment: !isBar ? {
-          borderDash: (seg) => shown[seg.p1DataIndex] && shown[seg.p1DataIndex].incomplete ? [5, 4] : undefined,
-        } : undefined,
-      }],
-    },
+    data: { labels, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -1110,11 +1232,13 @@ function drawChart() {
         },
       },
       plugins: {
-        legend: { display: false },
+        legend: { display: multi },
         filler: { propagate: false },
         tooltip: {
           enabled: true,
-          callbacks: { label: (ctx) => formatValue(ctx.parsed.y) },
+          callbacks: {
+            label: (ctx) => (multi ? ctx.dataset.label + ": " : "") + formatValue(ctx.parsed.y),
+          },
         },
       },
     },
@@ -1242,6 +1366,7 @@ form.addEventListener("submit", async (e) => {
     tableRows = (data.rows || []).map((row) => ({
       bucket: bucketLabel(row.bucket),
       value: row.value,
+      series: seriesFromRow(row),
       incomplete: !!row.incomplete,
     }));
     renderTable();
