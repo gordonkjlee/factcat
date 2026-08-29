@@ -8,6 +8,7 @@ from typing import Any
 from datetime import date, timedelta
 
 from factcat import EVENT_MEASURES, EventsSpec, events_sql
+from factcat.spec import BREAKDOWN_AT
 from factcat.warehouses.bigquery import DEFAULT_MAXIMUM_BYTES_BILLED
 from factcat._emit import transpile
 from factcat.dialects import splice_placeholders
@@ -294,6 +295,43 @@ def annotate_incomplete(
     return out
 
 
+def _bool(form: dict[str, Any], key: str, default: bool = False) -> bool:
+    raw = form.get(key)
+    if raw in (None, ""):
+        return default
+    return raw in (True, "true", "on", "1", 1)
+
+
+def _top_n(form: dict[str, Any]) -> int:
+    raw = form.get("top_n", 8)
+    if raw in (None, ""):
+        raw = 8
+    try:
+        n = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("top_n must be an integer") from exc
+    if n < 1:
+        raise ValueError("top_n must be at least 1")
+    return n
+
+
+def _breakdown_from_form(form: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
+    """Fill ``breakdowns`` from a column or a SQL expression. Expression wins."""
+    expr = (form.get("breakdown_expr") or "").strip()
+    column = (form.get("breakdown_column") or "").strip()
+    if expr:
+        lowered = expr.lower()
+        if ";" in expr or "--" in expr or "/*" in expr:
+            raise ValueError("breakdown expression must be a single SQL expression")
+        if lowered.startswith("select ") or " drop " in f" {lowered} ":
+            raise ValueError("breakdown expression must be a single SQL expression")
+        return (expr,), None
+    if not column:
+        return (), None
+    column = _ident_column(column, "breakdown")
+    return (column,), (column,)
+
+
 def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     table = _ident_table(str(form.get("table") or ""), "table")
     entity = (form.get("entity") or "").strip()
@@ -318,6 +356,11 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
         event_column = _ident_column(event_column, "event_column")
         clauses.append(f"{event_column} = {_sql_string(event_value)}")
 
+    breakdowns, breakdown_labels = _breakdown_from_form(form)
+    breakdown_at = str(form.get("breakdown_at") or "rows").strip().lower()
+    if breakdown_at not in BREAKDOWN_AT:
+        raise ValueError("breakdown_at must be rows, first, or last")
+
     return EventsSpec(
         table=table,
         entity=entity,
@@ -331,6 +374,11 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
         ),
         where=" AND ".join(clauses),
         exact=exact,
+        breakdowns=breakdowns,
+        breakdown_at=breakdown_at,  # type: ignore[arg-type]
+        breakdown_labels=breakdown_labels,
+        top_n=_top_n(form),
+        include_other=_bool(form, "include_other", True),
     )
 
 

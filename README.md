@@ -86,6 +86,9 @@ spec = EventsSpec(
 print(events_sql(spec, dialect="bigquery"))
 ```
 
+On the Events chart, **Break down by** fills that expression (a column, or
+SQL). As-of, top N, and Show (other) are sugar; they do not replace it.
+
 Split a series by a caller expression. ``top_n`` (default 8) folds a long
 tail into ``(other)``; set ``include_other=False`` to drop the tail instead.
 ``breakdown_at`` is ``rows`` (the value on the event), ``first``, or ``last``

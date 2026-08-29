@@ -185,10 +185,13 @@ async def api_run(request: Request) -> JSONResponse:
         result = warehouse.run(sql)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
-    rows = annotate_incomplete(
-        [{"bucket": str(r.get("bucket", "")), "value": r.get("value")} for r in result.rows],
-        form,
-    )
+    raw_rows = []
+    for r in result.rows:
+        item = {str(k): v for k, v in r.items()}
+        item["bucket"] = str(r.get("bucket", ""))
+        item["value"] = r.get("value")
+        raw_rows.append(item)
+    rows = annotate_incomplete(raw_rows, form)
     limit = query_row_limit(form)
     return JSONResponse({
         "ok": True,

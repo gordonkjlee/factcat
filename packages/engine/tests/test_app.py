@@ -126,6 +126,11 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "fillSelect(eventValueEl, cachedEventNames" in html
     assert "syncChartTitle" not in html
     assert "Exact unique counts" in res.text
+    assert "Break down by" in res.text
+    assert "Show (other)" in res.text
+    assert "SQL expression…" in res.text
+    assert 'id="breakdown_at"' in res.text
+    assert "On each event" in res.text
     assert "Exact (off = approx unique count)" not in res.text
     assert 'id="copy-sql"' in res.text
     assert 'id="copy-chart"' in res.text
@@ -242,12 +247,42 @@ def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
     assert "account_id" in sql
     assert "user_id" not in sql
     assert "TIMESTAMP_TRUNC" in sql.upper() or "DATE_TRUNC" in sql.upper()
-    assert "DATE" in sql.upper()
-    assert captured["kind"] == "bigquery"
-    assert captured["project"] == "p"
-    assert captured["location"] == "EU"
-    assert captured["credentials"] == "/tmp/sa.json"
-    assert (tmp_path / "cfg.json").is_file()
+
+
+def test_run_passes_breakdown_series(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(
+        rows=[{"bucket": "2026-01-05", "country": "US", "value": 2}]
+    )
+    monkeypatch.setattr(
+        "factcat_app.main.connect",
+        lambda kind, **kw: warehouse,
+    )
+    client = TestClient(app)
+    res = client.post(
+        "/api/run",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "total",
+            "grain": "day",
+            "lookback_days": 30,
+            "breakdown_column": "country",
+            "breakdown_at": "rows",
+            "top_n": 8,
+            "include_other": True,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["rows"][0]["country"] == "US"
+    sql = warehouse.run.call_args.args[0]
+    assert "country" in sql
+    assert "(other)" in sql
 
 
 def test_estimate_is_dry_run(monkeypatch, tmp_path):

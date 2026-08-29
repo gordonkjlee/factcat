@@ -405,3 +405,37 @@ def test_average_is_total_over_uniques():
     sql = events_sql(spec, dialect="bigquery").upper()
     assert "COUNT(*)" in sql.replace(" ", "") or "COUNT(*)" in sql
     assert "APPROX_COUNT_DISTINCT" in sql
+
+
+def test_breakdown_column_fills_expression():
+    spec = spec_from_form(_form(breakdown_column="country", top_n=5, include_other=True))
+    assert spec.breakdowns == ("country",)
+    assert spec.breakdown_labels == ("country",)
+    assert spec.top_n == 5
+    assert spec.include_other is True
+    sql = events_sql(spec, dialect="bigquery")
+    assert "country" in sql
+    assert "fc_fold_0" in sql
+
+
+def test_breakdown_expr_wins_over_column():
+    spec = spec_from_form(
+        _form(breakdown_column="ignored", breakdown_expr="lower(country)")
+    )
+    assert spec.breakdowns == ("lower(country)",)
+    assert spec.breakdown_labels is None
+
+
+def test_breakdown_expr_rejects_statements():
+    with pytest.raises(ValueError, match="single SQL expression"):
+        spec_from_form(_form(breakdown_expr="country; drop table x"))
+
+
+def test_include_other_false_from_form():
+    spec = spec_from_form(_form(breakdown_column="country", include_other=False))
+    assert spec.include_other is False
+
+
+def test_no_breakdown_when_column_blank():
+    spec = spec_from_form(_form())
+    assert spec.breakdowns == ()

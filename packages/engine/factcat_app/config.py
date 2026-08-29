@@ -52,6 +52,11 @@ DEFAULTS: dict[str, Any] = {
     "chart_title_locked": False,
     "bytes_cap_gb": 10,
     "query_row_limit": 1_000_000,
+    "breakdown_column": "",
+    "breakdown_expr": "",
+    "breakdown_at": "rows",
+    "top_n": 8,
+    "include_other": True,
 }
 
 _ENTITY_PLURALS = {
