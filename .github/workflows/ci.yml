@@ -26,3 +26,22 @@ jobs:
       - name: Test
         working-directory: packages/engine
         run: python -m pytest
+
+      - name: Wheel
+        run: |
+          pip install build
+          python -m build packages/engine
+          python - <<'PY'
+          import glob, zipfile, sys
+          whls = glob.glob("packages/engine/dist/*.whl")
+          if len(whls) != 1:
+              sys.exit(f"expected one wheel, got {whls}")
+          names = zipfile.ZipFile(whls[0]).namelist()
+          for needle in (
+              "factcat_app/guides/setup-bigquery.md",
+              "factcat_app/static/logo.svg",
+          ):
+              if needle not in names:
+                  sys.exit(f"missing {needle} in {names}")
+          print("wheel ok", whls[0])
+          PY
