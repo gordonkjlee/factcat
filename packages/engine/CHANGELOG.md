@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.0](https://github.com/gordonkjlee/factcat/compare/v0.3.0...v0.4.0) (2026-08-29)
+
+
+### Features
+
+* **app:** add mark, favicon, and colour tokens ([#17](https://github.com/gordonkjlee/factcat/issues/17)) ([927775a](https://github.com/gordonkjlee/factcat/commit/927775a60756c363f638c97af435c53f006a857a))
+* **app:** Events workspace with setup catalog and query safety ([#16](https://github.com/gordonkjlee/factcat/issues/16)) ([aba5ab2](https://github.com/gordonkjlee/factcat/commit/aba5ab2b36645d0cbf0e048c7541be5dcf9e83aa))
+* **app:** map reporting timezone into Events SQL ([#21](https://github.com/gordonkjlee/factcat/issues/21)) ([9e75bd5](https://github.com/gordonkjlee/factcat/commit/9e75bd5c75f018b7cedf7a7d50d05dbc0ed91263))
+* **engine:** add Events breakdowns with top-N and (other) ([#20](https://github.com/gordonkjlee/factcat/issues/20)) ([ee78aba](https://github.com/gordonkjlee/factcat/commit/ee78aba34c3a3d6cff6b039eed8a7581b9346476))
+
 ## [0.3.0](https://github.com/gordonkjlee/factcat/compare/v0.2.0...v0.3.0) (2026-08-28)
 
 
