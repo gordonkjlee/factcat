@@ -32,6 +32,13 @@ def _form(**overrides):
     return base
 
 
+def _shifted(expr, unit, n=0, week_start="monday", tz="UTC", kind="utc"):
+    return (
+        f"factcat_period_start_shifted({expr}, '{unit}', "
+        f"'{week_start}', {n}, '{tz}', '{kind}')"
+    )
+
+
 def test_empty_entity_is_rejected():
     with pytest.raises(ValueError, match="entity is required"):
         spec_from_form(_form(entity=""))
@@ -50,7 +57,7 @@ def test_does_not_default_entity_to_user_id():
 
 def test_week_bucket_uses_explicit_week_start():
     spec = spec_from_form(_form(grain="week"))
-    assert "factcat_period_start_shifted(occurred_at, 'week', 'monday', 0)" in spec.bucket
+    assert _shifted("occurred_at", "week") in spec.bucket
     sql = events_sql(spec, dialect="bigquery")
     assert "WEEK(MONDAY)" in sql.upper().replace(" ", "")
     assert "factcat_period_start_shifted" not in sql
@@ -60,12 +67,15 @@ def test_week_bucket_uses_explicit_week_start():
 
 def test_range_preset_7_is_last_n_days():
     spec = spec_from_form(_form(range_preset="7"))
-    assert "occurred_at >= current_date - 7" in spec.where
+    assert (
+        "occurred_at >= TIMESTAMP(DATE_SUB(CURRENT_DATE('UTC'), INTERVAL 7 DAY), 'UTC')"
+        in spec.where
+    )
 
 
 def test_this_month_is_anchored_date_trunc():
     spec = spec_from_form(_form(range_mode="this", range_unit="month", grain="month"))
-    assert "factcat_period_start_shifted(current_date, 'month'" in spec.where
+    assert _shifted("current_date", "month") in spec.where
     sql = events_sql(spec, dialect="bigquery").upper()
     assert "MONTH" in sql
 
@@ -74,32 +84,32 @@ def test_last_week_is_previous_complete_week():
     spec = spec_from_form(
         _form(range_mode="previous", range_unit="week", grain="week")
     )
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', -1)" in spec.where
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', 0)" in spec.where
+    assert _shifted("current_date", "week", -1) in spec.where
+    assert _shifted("current_date", "week", 0) in spec.where
 
 
 def test_today_is_current_calendar_day():
     spec = spec_from_form(_form(range_mode="this", range_unit="day", grain="day"))
-    assert "factcat_period_start_shifted(current_date, 'day'" in spec.where
+    assert _shifted("current_date", "day") in spec.where
 
 
 def test_this_week_by_day_keeps_week_window():
     spec = spec_from_form(_form(grain="day", range_mode="this", range_unit="week"))
-    assert "factcat_period_start_shifted(current_date, 'week'" in spec.where
-    assert spec.bucket == "CAST(date_trunc('day', occurred_at) AS DATE)"
+    assert _shifted("current_date", "week") in spec.where
+    assert spec.bucket == f"CAST({_shifted('occurred_at', 'day')} AS DATE)"
 
 
 def test_week_grain_this_day_bumps_to_this_week():
     spec = spec_from_form(_form(grain="week", range_mode="this", range_unit="day"))
-    assert "factcat_period_start_shifted(current_date, 'week'" in spec.where
+    assert _shifted("current_date", "week") in spec.where
 
 
 def test_week_grain_rejects_day_window():
     spec = spec_from_form(
         _form(grain="week", range_mode="last", range_n=30, range_unit="day")
     )
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', -8)" in spec.where
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', 0)" in spec.where
+    assert _shifted("current_date", "week", -8) in spec.where
+    assert _shifted("current_date", "week", 0) in spec.where
     assert "current_date - 30" not in spec.where
 
 
@@ -107,8 +117,8 @@ def test_last_eight_weeks_are_complete_by_default():
     spec = spec_from_form(
         _form(grain="week", range_mode="last", range_n=8, range_unit="week")
     )
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', -8)" in spec.where
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', 0)" in spec.where
+    assert _shifted("current_date", "week", -8) in spec.where
+    assert _shifted("current_date", "week", 0) in spec.where
 
 
 def test_include_current_week_keeps_partial_trailing():
@@ -121,8 +131,8 @@ def test_include_current_week_keeps_partial_trailing():
             include_current=True,
         )
     )
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', -7)" in spec.where
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', 0)" not in spec.where
+    assert _shifted("current_date", "week", -7) in spec.where
+    assert _shifted("current_date", "week", 0) not in spec.where
 
 
 def test_relative_custom_weeks_are_inclusive_endpoints():
@@ -135,8 +145,8 @@ def test_relative_custom_weeks_are_inclusive_endpoints():
             rel_end_n=3,
         )
     )
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', -12)" in spec.where
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', -2)" in spec.where
+    assert _shifted("current_date", "week", -12) in spec.where
+    assert _shifted("current_date", "week", -2) in spec.where
 
 
 def test_relative_custom_from_must_not_be_after_to():
@@ -212,8 +222,8 @@ def test_last_weeks_exclude_current():
             exclude_current=True,
         )
     )
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', -5)" in spec.where
-    assert "factcat_period_start_shifted(current_date, 'week', 'monday', 0)" in spec.where
+    assert _shifted("current_date", "week", -5) in spec.where
+    assert _shifted("current_date", "week", 0) in spec.where
 
 
 def test_events_sql_from_form_limits_most_recent_buckets():
@@ -248,7 +258,9 @@ def test_catalog_event_values_uses_recent_window():
     sql = event_values_sql(_form(event_column="event_name", catalog=True))
     compact = " ".join(sql.split()).upper()
     assert "DISTINCT" in compact
-    assert "CURRENT_DATE - 90" in compact.replace("CURRENT_DATE()", "CURRENT_DATE")
+    assert "CURRENT_DATE('UTC')" in sql
+    assert "DATE_SUB" in compact
+    assert "90" in compact
     assert "OCCURRED_AT" in compact
 
 
@@ -276,7 +288,10 @@ def test_event_filter_is_and_lookback():
         _form(event_column="event_name", event_value="paid")
     )
     assert "event_name = 'paid'" in spec.where
-    assert "occurred_at >= current_date - 30" in spec.where
+    assert (
+        "occurred_at >= TIMESTAMP(DATE_SUB(CURRENT_DATE('UTC'), INTERVAL 30 DAY), 'UTC')"
+        in spec.where
+    )
 
 
 def test_hyphenated_project_is_quoted_for_sqlglot():
@@ -300,8 +315,9 @@ def test_lookback_and_hyphen_table_transpile_to_bigquery():
     spec = spec_from_form(_form(table="my-gcp.analytics.events", lookback_days=7))
     sql = events_sql(spec, dialect="bigquery")
     assert "`my-gcp`.`analytics`.`events`" in sql
-    assert "INTERVAL" not in sql.upper()
-    assert "CURRENT_DATE - 7" in sql.replace("\n", " ").replace("  ", " ")
+    assert "DATE_SUB" in sql.upper()
+    assert "CURRENT_DATE('UTC')" in sql
+    assert "INTERVAL '7' DAY" in sql.upper().replace('"', "'")
     assert "APPROX_COUNT_DISTINCT" in sql.upper()
 
 
@@ -333,15 +349,15 @@ def test_event_value_without_column_is_rejected():
 
 def test_month_bucket_is_date_trunc_sugar():
     spec = spec_from_form(_form(grain="month"))
-    assert spec.bucket == "CAST(date_trunc('month', occurred_at) AS DATE)"
+    assert spec.bucket == f"CAST({_shifted('occurred_at', 'month')} AS DATE)"
 
 
 def test_day_bucket_casts_to_date():
     spec = spec_from_form(_form(grain="day"))
-    assert spec.bucket == "CAST(date_trunc('day', occurred_at) AS DATE)"
-    sql = events_sql(spec, dialect="bigquery").upper()
-    assert "DATE" in sql
-    assert "DATE_TRUNC" in sql or "TIMESTAMP_TRUNC" in sql
+    assert spec.bucket == f"CAST({_shifted('occurred_at', 'day')} AS DATE)"
+    sql = events_sql(spec, dialect="bigquery")
+    assert "DATE(occurred_at, 'UTC')" in sql.replace("`", "")
+    assert "DATE_TRUNC" not in sql.upper()
 
 
 def test_plain_table_transpiles():
@@ -349,7 +365,7 @@ def test_plain_table_transpiles():
     sql = events_sql(spec, dialect="bigquery")
     assert "analytics" in sql
     assert "events" in sql
-    assert "INTERVAL" not in sql.upper()
+    assert "CURRENT_DATE('UTC')" in sql
 
 
 def test_event_values_sql_is_distinct_ordered_lookback():
@@ -366,8 +382,9 @@ def test_event_values_sql_is_distinct_ordered_lookback():
     assert "DISTINCT" in upper
     assert "ORDER BY" in upper
     assert f"LIMIT {EVENT_VALUE_LIMIT}" in upper
-    assert "INTERVAL" not in upper
-    assert "CURRENT_DATE - 7" in compact.upper().replace("CURRENT_DATE()", "CURRENT_DATE")
+    assert "DATE_SUB" in upper
+    assert "CURRENT_DATE('UTC')" in sql
+    assert "INTERVAL '7' DAY" in upper.replace('"', "'")
     assert "`my-gcp`" in sql or "`MY-GCP`" in sql.upper()
     assert "fc_value" in sql.lower()
     assert "event_name" in sql
@@ -439,3 +456,40 @@ def test_include_other_false_from_form():
 def test_no_breakdown_when_column_blank():
     spec = spec_from_form(_form())
     assert spec.breakdowns == ()
+
+
+def test_berlin_timestamp_uses_date_in_that_zone():
+    spec = spec_from_form(_form(reporting_timezone="Europe/Berlin"))
+    assert _shifted("occurred_at", "day", tz="Europe/Berlin") in spec.bucket
+    assert "CURRENT_DATE('Europe/Berlin')" in spec.where
+    sql = events_sql(spec, dialect="bigquery")
+    assert "DATE(occurred_at, 'Europe/Berlin')" in sql.replace("`", "")
+    assert "CURRENT_DATE('Europe/Berlin')" in sql
+    assert "DATE(occurred_at, 'UTC')" not in sql.replace("`", "")
+
+
+def test_civil_datetime_casts_instead_of_date_tz():
+    spec = spec_from_form(
+        _form(grain="week", event_time_tz="reporting", reporting_timezone="Europe/London")
+    )
+    assert _shifted("occurred_at", "week", tz="Europe/London", kind="reporting") in spec.bucket
+    assert "AS DATETIME" in spec.where
+    sql = events_sql(spec, dialect="bigquery")
+    assert "CAST(occurred_at AS DATE)" in sql.replace("`", "")
+    assert "DATE(occurred_at," not in sql.replace("`", "")
+    assert "CURRENT_DATE('Europe/London')" in sql
+
+
+def test_unknown_timezone_is_rejected():
+    with pytest.raises(ValueError, match="reporting_timezone"):
+        spec_from_form(_form(reporting_timezone="Not/A_Zone"))
+    with pytest.raises(ValueError, match="event_time_tz"):
+        spec_from_form(_form(event_time_tz="local"))
+
+
+def test_annotate_incomplete_uses_iana_today():
+    rows = annotate_incomplete(
+        [{"bucket": "2099-01-01", "value": 1}],
+        _form(grain="day", reporting_timezone="Europe/Berlin"),
+    )
+    assert rows[0]["incomplete"] is False

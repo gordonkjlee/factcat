@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import markdown
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,7 @@ from .catalog import (
 )
 from .config import load, mapping_ready, save
 from .query import (
+    REPORTING_TIMEZONES,
     annotate_incomplete,
     connection_from_form,
     event_values_sql,
@@ -32,7 +34,18 @@ from .query import (
 
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
+DOCS_DIR = APP_DIR / "guides"
+SETUP_DOCS = {
+    "bigquery": DOCS_DIR / "setup-bigquery.md",
+}
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+
+
+def setup_docs_html(kind: str = "bigquery") -> str:
+    """Packaged markdown for the Setup guide pane. Not fetched from GitHub."""
+    path = SETUP_DOCS.get(kind, SETUP_DOCS["bigquery"])
+    text = path.read_text(encoding="utf-8")
+    return markdown.markdown(text, extensions=["fenced_code", "nl2br", "tables"])
 
 app = FastAPI(title="Factcat")
 
@@ -69,7 +82,19 @@ def setup(request: Request) -> HTMLResponse:
     cfg = load()
     if not cfg.get("project"):
         cfg["project"] = bootstrap_project()
-    return _page(request, "setup.html", "setup", cfg)
+    return templates.TemplateResponse(
+        request,
+        "setup.html",
+        {
+            "config": cfg,
+            "screen": "setup",
+            "entity_types": sorted(ENTITY_TYPES),
+            "time_types": sorted(TIME_TYPES),
+            "event_name_types": sorted(EVENT_NAME_TYPES),
+            "setup_docs": setup_docs_html("bigquery"),
+            "reporting_timezones": REPORTING_TIMEZONES,
+        },
+    )
 
 
 def _catalog_error(exc: Exception) -> JSONResponse:

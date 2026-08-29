@@ -1,7 +1,7 @@
 """Per-dialect SQL that cannot be transpiled.
 
 sqlglot handles almost everything: date arithmetic, casting, string functions,
-window functions. Two constructs do not survive cleanly:
+window functions. These constructs do not survive cleanly:
 
 1. **Generating a series of integers** (the retention period grid).
    DuckDB ``UNNEST(GENERATE_SERIES)``; Redshift has no reachable generator.
@@ -10,12 +10,14 @@ window functions. Two constructs do not survive cleanly:
    ``APPROX_COUNT_DISTINCT``. Exact BigQuery median is
    ``PERCENTILE_CONT(x, 0.5) OVER (PARTITION BY ...)``. Approx is
    ``APPROX_QUANTILES``. Runners execute SQL; they do not translate it.
-
 3. **Week-start DATE_TRUNC.** DuckDB ``date_trunc('week', x)`` is Monday;
    sqlglot emits BigQuery ``TIMESTAMP_TRUNC(x, WEEK)``, which is Sunday.
    ``WEEK(MONDAY)`` / ``WEEK(SUNDAY)`` must be spliced.
 4. **Top-N category labels.** BigQuery ``APPROX_TOP_COUNT`` does not transpile
    from DuckDB ``GROUP BY … LIMIT``. Exact pick is ordinary SQL.
+5. **Reporting-timezone calendar.** BigQuery ``DATE(ts, tz)`` and
+   ``CURRENT_DATE(tz)`` have no DuckDB equivalent sqlglot will emit.
+   Week start is applied after that conversion.
 
 Everything else is one emitter.
 """
@@ -202,13 +204,23 @@ def period_start_shifted(
     week_start: str,
     n: int,
     dialect: str,
+    timezone: str = "UTC",
+    time_kind: str = "utc",
 ) -> str:
     """Trunc ``expr`` to ``unit`` then shift ``n`` periods (negative = back).
 
     Week start is explicit so BigQuery does not inherit Sunday ``WEEK``.
+    ``timezone`` is IANA. ``time_kind`` is ``utc`` (TIMESTAMP instant) or
+    ``reporting`` (DATETIME already in that zone).
     """
     unit = unit.lower()
     week_start = week_start.lower()
+    tz = (timezone or "UTC").strip() or "UTC"
+    if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
+        raise ValueError("timezone must be an IANA name")
+    kind = (time_kind or "utc").strip().lower()
+    if kind not in {"utc", "reporting"}:
+        raise ValueError("time_kind must be utc or reporting")
     if unit not in {"day", "week", "month", "quarter", "year"}:
         raise ValueError("unit must be day, week, month, quarter, or year")
     if week_start not in {"monday", "sunday"}:
@@ -217,12 +229,18 @@ def period_start_shifted(
         raise TypeError("n must be int")
     bq_week = "MONDAY" if week_start == "monday" else "SUNDAY"
     if dialect == "bigquery":
-        if unit == "day":
-            trunc = f"CAST({expr} AS DATE)"
-        elif unit == "week":
-            trunc = f"CAST(DATE_TRUNC({expr}, WEEK({bq_week})) AS DATE)"
+        if expr.lower() == "current_date":
+            date_expr = f"CURRENT_DATE('{tz}')"
+        elif kind == "reporting":
+            date_expr = f"CAST({expr} AS DATE)"
         else:
-            trunc = f"CAST(DATE_TRUNC({expr}, {unit.upper()}) AS DATE)"
+            date_expr = f"DATE({expr}, '{tz}')"
+        if unit == "day":
+            trunc = date_expr
+        elif unit == "week":
+            trunc = f"DATE_TRUNC({date_expr}, WEEK({bq_week}))"
+        else:
+            trunc = f"DATE_TRUNC({date_expr}, {unit.upper()})"
         if n == 0:
             return trunc
         op = "DATE_ADD" if n > 0 else "DATE_SUB"
@@ -258,7 +276,9 @@ _PERIOD_RE = re.compile(
     r"([A-Za-z_][A-Za-z0-9_.]*)\s*,\s*"
     r"'(day|week|month|quarter|year)'\s*,\s*"
     r"'(monday|sunday)'\s*,\s*"
-    r"(-?\d+)\s*\)",
+    r"(-?\d+)"
+    r"(?:\s*,\s*'([^']+)'(?:\s*,\s*'(utc|reporting)')?)?"
+    r"\s*\)",
     re.IGNORECASE,
 )
 
@@ -273,6 +293,8 @@ def splice_placeholders(sql: str, dialect: str) -> str:
             match.group(3),
             int(match.group(4)),
             dialect,
+            timezone=match.group(5) or "UTC",
+            time_kind=match.group(6) or "utc",
         )
 
     return _PERIOD_RE.sub(repl, sql)

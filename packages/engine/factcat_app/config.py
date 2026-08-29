@@ -34,6 +34,8 @@ DEFAULTS: dict[str, Any] = {
     "exclude_current": False,
     "include_current": False,
     "week_start": "monday",
+    "reporting_timezone": "UTC",
+    "event_time_tz": "utc",
     "thousand_sep": "comma",
     "decimal_sep": "period",
     "start_date": "",

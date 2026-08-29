@@ -22,6 +22,7 @@ from factcat import (
     retention_sql,
 )
 from factcat._emit import GRID_RELATION, transpile_with_grid
+from factcat.dialects import period_start_shifted, splice_placeholders
 
 RETENTION = RetentionSpec(
     table="payments",
@@ -130,6 +131,21 @@ EVENTS_WEEK = EventsSpec(
     ),
 )
 
+EVENTS_TZ = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="uniques",
+    bucket=(
+        "CAST(factcat_period_start_shifted("
+        "occurred_at, 'week', 'monday', 0, 'Europe/Berlin', 'utc') AS DATE)"
+    ),
+    where=(
+        "occurred_at >= factcat_period_start_shifted("
+        "current_date, 'week', 'monday', 0, 'Europe/Berlin', 'utc')"
+    ),
+)
+
 
 class _Capture(logging.Handler):
     def __init__(self) -> None:
@@ -178,6 +194,7 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS_DISTINCT, dialect=dialect)
     events_sql(EVENTS_UNIQUES_EXACT, dialect=dialect)
     events_sql(EVENTS_WEEK, dialect=dialect)
+    events_sql(EVENTS_TZ, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_APPROX, dialect=dialect)
 
@@ -209,6 +226,49 @@ def test_bigquery_week_start_monday_is_explicit():
     sql = events_sql(EVENTS_WEEK, dialect="bigquery")
     assert "WEEK(MONDAY)" in sql.upper().replace(" ", "")
     assert "factcat_period_start_shifted" not in sql
+    assert "DATE(occurred_at, 'UTC')" in sql.replace("`", "")
+
+
+def test_four_arg_placeholder_defaults_to_utc():
+    sql = splice_placeholders(
+        "CAST(factcat_period_start_shifted("
+        "occurred_at, 'week', 'monday', 0) AS DATE)",
+        "bigquery",
+    )
+    assert sql == "CAST(DATE_TRUNC(DATE(occurred_at, 'UTC'), WEEK(MONDAY)) AS DATE)"
+
+
+def test_six_arg_placeholder_uses_reporting_zone():
+    sql = splice_placeholders(
+        "factcat_period_start_shifted("
+        "occurred_at, 'day', 'monday', 0, 'Europe/Berlin', 'utc')",
+        "bigquery",
+    )
+    assert sql == "DATE(occurred_at, 'Europe/Berlin')"
+
+
+def test_bigquery_civil_datetime_casts_to_date():
+    sql = period_start_shifted(
+        "occurred_at", "week", "monday", 0, "bigquery", "Europe/London", "reporting"
+    )
+    assert sql == "DATE_TRUNC(CAST(occurred_at AS DATE), WEEK(MONDAY))"
+
+
+def test_bigquery_current_date_is_zoned():
+    sql = period_start_shifted(
+        "current_date", "week", "monday", -1, "bigquery", "Europe/Berlin", "utc"
+    )
+    assert sql == (
+        "DATE_SUB(DATE_TRUNC(CURRENT_DATE('Europe/Berlin'), WEEK(MONDAY)), "
+        "INTERVAL 1 WEEK)"
+    )
+
+
+def test_timezone_rejects_quotes():
+    with pytest.raises(ValueError, match="IANA"):
+        period_start_shifted(
+            "occurred_at", "day", "monday", 0, "bigquery", "UTC' --", "utc"
+        )
 
 
 def test_bigquery_approx_breakdown_uses_approx_top_count():

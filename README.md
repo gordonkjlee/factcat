@@ -115,8 +115,8 @@ Uniques, Distinct, and Median default to **approx** (`exact=False`):
 Exact toggle sets `exact=True` for `COUNT DISTINCT` / `PERCENTILE_CONT`.
 Total, Sum, and property Average stay exact either way.
 
-Day/week/month buttons in the app fill a `bucket` expression such as
-`date_trunc('week', occurred_at)`. There is no `period: day|week|month` field.
+Day/week/month buttons in the app fill a `bucket` expression (reporting
+timezone, then week start). There is no `period: day|week|month` field.
 
 ## Why the entity matters
 
@@ -142,8 +142,14 @@ Snowflake). If you need event collection, keep using whatever you use.
 The library accepts **any relation**. A payments fact with `status` and `subscription_id`
 is a valid source. You do not have to have an events table.
 
-For clickstream-style product analytics, this shape works well (it is a recommendation,
-not a requirement):
+The Events app expects **one wide events table** today (typed columns; unused
+values null). JSON property bags and one table per event type are not
+supported yet. Setup shows the BigQuery guide from
+[`setup-bigquery.md`](packages/engine/factcat_app/guides/setup-bigquery.md).
+Reporting timezone and whether the timestamp is a UTC instant or civil
+DATETIME are set on Setup.
+
+For clickstream-style product analytics, this shape works well:
 
 1. **Events** - one table. At least an event name, a timestamp, and an entity id.
    Other fields are real columns, not a JSON blob. Different event types may share the

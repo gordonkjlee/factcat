@@ -22,6 +22,8 @@ dependencies = [
   "fastapi>=0.110.0",
   "uvicorn>=0.27.0",
   "jinja2>=3.1.0",
+  "markdown>=3.6.0",
+  "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +43,10 @@ Source = "https://github.com/gordonkjlee/factcat"
 
 [tool.hatch.build.targets.wheel]
 packages = ["factcat", "factcat_app"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"factcat_app/static" = "factcat_app/static"
+"factcat_app/guides" = "factcat_app/guides"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from factcat import EVENT_MEASURES, EventsSpec, events_sql
 from factcat.spec import BREAKDOWN_AT
@@ -79,6 +79,39 @@ def _week_start(form: dict[str, Any]) -> str:
     raw = str(form.get("week_start") or "monday").strip().lower()
     if raw not in {"monday", "sunday"}:
         raise ValueError("week_start must be monday or sunday")
+    return raw
+
+
+REPORTING_TIMEZONES = (
+    "UTC",
+    "Europe/London",
+    "Europe/Berlin",
+    "Europe/Paris",
+    "Europe/Amsterdam",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "America/Sao_Paulo",
+    "Asia/Dubai",
+    "Asia/Singapore",
+    "Asia/Tokyo",
+    "Australia/Sydney",
+    "Pacific/Auckland",
+)
+
+
+def _reporting_timezone(form: dict[str, Any]) -> str:
+    raw = str(form.get("reporting_timezone") or "UTC").strip() or "UTC"
+    if raw not in REPORTING_TIMEZONES:
+        raise ValueError("reporting_timezone must be an IANA name from Setup")
+    return raw
+
+
+def _event_time_kind(form: dict[str, Any]) -> str:
+    raw = str(form.get("event_time_tz") or "utc").strip().lower()
+    if raw not in {"utc", "reporting"}:
+        raise ValueError("event_time_tz must be utc or reporting")
     return raw
 
 
@@ -172,10 +205,24 @@ def _parse_bucket(value: Any) -> date | None:
     return date.fromisoformat(match.group(0))
 
 
+def _today_sql(form: dict[str, Any]) -> str:
+    return f"CURRENT_DATE({_sql_string(_reporting_timezone(form))})"
+
+
+def _as_event_time(date_sql: str, form: dict[str, Any]) -> str:
+    """Bound an event_time column with a DATE expression in the column's type."""
+    tz = _reporting_timezone(form)
+    if _event_time_kind(form) == "reporting":
+        return f"CAST({date_sql} AS DATETIME)"
+    return f"TIMESTAMP({date_sql}, {_sql_string(tz)})"
+
+
 def _ps(expr: str, unit: str, form: dict[str, Any], n: int) -> str:
     return (
         f"factcat_period_start_shifted({expr}, '{unit}', "
-        f"'{_week_start(form)}', {n})"
+        f"'{_week_start(form)}', {n}, "
+        f"{_sql_string(_reporting_timezone(form))}, "
+        f"'{_event_time_kind(form)}')"
     )
 
 
@@ -226,14 +273,20 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
             if start_n < end_n:
                 raise ValueError("relative from must be at least as far back as to")
             if unit == "day":
-                clauses = [f"{event_time} >= current_date - {start_n}"]
+                clauses = [
+                    f"{event_time} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {start_n} DAY)', form)}"
+                ]
                 if end_n > 0:
-                    clauses.append(f"{event_time} < current_date - {end_n - 1}")
+                    clauses.append(
+                        f"{event_time} < {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {end_n - 1} DAY)', form)}"
+                    )
                 return clauses
-            clauses = [f"{event_time} >= {_ps('current_date', unit, form, -start_n)}"]
+            clauses = [
+                f"{event_time} >= {_as_event_time(_ps('current_date', unit, form, -start_n), form)}"
+            ]
             if end_n > 0:
                 clauses.append(
-                    f"{event_time} < {_ps('current_date', unit, form, -(end_n - 1))}"
+                    f"{event_time} < {_as_event_time(_ps('current_date', unit, form, -(end_n - 1)), form)}"
                 )
             return clauses
         start = date.fromisoformat(
@@ -248,24 +301,30 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
         start = _grain_start(start, unit, week_start)
         end_exclusive = _grain_next(end, unit, week_start)
         return [
-            f"{event_time} >= DATE {_sql_string(start.isoformat())}",
-            f"{event_time} < DATE {_sql_string(end_exclusive.isoformat())}",
+            f"{event_time} >= {_as_event_time('DATE ' + _sql_string(start.isoformat()), form)}",
+            f"{event_time} < {_as_event_time('DATE ' + _sql_string(end_exclusive.isoformat()), form)}",
         ]
     if mode == "this":
-        return [f"{event_time} >= {_ps('current_date', unit, form, 0)}"]
+        return [
+            f"{event_time} >= {_as_event_time(_ps('current_date', unit, form, 0), form)}"
+        ]
     if mode == "previous":
         return [
-            f"{event_time} >= {_ps('current_date', unit, form, -1)}",
-            f"{event_time} < {_ps('current_date', unit, form, 0)}",
+            f"{event_time} >= {_as_event_time(_ps('current_date', unit, form, -1), form)}",
+            f"{event_time} < {_as_event_time(_ps('current_date', unit, form, 0), form)}",
         ]
     if unit == "day":
-        return [f"{event_time} >= current_date - {n}"]
+        return [
+            f"{event_time} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {n} DAY)', form)}"
+        ]
     if _exclude_current(form):
         return [
-            f"{event_time} >= {_ps('current_date', unit, form, -n)}",
-            f"{event_time} < {_ps('current_date', unit, form, 0)}",
+            f"{event_time} >= {_as_event_time(_ps('current_date', unit, form, -n), form)}",
+            f"{event_time} < {_as_event_time(_ps('current_date', unit, form, 0), form)}",
         ]
-    return [f"{event_time} >= {_ps('current_date', unit, form, -(n - 1))}"]
+    return [
+        f"{event_time} >= {_as_event_time(_ps('current_date', unit, form, -(n - 1)), form)}"
+    ]
 
 
 def annotate_incomplete(
@@ -275,7 +334,14 @@ def annotate_incomplete(
     today: date | None = None,
 ) -> list[dict[str, Any]]:
     """Mark the current grain when the window includes it. Trailing only."""
-    today = today or date.today()
+    if today is None:
+        tz = _reporting_timezone(form)
+        if tz == "UTC":
+            today = datetime.now(timezone.utc).date()
+        else:
+            from zoneinfo import ZoneInfo
+
+            today = datetime.now(ZoneInfo(tz)).date()
     grain = str(form.get("grain") or "day").strip().lower()
     if grain not in _GRAINS:
         grain = "day"
@@ -346,7 +412,6 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     exact_raw = form.get("exact")
     exact = exact_raw in (True, "true", "on", "1", 1)
 
-    # Integer days, not INTERVAL: sqlglot's INTERVAL '30' DAY is not BigQuery.
     clauses = _time_clauses(form, event_time)
     event_column = (form.get("event_column") or "").strip()
     event_value = (form.get("event_value") or "").strip()
@@ -367,11 +432,7 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
         event_time=event_time,
         measure=measure,  # type: ignore[arg-type]
         on="events",
-        bucket=(
-            f"CAST({_ps(event_time, 'week', form, 0)} AS DATE)"
-            if grain == "week"
-            else f"CAST(date_trunc('{grain}', {event_time}) AS DATE)"
-        ),
+        bucket=f"CAST({_ps(event_time, grain, form, 0)} AS DATE)",
         where=" AND ".join(clauses),
         exact=exact,
         breakdowns=breakdowns,
@@ -438,7 +499,7 @@ def event_values_sql(form: dict[str, Any]) -> str:
     if catalog:
         where = (
             f"{event_column} IS NOT NULL "
-            f"AND {event_time} >= current_date - {CATALOG_LOOKBACK_DAYS}"
+            f"AND {event_time} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {CATALOG_LOOKBACK_DAYS} DAY)', form)}"
         )
     else:
         where = " AND ".join(
