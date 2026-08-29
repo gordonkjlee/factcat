@@ -130,7 +130,10 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Show (other)" in res.text
     assert "SQL expression…" in res.text
     assert 'id="breakdown_at"' in res.text
-    assert "On each event" in res.text
+    assert 'value="rows"' in res.text
+    assert "On each event" not in res.text
+    assert "First value" not in res.text
+    assert "in this date range" in res.text
     assert "Exact (off = approx unique count)" not in res.text
     assert 'id="copy-sql"' in res.text
     assert 'id="copy-chart"' in res.text

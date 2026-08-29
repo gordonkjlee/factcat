@@ -246,12 +246,8 @@
       <span class="hint">Fills the spec expression. Does not replace it with a property store.</span>
     </div>
     <div id="breakdown-extra" hidden>
-      <label for="breakdown_at">As of</label>
-      <select name="breakdown_at" id="breakdown_at">
-        <option value="rows" {% if config.breakdown_at == "rows" or not config.breakdown_at %}selected{% endif %}>On each event</option>
-        <option value="first" {% if config.breakdown_at == "first" %}selected{% endif %}>First value</option>
-        <option value="last" {% if config.breakdown_at == "last" %}selected{% endif %}>Last value</option>
-      </select>
+      <span class="hint" id="breakdown-hint">Value on each event in this date range. First/last for an entity (chart window vs all history vs cohort) is a later control — it is not this dropdown.</span>
+      <input type="hidden" name="breakdown_at" id="breakdown_at" value="rows">
       <div class="range-row">
         <label for="top_n" style="margin:0">Top N</label>
         <input id="top_n" name="top_n" type="number" min="1" max="1000" value="{{ config.top_n or 8 }}">
