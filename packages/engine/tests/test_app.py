@@ -45,6 +45,10 @@ def test_setup_renders(monkeypatch, tmp_path):
     res = client.get("/setup")
     assert res.status_code == 200
     assert "Project setup" in res.text
+    assert "setup-docs" in res.text
+    assert "wide events table" in res.text
+    assert "Reporting timezone" in res.text
+    assert "Timestamp stored as" in res.text
     assert "Entity id" in res.text
     assert "This grain is called" not in res.text
     assert "Entity name (singular)" in res.text
@@ -123,7 +127,10 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     grain_at = html.find('id="grain"')
     range_at = html.find('id="range_choice"')
     assert grain_at != -1 and range_at != -1 and grain_at < range_at
-    assert "fillSelect(eventValueEl, cachedEventNames" in html
+    assert "fillEventSelect(cachedEventNames" in html
+    assert "fillSelect(eventValueEl, cachedEventNames" not in html
+    assert 'id="reporting_timezone"' in html
+    assert 'id="event_time_tz"' in html
     assert "syncChartTitle" not in html
     assert "Exact unique counts" in res.text
     assert "Break down by" in res.text
@@ -203,7 +210,7 @@ def test_events_serves_cached_event_names(monkeypatch, tmp_path):
     assert '"opened"' in html
     assert '"paid"' in html
     assert 'id="event_value-wrap" hidden' not in html
-    assert "fillSelect(eventValueEl, cachedEventNames" in html
+    assert "fillEventSelect(cachedEventNames" in html
     assert "All events" not in html
 
 
@@ -250,7 +257,8 @@ def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
     assert "ORDER BY BUCKET DESC" in compact
     assert "account_id" in sql
     assert "user_id" not in sql
-    assert "TIMESTAMP_TRUNC" in sql.upper() or "DATE_TRUNC" in sql.upper()
+    assert "DATE(occurred_at, 'UTC')" in sql.replace("`", "")
+    assert "CURRENT_DATE('UTC')" in sql
 
 
 def test_run_passes_breakdown_series(monkeypatch, tmp_path):
@@ -551,6 +559,7 @@ def test_template_ships_with_package():
     assert (static / "logo.svg").is_file()
     assert (static / "favicon.ico").is_file()
     assert (static / "waiting.jpg").is_file()
+    assert (Path(APP_DIR) / "guides" / "setup-bigquery.md").is_file()
 
 
 def test_favicon_and_mark_are_served(monkeypatch, tmp_path):
@@ -588,6 +597,8 @@ def test_readme_keeps_etymology_and_points_at_the_mark():
     text = readme.read_text(encoding="utf-8")
     assert "cat** is how you read a file" in text
     assert "packages/engine/factcat_app/static/logo.svg" in text
+    assert "one wide events table" in text
+    assert "setup-bigquery.md" in text
 
 
 def test_mapping_ready_requires_table_entity_and_time():

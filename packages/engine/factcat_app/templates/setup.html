@@ -1,13 +1,62 @@
 {% extends "base.html" %}
 {% block title %}Factcat — Setup{% endblock %}
 {% block extra_css %}
-    .setup-form { max-width: 28rem; padding: 1.5rem; background: var(--fc-snow); min-height: 100%; }
+    .setup-page {
+      flex: 1;
+      min-height: 0;
+      width: 100%;
+      box-sizing: border-box;
+      padding: 1.5rem 1.75rem 2rem;
+      display: grid;
+      grid-template-columns: minmax(22rem, 28rem) minmax(0, 1fr);
+      gap: 1.25rem;
+      align-items: start;
+    }
+    .setup-form {
+      background: var(--fc-snow);
+      border: 1px solid var(--fc-line);
+      border-radius: 0.75rem;
+      padding: 1.4rem 1.5rem 1.6rem;
+    }
+    .setup-docs {
+      background: var(--fc-snow);
+      border: 1px solid var(--fc-line);
+      border-radius: 0.75rem;
+      padding: 1.25rem 1.45rem 1.6rem;
+      min-height: 0;
+      max-height: calc(100vh - 3rem);
+      overflow: auto;
+      font-size: 0.88rem;
+      color: var(--fc-ink-soft);
+    }
+    .setup-docs h1 { font-size: 1.05rem; margin: 0 0 0.65rem; }
+    .setup-docs h2 { margin-top: 1.15rem; }
+    .setup-docs p, .setup-docs ul { margin: 0 0 0.65rem; }
+    .setup-docs ul { padding-left: 1.2rem; }
+    .setup-docs code {
+      font-size: 0.8em;
+      background: var(--fc-paper);
+      padding: 0.05rem 0.3rem;
+      border-radius: 0.25rem;
+    }
+    .setup-docs pre {
+      background: var(--fc-paper);
+      padding: 0.75rem 0.9rem;
+      border-radius: 0.4rem;
+      overflow: auto;
+      font-size: 0.8rem;
+    }
     #status { color: var(--fc-ok); font-size: 0.85rem; }
+    @media (max-width: 56rem) {
+      .setup-page { grid-template-columns: 1fr; }
+      .setup-docs { max-height: none; }
+    }
 {% endblock %}
 {% block body %}
+<div class="setup-page">
 <form id="f" class="setup-form">
   <h1>Project setup</h1>
-  <p class="lede">Map a table in <em>your</em> BigQuery. Saved to <code>.factcat.json</code> in this directory. ADC unless you open Advanced.</p>
+  <p class="lede">Map a table in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code> in this directory. Uses application-default credentials unless you open Advanced.</p>
 
   <h2>Warehouse</h2>
   <label for="project">GCP project that runs the query (billing)</label>
@@ -26,6 +75,7 @@
   <h2>Grain</h2>
   <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="entity" name="entity" required hidden></select>
+  <span class="hint">Stable id for this grain. Null means the event is not about that grain (dropped from uniques). INT64 preferred; STRING is fine. Not unique on the events table.</span>
   <label for="entity_label_choice">Entity name (singular)</label>
   <select id="entity_label_choice">
     <option value="User">User</option>
@@ -44,16 +94,31 @@
   <span class="hint">Display only (Unique Users, Average per User). Does not choose the id column.</span>
   <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="event_time" name="event_time" required hidden></select>
+  <span class="hint">TIMESTAMP (UTC instant) or DATETIME (civil time). Not DATE.</span>
   <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="event_column" name="event_column" hidden></select>
   <span class="hint">STRING column of event names. Save runs DISTINCT on the last 90 days and caches the list for Events.</span>
-  <h2>Formatting</h2>
+  <h2>Time</h2>
   <label for="week_start">Week starts on</label>
   <select id="week_start" name="week_start">
     <option value="monday" {% if config.week_start != "sunday" %}selected{% endif %}>Monday</option>
     <option value="sunday" {% if config.week_start == "sunday" %}selected{% endif %}>Sunday</option>
   </select>
-  <span class="hint">Used for weekly buckets and this/previous week. Does not use the warehouse default.</span>
+  <span class="hint">Applied after the instant is converted to the reporting calendar.</span>
+  <label for="reporting_timezone">Reporting timezone</label>
+  <select id="reporting_timezone" name="reporting_timezone">
+    {% for tz in reporting_timezones %}
+    <option value="{{ tz }}" {% if (config.reporting_timezone or "UTC") == tz %}selected{% endif %}>{{ tz }}</option>
+    {% endfor %}
+  </select>
+  <span class="hint">Whose midnight is a day, and whose Monday is a week. Not the warehouse default.</span>
+  <label for="event_time_tz">Timestamp stored as</label>
+  <select id="event_time_tz" name="event_time_tz">
+    <option value="utc" {% if config.event_time_tz != "reporting" %}selected{% endif %}>UTC instant (TIMESTAMP)</option>
+    <option value="reporting" {% if config.event_time_tz == "reporting" %}selected{% endif %}>Civil time in the reporting timezone (DATETIME)</option>
+  </select>
+  <span class="hint">TIMESTAMP is a UTC instant. DATETIME has no zone: treat it as already in the reporting timezone.</span>
+  <h2>Formatting</h2>
   <label for="thousand_sep">Thousand separator</label>
   <select id="thousand_sep" name="thousand_sep">
     <option value="comma" {% if config.thousand_sep == "comma" or not config.thousand_sep %}selected{% endif %}>Comma (1,234)</option>
@@ -84,6 +149,10 @@
     <input id="credentials" name="credentials" autocomplete="off" value="{{ config.credentials }}">
   </details>
 </form>
+<aside class="setup-docs" aria-label="Setup guide">
+  {{ setup_docs | safe }}
+</aside>
+</div>
 <script>
 const saved = {
   dataset: {{ config.dataset|tojson }},
@@ -421,6 +490,8 @@ form.addEventListener("submit", async (e) => {
         event_column: body.event_column,
         event_time: body.event_time,
         catalog: true,
+        reporting_timezone: body.reporting_timezone,
+        event_time_tz: body.event_time_tz,
       });
       if (!ev.ok) {
         setStatus("Saved");

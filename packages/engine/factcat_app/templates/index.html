@@ -177,6 +177,8 @@
     <input type="hidden" name="event_time" id="event_time" value="{{ config.event_time }}">
     <input type="hidden" name="event_column" id="event_column" value="{{ config.event_column }}">
     <input type="hidden" name="week_start" id="week_start" value="{{ config.week_start or 'monday' }}">
+    <input type="hidden" name="reporting_timezone" id="reporting_timezone" value="{{ config.reporting_timezone or 'UTC' }}">
+    <input type="hidden" name="event_time_tz" id="event_time_tz" value="{{ config.event_time_tz or 'utc' }}">
     <input type="hidden" name="thousand_sep" id="thousand_sep" value="{{ config.thousand_sep or 'comma' }}">
     <input type="hidden" name="decimal_sep" id="decimal_sep" value="{{ config.decimal_sep or 'period' }}">
     <input type="hidden" name="bytes_cap_gb" id="bytes_cap_gb" value="{{ config.bytes_cap_gb if config.bytes_cap_gb is not none else 10 }}">
@@ -487,6 +489,11 @@ function setLoading(sel, on) {
   const hint = document.getElementById(sel.id + "-loading");
   if (hint) hint.hidden = !on;
 }
+function fillEventSelect(items, selected) {
+  // Empty cache must still show the control. Hiding it made Events
+  // look like it had no event picker.
+  fillSelect(eventValueEl, items || [], selected, "Pick an event");
+}
 function fillSelect(sel, items, selected, blankLabel) {
   const cur = selected || sel.value;
   sel.innerHTML = "";
@@ -524,7 +531,7 @@ function fillSelect(sel, items, selected, blankLabel) {
 }
 if (eventColumnEl.value) {
   eventValueWrap.hidden = false;
-  fillSelect(eventValueEl, cachedEventNames || [], saved.event_value);
+  fillEventSelect(cachedEventNames || [], saved.event_value);
 }
 const CUSTOM_BREAKDOWN = "__expr__";
 const breakdownColumnEl = document.getElementById("breakdown_column");
@@ -740,6 +747,8 @@ async function refreshEventNames() {
     event_column: eventColumnEl.value,
     event_time: eventTimeEl.value,
     catalog: true,
+    reporting_timezone: document.getElementById("reporting_timezone").value,
+    event_time_tz: document.getElementById("event_time_tz").value,
   });
   if (gen !== valGen) return;
   setLoading(eventValueEl, false);
@@ -747,7 +756,7 @@ async function refreshEventNames() {
     setError(data.error || "Could not refresh events");
     return;
   }
-  fillSelect(eventValueEl, data.values || [], eventValueEl.value || saved.event_value);
+  fillEventSelect(data.values || [], eventValueEl.value || saved.event_value);
 }
 let activeGrain = currentGrain();
 rangeChoiceEl.addEventListener("change", applyRangeChoice);
