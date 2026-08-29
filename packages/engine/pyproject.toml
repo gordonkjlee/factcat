@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "factcat"
-version = "0.4.0"
+version = "0.4.1"
 description = "Product analytics on the event model already in your warehouse"
 readme = "README.md"
 requires-python = ">=3.10"
