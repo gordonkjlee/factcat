@@ -27,6 +27,9 @@ jobs:
         working-directory: packages/engine
         run: python -m pytest
 
+      - name: Publish helper tests
+        run: python -m pytest .github/scripts/test_pypi_smoke.py -q
+
       - name: Wheel
         run: |
           pip install build

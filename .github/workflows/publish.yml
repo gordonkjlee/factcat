@@ -1,11 +1,23 @@
 name: Publish to PyPI
 
+# Fire only when a GitHub Release is published (release-please merging a
+# release PR), or on a manual retry of a specific tag.
+#
+# Do not use workflow_run on the Release Please workflow: that workflow
+# succeeds every time it *updates* an open release PR after an ordinary
+# main push. Those runs then re-checked whatever GitHub called
+# latestRelease, so a JSON-API flap on an already-published version
+# opened a new "did not reach PyPI" issue and mailed the assignee.
+
 on:
-  workflow_run:
-    # Must match the `name:` in release-please.yml exactly
-    workflows: ["Release Please"]
-    types: [completed]
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to publish (v0.4.1)
+        required: true
+        type: string
 
 concurrency:
   group: publish-pypi
@@ -13,9 +25,6 @@ concurrency:
 
 jobs:
   publish:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -27,28 +36,19 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
-      - name: Find unpublished release
+      - name: Resolve tag
         id: release
         run: |
-          # GraphQL, not `gh api repos/.../releases/latest`. The REST call cannot
-          # distinguish "no releases exist" from "could not ask": both yield an
-          # empty string, and an empty string read as "nothing to publish" makes
-          # a skipped release look like a green run.
-          if ! RESPONSE=$(gh api graphql -f query='
-            query($owner:String!,$name:String!){
-              repository(owner:$owner,name:$name){ latestRelease{ tagName } }
-            }' -F owner="${{ github.repository_owner }}" -F name="${GITHUB_REPOSITORY#*/}" 2>&1); then
-            echo "::error::Could not query the latest release: ${RESPONSE}. Refusing to assume there is nothing to publish."
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            TAG="${{ inputs.tag }}"
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag must look like v0.4.1, got '${TAG}'."
             exit 1
           fi
-          TAG=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); r=((d.get('data') or {}).get('repository') or {}).get('latestRelease'); print((r or {}).get('tagName') or '')")
-          if [ -z "$TAG" ]; then
-            echo "No releases exist yet - nothing to publish."
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           VERSION="${TAG#v}"
-          VERSION="${VERSION#factcat-}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/factcat/${VERSION}/json")
@@ -62,8 +62,6 @@ jobs:
             echo "::error::PyPI returned ${CODE} for factcat ${VERSION}. Refusing to guess whether it is published."
             exit 1
           fi
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - if: steps.release.outputs.found == 'true'
         uses: actions/checkout@v7
@@ -95,125 +93,74 @@ jobs:
 
   verify:
     needs: publish
-    if: always() && needs.publish.result != 'skipped'
+    if: needs.publish.result == 'success' && needs.publish.outputs.found == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
-      issues: write
     steps:
-      - name: Which version should be live?
-        id: expected
-        run: |
-          if ! RESPONSE=$(gh api graphql -f query='
-            query($owner:String!,$name:String!){
-              repository(owner:$owner,name:$name){ latestRelease{ tagName } }
-            }' -F owner="${{ github.repository_owner }}" -F name="${GITHUB_REPOSITORY#*/}" 2>&1); then
-            echo "::error::Could not query the latest release: ${RESPONSE}. Refusing to report a release verified when it was never checked."
-            exit 1
-          fi
-          TAG=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); r=((d.get('data') or {}).get('repository') or {}).get('latestRelease'); print((r or {}).get('tagName') or '')")
-          if [ -z "$TAG" ]; then
-            echo "No releases exist yet - nothing to verify."
-            echo "check=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          VERSION="${TAG#v}"
-          VERSION="${VERSION#factcat-}"
-          echo "check=true" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - if: steps.expected.outputs.check == 'true'
-        uses: actions/setup-python@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: Install ${{ needs.publish.outputs.tag }} from PyPI
+        run: python .github/scripts/pypi_smoke.py --version "${{ needs.publish.outputs.version }}"
 
-      - if: steps.expected.outputs.check == 'true'
-        name: Is ${{ steps.expected.outputs.tag }} installable from PyPI?
-        id: smoke
+  alert:
+    needs: [publish, verify]
+    if: always() && (needs.publish.result == 'failure' || needs.verify.result == 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or reopen one issue for this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.publish.outputs.tag }}
+          VERSION: ${{ needs.publish.outputs.version }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          VERSION="${{ steps.expected.outputs.version }}"
-          DEADLINE=$((SECONDS + 300))
-          while [ "$SECONDS" -lt "$DEADLINE" ]; do
-            if curl -sf -o /dev/null "https://pypi.org/pypi/factcat/${VERSION}/json"; then
-              echo "factcat ${VERSION} is on PyPI after ${SECONDS}s."
-              break
-            fi
-            echo "not resolvable after ${SECONDS}s, waiting..."
-            sleep 20
-          done
-          if ! curl -sf -o /dev/null "https://pypi.org/pypi/factcat/${VERSION}/json"; then
-            echo "::error::factcat ${VERSION} is not on PyPI after ${SECONDS}s."
-            exit 1
+          if [ -z "$TAG" ]; then
+            echo "No tag on the publish job; nothing to file."
+            exit 0
           fi
-
-          python -m venv /tmp/smoke
-          /tmp/smoke/bin/pip install --quiet "factcat==${VERSION}"
-          /tmp/smoke/bin/python - <<'EOF'
-          import shutil
-          from factcat import EventsSpec, RetentionSpec, events_sql, retention_sql
-          from factcat_app.query import spec_from_form
-
-          spec = RetentionSpec(
-              table="payments", entity="subscription_id", entity_time="sub_start",
-              event_time="paid_at", period_days=35, n_periods=2,
-              retained="status = 'collected' AND within_period_offset <= 5",
-          )
-          sql = retention_sql(spec, dialect="snowflake")
-          assert "factcat_period_grid" in sql, "period grid missing from generated SQL"
-
-          events = events_sql(EventsSpec(
-              table="events", entity="subscription_id", event_time="occurred_at",
-              measure="uniques",
-          ), dialect="bigquery")
-          assert "APPROX_COUNT_DISTINCT" in events.upper()
-
-          form = spec_from_form({
-              "table": "analytics.events",
-              "entity": "subscription_id",
-              "event_time": "occurred_at",
-              "measure": "uniques",
-              "grain": "day",
-              "lookback_days": 7,
-          })
-          assert form.entity == "subscription_id"
-          assert shutil.which("factcat-app"), "factcat-app console script missing"
-          print("Smoke test passed: factcat from PyPI generates SQL and has factcat-app.")
-          EOF
-
-      - name: Open an issue if the release never landed
-        if: failure() && steps.expected.outputs.check == 'true'
-        run: |
-          TAG="${{ steps.expected.outputs.tag }}"
-          VERSION="${{ steps.expected.outputs.version }}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          TITLE="Release ${TAG} did not reach PyPI"
           BODY_FILE="${RUNNER_TEMP}/issue-body.md"
           {
             echo "The GitHub release **${TAG}** exists, but factcat ${VERSION} either never reached PyPI or does not work when installed from it."
             echo
-            echo "Publish job result: ${{ needs.publish.result }}."
+            echo "Publish job result: ${PUBLISH_RESULT}."
+            echo "Verify job result: ${VERIFY_RESULT}."
             echo
             echo "Run that failed: ${RUN_URL}"
             echo
             echo "Check, in order:"
             echo "1. Did the publish job reach the upload step, or fail earlier (tests, build, OIDC)?"
             echo "2. Is the Trusted Publisher still configured on PyPI for this repo and workflow?"
-            echo "3. Is https://pypi.org/pypi/factcat/${VERSION}/json resolvable now?"
+            echo "3. Does \`pip install factcat==${VERSION}\` work now?"
           } > "$BODY_FILE"
 
-          EXISTING=$(gh issue list --repo ${{ github.repository }} --state open \
-            --search "${TAG} in:title" --json number,title \
-            --jq '[.[] | select(.title | test("did not reach PyPI")) | .number] | .[0] // empty')
-          if [ -n "$EXISTING" ]; then
-            echo "Issue #${EXISTING} already open for this release."
+          MATCH=$(gh issue list --repo "${{ github.repository }}" --state all --limit 50 \
+            --json number,title,state \
+            | TITLE="$TITLE" python3 -c "
+          import json, os, sys
+          title = os.environ['TITLE']
+          issues = json.load(sys.stdin)
+          hit = next((i for i in issues if i.get('title') == title), None)
+          json.dump(hit or {}, sys.stdout)
+          ")
+          NUMBER=$(echo "$MATCH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('number') or '')")
+          STATE=$(echo "$MATCH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('state') or '')")
+          if [ -z "$NUMBER" ]; then
+            gh issue create --repo "${{ github.repository }}" \
+              --title "$TITLE" \
+              --assignee gordonkjlee \
+              --body-file "$BODY_FILE"
             exit 0
           fi
-          gh issue create --repo ${{ github.repository }} \
-            --title "Release ${TAG} did not reach PyPI" \
-            --assignee gordonkjlee \
-            --body-file "$BODY_FILE"
-        env:
-          GH_TOKEN: ${{ github.token }}
+          if printf '%s' "$STATE" | grep -qi '^closed$'; then
+            gh issue reopen --repo "${{ github.repository }}" "$NUMBER"
+          fi
+          gh issue comment --repo "${{ github.repository }}" "$NUMBER" --body-file "$BODY_FILE"
