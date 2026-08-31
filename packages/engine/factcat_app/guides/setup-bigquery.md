@@ -13,6 +13,10 @@ the dataset.
 Need BigQuery Job User on the billing project and Data Viewer on the
 dataset.
 
+**Dataset** and **table** are lists after the billing project is set.
+They stay visible and greyed until then, same as Snowflake's catalog
+chain.
+
 ## Table shape
 
 One table. One **row per event**. Properties are **real columns**. Event

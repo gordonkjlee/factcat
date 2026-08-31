@@ -72,6 +72,12 @@
     #extra-install { margin: 0; }
     #extra-status { flex: 1 1 100%; font-size: 0.85rem; color: var(--fc-ink-soft); min-height: 0; margin: 0; }
     #extra-status:empty { display: none; }
+    .setup-form select:disabled {
+      opacity: 0.55;
+      background: var(--fc-paper);
+      color: var(--fc-ink-soft);
+      cursor: not-allowed;
+    }
     @media (max-width: 56rem) {
       .setup-page { grid-template-columns: 1fr; }
       .setup-docs { max-height: none; }
@@ -109,10 +115,6 @@
     <span class="hint">The account locator from your Snowflake URL, for example <code>xy12345</code> or <code>xy12345.us-east-1</code>.</span>
     <label for="user">User</label>
     <input id="user" name="user" autocomplete="off" value="{{ config.user }}">
-    <label for="warehouse">Compute warehouse</label>
-    <input id="warehouse" name="warehouse" autocomplete="off" value="{{ config.warehouse }}">
-    <label for="role">Role (optional)</label>
-    <input id="role" name="role" autocomplete="off" value="{{ config.role }}">
     <label for="snowflake_auth">Sign-in</label>
     <select id="snowflake_auth" name="snowflake_auth">
       <option value="key_pair" {% if config.snowflake_auth != "externalbrowser" %}selected{% endif %}>Key-pair file</option>
@@ -123,26 +125,30 @@
       <label for="private_key_path">Private key file</label>
       <input id="private_key_path" name="private_key_path" autocomplete="off" value="{{ config.private_key_path }}" placeholder="rsa_key.p8">
     </div>
+    <label for="role">Role (optional) <span id="role-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <select id="role" name="role" disabled><option value=""></option></select>
+    <label for="warehouse">Compute warehouse <span id="warehouse-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <select id="warehouse" name="warehouse" disabled><option value=""></option></select>
   </div>
   <input type="hidden" name="table" id="table" value="{{ config.table }}">
 
   <h2>Table</h2>
   <div id="bq-table">
     <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="dataset" name="dataset" hidden></select>
+    <select id="dataset" name="dataset" disabled><option value=""></option></select>
   </div>
   <div id="sf-table" hidden>
     <label for="database">Database <span id="database-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="database" name="database" hidden></select>
+    <select id="database" name="database" disabled><option value=""></option></select>
     <label for="schema">Schema <span id="schema-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="schema" name="schema" hidden></select>
+    <select id="schema" name="schema" disabled><option value=""></option></select>
   </div>
   <label for="table_name">Table <span id="table_name-loading" class="loading" hidden aria-label="Loading"></span></label>
-  <select id="table_name" name="table_name" hidden></select>
+  <select id="table_name" name="table_name" disabled><option value=""></option></select>
 
   <h2>Grain</h2>
   <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
-  <select id="entity" name="entity" required hidden></select>
+  <select id="entity" name="entity" required disabled><option value=""></option></select>
   <span class="hint">Stable id for this grain. Null means the event is not about that grain (dropped from uniques). Integer preferred; string is fine. Not unique on the events table.</span>
   <label for="entity_label_choice">Entity name (singular)</label>
   <select id="entity_label_choice">
@@ -161,7 +167,7 @@
   <input id="entity_label_plural" name="entity_label_plural" autocomplete="off" value="{{ config.entity_label_plural or 'Users' }}">
   <span class="hint">Display only (Unique Users, Average per User). Does not choose the id column.</span>
   <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
-  <select id="event_time" name="event_time" required hidden></select>
+  <select id="event_time" name="event_time" required disabled><option value=""></option></select>
   <span class="hint" id="event-time-hint">TIMESTAMP (UTC instant), DATETIME (civil time), or an integer Unix epoch. Not DATE.</span>
   <div id="event-time-epoch-wrap" hidden>
     <label for="event_time_epoch">Unix epoch unit</label>
@@ -174,7 +180,7 @@
     <span class="hint">Integer seconds (or ms / µs) since 1970-01-01 UTC. Always an instant; reporting timezone is whose midnight is a day.</span>
   </div>
   <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
-  <select id="event_column" name="event_column" hidden></select>
+  <select id="event_column" name="event_column" disabled><option value=""></option></select>
   <span class="hint">String column of event names. Save runs DISTINCT on the last 90 days and caches the list for Events.</span>
   <h2>Time</h2>
   <label for="week_start">Week starts on</label>
@@ -246,6 +252,8 @@ const saved = {
   entity: {{ config.entity|tojson }},
   event_time: {{ config.event_time|tojson }},
   event_column: {{ config.event_column|tojson }},
+  role: {{ config.role|tojson }},
+  warehouse: {{ config.warehouse|tojson }},
 };
 const form = document.getElementById("f");
 const kindEl = document.getElementById("kind");
@@ -261,25 +269,22 @@ const entityEl = document.getElementById("entity");
 const eventTimeEl = document.getElementById("event_time");
 const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
+const warehouseEl = document.getElementById("warehouse");
+const roleEl = document.getElementById("role");
 const TYPE_SETS = {{ type_sets|tojson }};
 const SETUP_DOCS = {{ setup_docs_by_kind|tojson }};
 const EXTRAS = {{ extras|tojson }};
 const EXTRA_COMMANDS = {{ extra_commands|tojson }};
+const CATALOG = {{ catalog_steps_by_kind|tojson }};
 function currentKind() {
-  return kindEl.value === "snowflake" ? "snowflake" : "bigquery";
+  return CATALOG[kindEl.value] ? kindEl.value : Object.keys(CATALOG)[0];
 }
 function typeSet(role) {
   const pack = TYPE_SETS[currentKind()] || TYPE_SETS.bigquery;
   return new Set(pack[role] || []);
 }
-let dsGen = 0;
-let schGen = 0;
-let tblGen = 0;
-let colGen = 0;
-let datasetsFetched = false;
-let schemasFetched = false;
-let tablesFetched = false;
-let columnsFetched = false;
+const fetched = {};
+const gens = {};
 let suppressChange = false;
 
 function setError(text) {
@@ -316,8 +321,7 @@ function setLoading(sel, on) {
 }
 function hideSelect(sel) {
   setLoading(sel, false);
-  sel.innerHTML = "";
-  sel.hidden = true;
+  seedSelect(sel, "");
 }
 function typedOptions(cols, allowed) {
   return (cols || [])
@@ -332,10 +336,9 @@ function fillSelect(sel, items, selected) {
   suppressChange = true;
   const cur = selected || sel.value;
   sel.innerHTML = "";
-  if (!items.length) {
-    sel.hidden = true;
-    return;
-  }
+  const blank = document.createElement("option");
+  blank.value = "";
+  sel.appendChild(blank);
   const ranked = [...items].sort((a, b) => {
     const ka = String(typeof a === "string" ? a : a.value).toLowerCase();
     const kb = String(typeof b === "string" ? b : b.value).toLowerCase();
@@ -343,9 +346,6 @@ function fillSelect(sel, items, selected) {
     if (ka > kb) return 1;
     return 0;
   });
-  const blank = document.createElement("option");
-  blank.value = "";
-  sel.appendChild(blank);
   for (const item of ranked) {
     const opt = document.createElement("option");
     if (typeof item === "string") {
@@ -359,12 +359,15 @@ function fillSelect(sel, items, selected) {
     sel.appendChild(opt);
   }
   if (cur && [...sel.options].some((o) => o.value === cur)) sel.value = cur;
-  sel.hidden = false;
   suppressChange = false;
+  syncCatalogEnabled();
 }
 function seedSelect(sel, value) {
   suppressChange = true;
   sel.innerHTML = "";
+  const blank = document.createElement("option");
+  blank.value = "";
+  sel.appendChild(blank);
   if (value) {
     const opt = document.createElement("option");
     opt.value = value;
@@ -372,8 +375,55 @@ function seedSelect(sel, value) {
     sel.appendChild(opt);
     sel.value = value;
   }
-  sel.hidden = false;
   suppressChange = false;
+  syncCatalogEnabled();
+}
+function extraReady() {
+  return EXTRAS[kindEl.value] !== false;
+}
+function kindSteps() {
+  return CATALOG[currentKind()] || [];
+}
+function stepTargets(step) {
+  if (step.fill) return step.fill.map((f) => f.id);
+  return step.id ? [step.id] : [];
+}
+function needMet(need) {
+  if (need === "extra") return extraReady();
+  if (need === "signed_in") return snowflakeSignedIn();
+  if (need === "project") return !!catalogProject();
+  const el = document.getElementById(need);
+  return !!(el && String(el.value || "").trim());
+}
+function stepReady(step) {
+  return (step.needs || []).every(needMet);
+}
+function syncCatalogEnabled() {
+  for (const step of kindSteps()) {
+    const ready = stepReady(step);
+    for (const id of stepTargets(step)) {
+      const el = document.getElementById(id);
+      if (el) el.disabled = !ready;
+    }
+  }
+}
+function resetFetched() {
+  for (const key of Object.keys(fetched)) fetched[key] = false;
+}
+function resetFollowing(changedId) {
+  const steps = kindSteps();
+  const idx = steps.findIndex(
+    (s) => s.id === changedId || (s.fill && s.fill.some((f) => f.id === changedId))
+  );
+  if (idx < 0) return;
+  for (const step of steps.slice(idx + 1)) {
+    fetched[step.id] = false;
+    for (const id of stepTargets(step)) {
+      const el = document.getElementById(id);
+      if (el) seedSelect(el, "");
+    }
+  }
+  tableEl.value = combinedTable();
 }
 function catalogProject() {
   return dataProjectEl.value.trim() || projectEl.value.trim();
@@ -385,8 +435,8 @@ function authBody() {
       kind,
       account: document.getElementById("account").value.trim(),
       user: document.getElementById("user").value.trim(),
-      warehouse: document.getElementById("warehouse").value.trim(),
-      role: document.getElementById("role").value.trim(),
+      warehouse: warehouseEl.value.trim(),
+      role: roleEl.value.trim(),
       private_key_path: document.getElementById("private_key_path").value.trim(),
       snowflake_auth: document.getElementById("snowflake_auth").value,
       database: databaseEl.value.trim(),
@@ -447,20 +497,20 @@ function syncKindUi(clearIdentity) {
       credentialsEl.value = "";
       seedSelect(datasetEl, "");
     } else {
-      ["account", "user", "warehouse", "role", "private_key_path"].forEach((id) => {
+      ["account", "user", "private_key_path"].forEach((id) => {
         document.getElementById(id).value = "";
       });
+      seedSelect(roleEl, "");
+      seedSelect(warehouseEl, "");
       seedSelect(databaseEl, "");
       seedSelect(schemaEl, "");
     }
     seedSelect(tableNameEl, "");
     clearColumns();
-    datasetsFetched = false;
-    schemasFetched = false;
-    tablesFetched = false;
-    columnsFetched = false;
+    resetFetched();
   }
   syncExtraCard();
+  syncCatalogEnabled();
 }
 async function post(url, body) {
   const res = await fetch(url, {
@@ -470,119 +520,86 @@ async function post(url, body) {
   });
   return res.json();
 }
-async function loadDatasets() {
-  const gen = ++dsGen;
-  setError("");
-  const snow = currentKind() === "snowflake";
-  if (!snow && !catalogProject()) return;
-  const sel = snow ? databaseEl : datasetEl;
-  setLoading(sel, true);
-  const data = await post("/api/datasets", authBody());
-  if (gen !== dsGen) return;
-  setLoading(sel, false);
-  if (!data.ok) {
-    noteMissingExtra(data);
-    setError(data.error || (snow ? "Could not list databases" : "Could not list datasets"));
-    return;
-  }
-  const ids = (data.datasets || []).map((d) => d.id);
-  fillSelect(sel, ids, sel.value || (snow ? saved.database : saved.dataset));
+function snowflakeSignedIn() {
+  const account = document.getElementById("account").value.trim();
+  const user = document.getElementById("user").value.trim();
+  if (!account || !user) return false;
+  if (document.getElementById("snowflake_auth").value === "externalbrowser") return true;
+  return document.getElementById("private_key_path").value.trim() !== "";
 }
-async function loadSchemas() {
-  const gen = ++schGen;
+async function loadStep(step) {
+  if (!step || !step.endpoint || !stepReady(step)) return;
+  const gen = (gens[step.id] = (gens[step.id] || 0) + 1);
+  const targets = stepTargets(step).map((id) => document.getElementById(id)).filter(Boolean);
+  targets.forEach((el) => setLoading(el, true));
   setError("");
-  if (currentKind() !== "snowflake" || !databaseEl.value) return;
-  setLoading(schemaEl, true);
-  const data = await post("/api/schemas", {...authBody(), database: databaseEl.value});
-  if (gen !== schGen) return;
-  setLoading(schemaEl, false);
+  const data = await post("/api/" + step.endpoint, {
+    ...authBody(),
+    dataset: datasetEl.value.trim(),
+    table_name: tableNameEl.value.trim(),
+    database: databaseEl.value.trim(),
+    schema: schemaEl.value.trim(),
+  });
+  if (gen !== gens[step.id]) return;
+  targets.forEach((el) => setLoading(el, false));
   if (!data.ok) {
     noteMissingExtra(data);
-    setError(data.error || "Could not list schemas");
-    return;
-  }
-  fillSelect(schemaEl, data.schemas || [], schemaEl.value || saved.schema);
-}
-async function loadTables() {
-  const gen = ++tblGen;
-  setError("");
-  const snow = currentKind() === "snowflake";
-  if (snow && (!databaseEl.value || !schemaEl.value)) return;
-  if (!snow && !datasetEl.value) return;
-  setLoading(tableNameEl, true);
-  const payload = snow
-    ? {...authBody(), database: databaseEl.value, schema: schemaEl.value}
-    : {...authBody(), dataset: datasetEl.value};
-  const data = await post("/api/tables", payload);
-  if (gen !== tblGen) return;
-  setLoading(tableNameEl, false);
-  if (!data.ok) {
-    noteMissingExtra(data);
-    setError(data.error || "Could not list tables");
+    setError(data.error || "Could not load catalog");
+    fetched[step.id] = false;
     return;
   }
   if (data.location) locationEl.value = data.location;
-  fillSelect(tableNameEl, data.tables || [], tableNameEl.value || saved.table_name);
-}
-async function loadColumns() {
-  const gen = ++colGen;
-  setError("");
-  const snow = currentKind() === "snowflake";
-  if (!tableNameEl.value) return;
-  if (snow && (!databaseEl.value || !schemaEl.value)) return;
-  if (!snow && !datasetEl.value) return;
-  setLoading(entityEl, true);
-  setLoading(eventTimeEl, true);
-  setLoading(eventColumnEl, true);
-  const payload = snow
-    ? {...authBody(), database: databaseEl.value, schema: schemaEl.value, table_name: tableNameEl.value}
-    : {...authBody(), dataset: datasetEl.value, table_name: tableNameEl.value};
-  const data = await post("/api/columns", payload);
-  if (gen !== colGen) return;
-  setLoading(entityEl, false);
-  setLoading(eventTimeEl, false);
-  setLoading(eventColumnEl, false);
-  if (!data.ok) {
-    noteMissingExtra(data);
-    setError(data.error || "Could not list columns");
+  if (step.fill) {
+    const cols = data.columns || [];
+    for (const spec of step.fill) {
+      const el = document.getElementById(spec.id);
+      if (!el) continue;
+      fillSelect(el, typedOptions(cols, typeSet(spec.filter)), el.value || saved[spec.id]);
+    }
+    tableEl.value = combinedTable();
     return;
   }
-  if (data.location) locationEl.value = data.location;
-  const cols = data.columns || [];
-  fillSelect(entityEl, typedOptions(cols, typeSet("entity")), entityEl.value || saved.entity);
-  fillSelect(eventTimeEl, typedOptions(cols, typeSet("event_time")), eventTimeEl.value || saved.event_time);
-  fillSelect(eventColumnEl, typedOptions(cols, typeSet("event_column")), eventColumnEl.value || saved.event_column);
-  tableEl.value = combinedTable();
+  const el = document.getElementById(step.id);
+  if (!el) return;
+  let items = data[step.values] || [];
+  if (step.item) {
+    items = items.map((row) => (typeof row === "string" ? row : row[step.item]));
+  }
+  const pick = el.value || saved[step.id] || (step.default_key && data[step.default_key]) || "";
+  fillSelect(el, items, pick);
 }
-
-datasetEl.addEventListener("mousedown", () => {
-  if (datasetsFetched) return;
-  datasetsFetched = true;
-  loadDatasets();
-});
-databaseEl.addEventListener("mousedown", () => {
-  if (datasetsFetched) return;
-  datasetsFetched = true;
-  loadDatasets();
-});
-schemaEl.addEventListener("mousedown", () => {
-  if (schemasFetched) return;
-  schemasFetched = true;
-  loadSchemas();
-});
-tableNameEl.addEventListener("mousedown", () => {
-  if (tablesFetched) return;
-  tablesFetched = true;
-  loadTables();
-});
-function fetchColumnsOnce() {
-  if (columnsFetched) return;
-  columnsFetched = true;
-  loadColumns();
+function requestStep(step) {
+  if (!step || fetched[step.id]) return;
+  fetched[step.id] = true;
+  loadStep(step);
 }
-entityEl.addEventListener("mousedown", fetchColumnsOnce);
-eventTimeEl.addEventListener("mousedown", fetchColumnsOnce);
-eventColumnEl.addEventListener("mousedown", fetchColumnsOnce);
+function stepForControl(id) {
+  return kindSteps().find((s) => stepTargets(s).includes(id));
+}
+function bindCatalog() {
+  const seen = new Set();
+  for (const steps of Object.values(CATALOG)) {
+    for (const step of steps) {
+      for (const id of stepTargets(step)) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const el = document.getElementById(id);
+        if (!el) continue;
+        el.addEventListener("mousedown", () => {
+          requestStep(stepForControl(id));
+        });
+        el.addEventListener("change", () => {
+          if (suppressChange) return;
+          if (id === "table_name" || id === "dataset" || id === "database" || id === "schema") {
+            tableEl.value = combinedTable();
+          }
+          if (id === "event_time") syncEventTimeKind();
+          resetFollowing(id);
+        });
+      }
+    }
+  }
+}
 function syncSnowflakeAuthUi() {
   const browser = document.getElementById("snowflake_auth").value === "externalbrowser";
   document.getElementById("sf-key-wrap").hidden = browser;
@@ -621,55 +638,23 @@ function syncEventTimeKind() {
     ? "TIMESTAMP_NTZ / DATETIME have no zone. Say whether the stored numbers are UTC or already in the reporting timezone. TIMESTAMP_TZ / LTZ are instants and do not need this."
     : "TIMESTAMP is a UTC instant. DATETIME has no zone: treat it as already in the reporting timezone.";
 }
-eventTimeEl.addEventListener("change", () => {
-  if (suppressChange) return;
-  syncEventTimeKind();
-});
-document.getElementById("snowflake_auth").addEventListener("change", syncSnowflakeAuthUi);
-datasetEl.addEventListener("change", () => {
-  if (suppressChange) return;
-  tablesFetched = false;
-  columnsFetched = false;
-  seedSelect(tableNameEl, "");
-  clearColumns();
-  tableEl.value = "";
-});
-databaseEl.addEventListener("change", () => {
-  if (suppressChange) return;
-  schemasFetched = false;
-  tablesFetched = false;
-  columnsFetched = false;
-  seedSelect(schemaEl, "");
-  seedSelect(tableNameEl, "");
-  clearColumns();
-});
-schemaEl.addEventListener("change", () => {
-  if (suppressChange) return;
-  tablesFetched = false;
-  columnsFetched = false;
-  seedSelect(tableNameEl, "");
-  clearColumns();
-});
-tableNameEl.addEventListener("change", () => {
-  if (suppressChange) return;
-  columnsFetched = false;
-  clearColumns();
-  tableEl.value = combinedTable();
+document.getElementById("snowflake_auth").addEventListener("change", () => {
+  syncSnowflakeAuthUi();
+  resetFetched();
+  syncCatalogEnabled();
 });
 [projectEl, dataProjectEl, credentialsEl,
   document.getElementById("account"),
   document.getElementById("user"),
-  document.getElementById("warehouse"),
   document.getElementById("private_key_path"),
 ].forEach((el) => {
   el.addEventListener("input", () => {
-    datasetsFetched = false;
-    schemasFetched = false;
-    tablesFetched = false;
-    columnsFetched = false;
+    resetFetched();
+    syncCatalogEnabled();
   });
 });
 kindEl.addEventListener("change", () => syncKindUi(true));
+bindCatalog();
 document.getElementById("extra-install").addEventListener("click", async () => {
   const btn = document.getElementById("extra-install");
   const kind = kindEl.value;
@@ -682,6 +667,8 @@ document.getElementById("extra-install").addEventListener("click", async () => {
       EXTRAS[kind] = true;
       setExtraStatus("");
       syncExtraCard();
+      resetFetched();
+      syncCatalogEnabled();
       return;
     }
     if (data.command) EXTRA_COMMANDS[kind] = data.command;
@@ -697,6 +684,8 @@ document.getElementById("extra-install").addEventListener("click", async () => {
 });
 syncKindUi(false);
 if (currentKind() === "snowflake") {
+  seedSelect(roleEl, saved.role);
+  seedSelect(warehouseEl, saved.warehouse);
   seedSelect(databaseEl, saved.database);
   seedSelect(schemaEl, saved.schema);
 } else {

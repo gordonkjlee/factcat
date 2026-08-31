@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from factcat.warehouses import AdapterError
+from factcat.warehouses import ADAPTERS, AdapterError
 from factcat_app.config import warehouse_kind
 from factcat.warehouses.bigquery import (
     adc_quota_project,
@@ -24,8 +24,10 @@ from factcat.warehouses.snowflake import (
     WALLCLOCK_TIME_TYPES as SF_WALLCLOCK_TIME_TYPES,
     list_columns as sf_list_columns,
     list_databases,
+    list_roles as sf_list_roles,
     list_schemas as sf_list_schemas,
     list_tables as sf_list_tables,
+    list_warehouses as sf_list_warehouses,
     passphrase_from_env,
 )
 
@@ -52,6 +54,91 @@ JSON_TYPES = frozenset({"JSON"})
 
 def form_kind(form: dict[str, Any]) -> str:
     return warehouse_kind(form)
+
+
+# Setup catalog chain. One list per connect(kind=). The page enables a
+# field when every ``needs`` token is met, loads ``endpoint`` on first
+# open, and clears later steps on change. Identity/auth widgets stay on
+# the concrete adapter (project vs account); do not copy those here.
+#
+# needs: extra | signed_in | project | <field id>
+# fill: column picks that share one /api/columns response
+_GRAIN_FILL = (
+    {"id": "entity", "filter": "entity"},
+    {"id": "event_time", "filter": "event_time"},
+    {"id": "event_column", "filter": "event_column"},
+)
+_COLUMNS_STEP = {
+    "id": "_columns",
+    "endpoint": "columns",
+    "needs": ["table_name"],
+    "fill": list(_GRAIN_FILL),
+}
+CATALOG_STEPS: dict[str, tuple[dict[str, Any], ...]] = {
+    "bigquery": (
+        {
+            "id": "dataset",
+            "endpoint": "datasets",
+            "values": "datasets",
+            "item": "id",
+            "needs": ["extra", "project"],
+        },
+        {
+            "id": "table_name",
+            "endpoint": "tables",
+            "values": "tables",
+            "needs": ["dataset"],
+        },
+        dict(_COLUMNS_STEP),
+    ),
+    "snowflake": (
+        {
+            "id": "role",
+            "endpoint": "roles",
+            "values": "roles",
+            "needs": ["extra", "signed_in"],
+            "optional": True,
+        },
+        {
+            "id": "warehouse",
+            "endpoint": "warehouses",
+            "values": "warehouses",
+            "default_key": "default",
+            "needs": ["extra", "signed_in"],
+        },
+        {
+            "id": "database",
+            "endpoint": "datasets",
+            "values": "datasets",
+            "item": "id",
+            "needs": ["warehouse"],
+        },
+        {
+            "id": "schema",
+            "endpoint": "schemas",
+            "values": "schemas",
+            "needs": ["database"],
+        },
+        {
+            "id": "table_name",
+            "endpoint": "tables",
+            "values": "tables",
+            "needs": ["schema"],
+        },
+        dict(_COLUMNS_STEP),
+    ),
+}
+
+
+def catalog_steps(kind: str) -> tuple[dict[str, Any], ...]:
+    steps = CATALOG_STEPS.get(kind)
+    if steps is None:
+        raise LookupError(f"no catalog steps for {kind!r}")
+    return steps
+
+
+def catalog_steps_by_kind() -> dict[str, list[dict[str, Any]]]:
+    return {kind: list(catalog_steps(kind)) for kind in ADAPTERS}
 
 
 def type_sets(kind: str) -> dict[str, frozenset[str]]:
@@ -121,6 +208,23 @@ def _sf_auth(form: dict[str, Any]) -> dict[str, Any]:
     if passphrase:
         out["private_key_passphrase"] = passphrase
     return out
+
+
+def roles_from_form(form: dict[str, Any]) -> list[str]:
+    if form_kind(form) != "snowflake":
+        raise ValueError("roles are a Snowflake catalog step")
+    auth = _sf_auth(form)
+    auth.pop("warehouse", None)
+    auth.pop("role", None)
+    return sf_list_roles(**auth)
+
+
+def warehouses_from_form(form: dict[str, Any]) -> dict[str, Any]:
+    if form_kind(form) != "snowflake":
+        raise ValueError("compute warehouses are a Snowflake catalog step")
+    auth = _sf_auth(form)
+    auth.pop("warehouse", None)
+    return sf_list_warehouses(**auth)
 
 
 def datasets_from_form(form: dict[str, Any]) -> list[dict[str, str]]:
@@ -199,11 +303,15 @@ __all__ = [
     "PROPERTY_OF_TYPES",
     "TIME_TYPES",
     "bootstrap_project",
+    "catalog_steps",
+    "catalog_steps_by_kind",
     "column_fits",
     "columns_from_form",
     "datasets_from_form",
     "form_kind",
+    "roles_from_form",
     "schemas_from_form",
     "tables_from_form",
     "type_sets",
+    "warehouses_from_form",
 ]

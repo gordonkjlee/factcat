@@ -131,7 +131,7 @@ def _connect_kwargs(
     *,
     account: str,
     user: str,
-    warehouse: str,
+    warehouse: str | None,
     database: str | None,
     schema: str | None,
     private_key_path: str,
@@ -145,10 +145,11 @@ def _connect_kwargs(
     kwargs: dict[str, Any] = {
         "account": account,
         "user": user,
-        "warehouse": warehouse,
         "login_timeout": int(timeout),
         "network_timeout": int(timeout),
     }
+    if warehouse:
+        kwargs["warehouse"] = warehouse
     if database:
         kwargs["database"] = database
     if schema:
@@ -276,19 +277,20 @@ def _catalog_connect(
     *,
     account: str,
     user: str,
-    warehouse: str,
-    private_key_path: str,
+    warehouse: str = "",
+    private_key_path: str = "",
     database: str | None = None,
     schema: str | None = None,
     role: str | None = None,
     private_key_passphrase: str | None = None,
     authenticator: str = "key_pair",
 ) -> Any:
+    """Open a session for SHOW / DESCRIBE. Compute warehouse is optional."""
     return _open_connection(
         **_connect_kwargs(
             account=_require_ident(account, "account"),
             user=_require_ident(user, "user"),
-            warehouse=_require_ident(warehouse, "warehouse"),
+            warehouse=(warehouse or "").strip() or None,
             database=(database or "").strip() or None,
             schema=(schema or "").strip() or None,
             private_key_path=private_key_path,
@@ -301,16 +303,109 @@ def _catalog_connect(
     )
 
 
+def _flag_yes(value: Any) -> bool:
+    return str(value or "").strip().upper() in {"Y", "YES", "TRUE", "1"}
+
+
 def _fetch_maps(cur: Any) -> list[dict[str, Any]]:
     columns = [col[0] for col in (cur.description or [])]
     return [dict(zip(columns, row)) for row in (cur.fetchall() or [])]
+
+
+def list_roles(
+    *,
+    account: str,
+    user: str,
+    private_key_path: str = "",
+    private_key_passphrase: str | None = None,
+    authenticator: str = "key_pair",
+) -> list[str]:
+    """Roles granted to ``user``. Metadata only; no compute warehouse.
+
+    Connects as the user's default role. ``SHOW GRANTS TO USER`` is the
+    roles they can assume, not every role visible in the account.
+    """
+    user = _require_ident(user, "user")
+    ctx = None
+    cur = None
+    try:
+        ctx = _catalog_connect(
+            account=account,
+            user=user,
+            private_key_path=private_key_path,
+            private_key_passphrase=private_key_passphrase,
+            authenticator=authenticator,
+        )
+        cur = ctx.cursor()
+        cur.execute(f"SHOW GRANTS TO USER {_quote_ident(user)}")
+        names: set[str] = set()
+        for row in _fetch_maps(cur):
+            name = _row_get(row, "role", "name")
+            if name:
+                names.add(str(name))
+    except (AdapterError, ImportError, ValueError):
+        raise
+    except Exception as exc:
+        raise AdapterError(str(exc) or "could not list roles") from exc
+    finally:
+        if cur is not None:
+            cur.close()
+        if ctx is not None:
+            ctx.close()
+    return sorted(names, key=str.lower)
+
+
+def list_warehouses(
+    *,
+    account: str,
+    user: str,
+    private_key_path: str = "",
+    role: str | None = None,
+    private_key_passphrase: str | None = None,
+    authenticator: str = "key_pair",
+) -> dict[str, Any]:
+    """Compute warehouses the current role can see. No warehouse needed to list."""
+    ctx = None
+    cur = None
+    try:
+        ctx = _catalog_connect(
+            account=account,
+            user=user,
+            role=role,
+            private_key_path=private_key_path,
+            private_key_passphrase=private_key_passphrase,
+            authenticator=authenticator,
+        )
+        cur = ctx.cursor()
+        cur.execute("SHOW WAREHOUSES")
+        names: list[str] = []
+        default: str | None = None
+        for row in _fetch_maps(cur):
+            name = _row_get(row, "name")
+            if not name:
+                continue
+            text = str(name)
+            names.append(text)
+            if _flag_yes(_row_get(row, "is_default")):
+                default = text
+    except (AdapterError, ImportError, ValueError):
+        raise
+    except Exception as exc:
+        raise AdapterError(str(exc) or "could not list warehouses") from exc
+    finally:
+        if cur is not None:
+            cur.close()
+        if ctx is not None:
+            ctx.close()
+    names = sorted(names, key=str.lower)
+    return {"warehouses": names, "default": default}
 
 
 def list_databases(
     *,
     account: str,
     user: str,
-    warehouse: str,
+    warehouse: str = "",
     private_key_path: str,
     role: str | None = None,
     private_key_passphrase: str | None = None,
@@ -352,7 +447,7 @@ def list_schemas(
     *,
     account: str,
     user: str,
-    warehouse: str,
+    warehouse: str = "",
     database: str,
     private_key_path: str,
     role: str | None = None,
@@ -397,7 +492,7 @@ def list_tables(
     *,
     account: str,
     user: str,
-    warehouse: str,
+    warehouse: str = "",
     database: str,
     schema: str,
     private_key_path: str,
@@ -447,7 +542,7 @@ def list_columns(
     *,
     account: str,
     user: str,
-    warehouse: str,
+    warehouse: str = "",
     database: str,
     schema: str,
     table: str,
