@@ -30,7 +30,7 @@ You also need an **account identifier** and **user**. After sign-in,
 are lists, then **database → schema → table**. Catalog fields stay visible
 and greyed until the previous step is set (same as BigQuery dataset → table).
 Do not type those names. Sign-in does not fill database, table, or grain;
-Events prompts until you Save a mapping.
+mapping persists as you pick fields. Events prompts until the mapping is ready.
 
 ## Table shape
 
@@ -76,5 +76,11 @@ a “week”.
 
 ## Event name
 
-Optional string column. Save caches DISTINCT names from the last 90 days
-of the timestamp. Events then filters `event_name = '…'`.
+Optional string column. Mapping persists as you pick fields; it does not query.
+Events **Refresh list** loads names for the event-name lookback on Setup
+(90 days by default; 0 is all time). The filter isolates the timestamp
+column so Snowflake can prune micro-partitions. Optional: allow Factcat
+to create and maintain tables in a database and schema for better
+performance. First Refresh creates `fc_event_names` if it is missing;
+later Refresh reads that cache (lookback does not apply). Events then
+filters `event_name = '…'`.

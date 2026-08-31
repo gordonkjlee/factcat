@@ -91,6 +91,14 @@ CATALOG_STEPS: dict[str, tuple[dict[str, Any], ...]] = {
             "needs": ["dataset"],
         },
         dict(_COLUMNS_STEP),
+        {
+            "id": "write_dataset",
+            "endpoint": "datasets",
+            "values": "datasets",
+            "item": "id",
+            "needs": ["extra", "write_project"],
+            "optional": True,
+        },
     ),
     "snowflake": (
         {
@@ -127,6 +135,21 @@ CATALOG_STEPS: dict[str, tuple[dict[str, Any], ...]] = {
             "needs": ["schema"],
         },
         dict(_COLUMNS_STEP),
+        {
+            "id": "write_database",
+            "endpoint": "datasets",
+            "values": "datasets",
+            "item": "id",
+            "needs": ["warehouse"],
+            "optional": True,
+        },
+        {
+            "id": "write_schema",
+            "endpoint": "schemas",
+            "values": "schemas",
+            "needs": ["write_database"],
+            "optional": True,
+        },
     ),
 }
 
@@ -231,7 +254,12 @@ def warehouses_from_form(form: dict[str, Any]) -> dict[str, Any]:
 def datasets_from_form(form: dict[str, Any]) -> list[dict[str, str]]:
     if form_kind(form) == "snowflake":
         return list_databases(**_sf_auth(form))
-    project = (form.get("data_project") or form.get("project") or "").strip()
+    project = (
+        form.get("data_project")
+        or form.get("project")
+        or form.get("write_project")
+        or ""
+    ).strip()
     if not project:
         raise ValueError("project is required")
     return list_datasets(project=project, credentials=_creds(form))
@@ -240,7 +268,7 @@ def datasets_from_form(form: dict[str, Any]) -> list[dict[str, str]]:
 def schemas_from_form(form: dict[str, Any]) -> list[str]:
     if form_kind(form) != "snowflake":
         raise ValueError("schemas are a Snowflake catalog step")
-    database = (form.get("database") or "").strip()
+    database = (form.get("database") or form.get("write_database") or "").strip()
     if not database:
         raise ValueError("database is required")
     return sf_list_schemas(database=database, **_sf_auth(form))

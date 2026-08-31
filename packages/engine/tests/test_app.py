@@ -133,19 +133,51 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert ">Analysis<" not in res.text
     assert "Job scan cap" in res.text
     assert 'id="bytes_cap_gb"' in res.text
+    assert "Event name lookback" in res.text
+    assert 'id="catalog_lookback_days"' in res.text
+    assert "Factcat-managed tables" in res.text
+    assert 'id="write_project"' in res.text
+    assert 'id="write_dataset"' in res.text
+    assert 'id="write_database"' in res.text
+    assert 'id="write_schema"' in res.text
     assert "Result row limit" in res.text
     assert 'id="query_row_limit"' in res.text
     assert "Save and open Events" not in res.text
     assert "Events opens after this mapping is saved." not in res.text
-    assert 'id="save"' in res.text
-    assert ">Save<" in res.text
+    assert "Pick the events table and map entity id and timestamp" not in res.text
+    assert "Warehouse sign-in does not fill those fields" not in res.text
+    assert "Catalog lists load when you open each dropdown" not in res.text
+    assert 'id="save"' not in res.text
+    assert ">Save<" not in res.text
+    assert "scheduleSave" in res.text
+    assert "hasOwnProperty.call(body, \"event_column\")" in res.text
+    assert "save-toast" in res.text
+    assert "showToast" in res.text
+    assert "SAVE_PENDING_MS = 1000" in res.text
+    assert "savingSince" in res.text
+    assert "/api/save" in res.text
     assert "window.location.href" not in res.text
     assert "Saved" in res.text
-    assert "catalog: true" in res.text
-    assert 'id="setup-needed"' in res.text
-    assert "Warehouse sign-in does not fill those fields" in res.text
-    assert "rail-setup active needs-mapping" in res.text
+    assert "Could not cache event names" not in res.text
+    assert "post(\"/api/event_values\"" not in res.text
+    assert 'id="setup-needed"' not in res.text
+    assert "rail-setup" in res.text
     assert "gcloud config get-value project" in res.text
+
+
+def test_setup_seeds_write_destination(monkeypatch, tmp_path):
+    _map_cfg(
+        tmp_path,
+        monkeypatch,
+        write_project="dest-proj",
+        write_dataset="fc_cache",
+    )
+    client = TestClient(app)
+    res = client.get("/setup")
+    assert res.status_code == 200
+    assert 'value="dest-proj"' in res.text
+    assert 'value="fc_cache" selected' in res.text
+    assert "seedSelect(document.getElementById(\"write_dataset\")" in res.text
 
 
 def test_setup_explains_events_redirect(monkeypatch, tmp_path):
@@ -154,7 +186,8 @@ def test_setup_explains_events_redirect(monkeypatch, tmp_path):
     client = TestClient(app)
     res = client.get("/setup?events=1")
     assert res.status_code == 200
-    assert "Events opens after this mapping is saved." in res.text
+    assert "Project setup" in res.text
+    assert "Events opens after this mapping is saved." not in res.text
 
 
 def test_events_renders_when_mapped(monkeypatch, tmp_path):
@@ -183,6 +216,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Event name column" not in res.text
     assert "Date range" in res.text
     assert "Time grain" in res.text
+    assert "writeDestReady" in res.text
+    assert "function writeDestReady" in res.text
     assert "<label>Bucket</label>" not in res.text
     assert "Last 30 days" in res.text
     assert "Last 8 weeks" in res.text
@@ -313,6 +348,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "approx top-K" in res.text
     assert "Refresh list" in res.text
     assert 'id="refresh-events"' in res.text
+    assert 'id="catalog_lookback_days"' in res.text
+    assert 'id="look-further"' in res.text
     assert 'id="refresh-of"' in res.text
     assert 'id="refresh-columns"' in res.text
     assert "/static/catalog.js" in res.text
@@ -1016,7 +1053,7 @@ def test_snowflake_setup_does_not_fill_gcp_project(monkeypatch, tmp_path):
     res = client.get("/setup")
     assert res.status_code == 200
     assert 'value="adc-project"' not in res.text
-    assert 'id="setup-needed"' in res.text
+    assert 'id="setup-needed"' not in res.text
     assert "rail-setup active needs-mapping" in res.text
 
 
@@ -1261,6 +1298,7 @@ def test_event_values_run_distinct_and_sort(monkeypatch, tmp_path):
     assert captured["kind"] == "bigquery"
     assert captured["project"] == "p"
     assert captured["location"] == "EU"
+    assert captured["maximum_bytes_billed"] == 10 * 1024**3
 
 
 def test_catalog_event_values_writes_event_names(monkeypatch, tmp_path):
@@ -1272,9 +1310,13 @@ def test_catalog_event_values_writes_event_names(monkeypatch, tmp_path):
     warehouse.run.return_value = QueryResult(
         rows=[{"fc_value": "opened"}, {"fc_value": "paid"}]
     )
-    monkeypatch.setattr(
-        "factcat_app.main.connect", lambda kind, **kw: warehouse
-    )
+    captured: dict = {}
+
+    def fake_connect(kind, **kw):
+        captured.update(kw)
+        return warehouse
+
+    monkeypatch.setattr("factcat_app.main.connect", fake_connect)
     client = TestClient(app)
     res = client.post(
         "/api/event_values",
@@ -1291,6 +1333,113 @@ def test_catalog_event_values_writes_event_names(monkeypatch, tmp_path):
     assert res.json()["values"] == ["opened", "paid"]
     saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
     assert saved["event_names"] == ["opened", "paid"]
+    assert saved.get("catalog_lookback_days") == 90
+    assert "maximum_bytes_billed" not in captured
+
+
+def _catalog_write_body():
+    return {
+        "project": "p",
+        "location": "EU",
+        "table": "analytics.events",
+        "event_column": "event_name",
+        "event_time": "occurred_at",
+        "catalog": True,
+        "write_project": "dest-proj",
+        "write_dataset": "analytics",
+    }
+
+
+def test_event_values_write_cache_reads_existing(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(rows=[{"fc_value": "paid"}])
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post("/api/event_values", json=_catalog_write_body())
+    assert res.status_code == 200
+    body = res.json()
+    assert body["values"] == ["paid"]
+    assert body["cache"] == "cached"
+    assert warehouse.run.call_count == 1
+    sql = warehouse.run.call_args.args[0].upper()
+    assert "FC_EVENT_NAMES" in sql
+    assert "CREATE" not in sql
+
+
+def test_event_values_write_cache_builds_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.side_effect = [
+        AdapterError("not found"),
+        QueryResult(rows=[]),
+        QueryResult(rows=[{"fc_value": "paid"}]),
+    ]
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post("/api/event_values", json=_catalog_write_body())
+    assert res.status_code == 200
+    body = res.json()
+    assert body["values"] == ["paid"]
+    assert body["cache"] == "materialized_view"
+    assert warehouse.run.call_count == 3
+    ddl = warehouse.run.call_args_list[1].args[0].upper()
+    assert "CREATE OR REPLACE MATERIALIZED VIEW" in ddl
+    assert "GROUP BY" in ddl
+    read_sql = warehouse.run.call_args_list[2].args[0].upper()
+    assert "FC_EVENT_NAMES" in read_sql
+    assert "CREATE" not in read_sql
+
+
+def test_event_values_write_cache_falls_back_to_table(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+
+    def fake_run(sql, **_kw):
+        upper = sql.upper()
+        if "CREATE OR REPLACE MATERIALIZED VIEW" in upper:
+            raise AdapterError("Source must be a table")
+        if "CREATE OR REPLACE TABLE" in upper:
+            return QueryResult(rows=[])
+        if "FROM" in upper and "FC_EVENT_NAMES" in upper and "CREATE" not in upper:
+            if fake_run.reads == 0:
+                fake_run.reads += 1
+                raise AdapterError("not found")
+            return QueryResult(rows=[{"fc_value": "opened"}])
+        raise AssertionError(sql)
+
+    fake_run.reads = 0
+    warehouse.run.side_effect = fake_run
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post("/api/event_values", json=_catalog_write_body())
+    assert res.status_code == 200
+    body = res.json()
+    assert body["values"] == ["opened"]
+    assert body["cache"] == "table"
+
+
+def test_event_values_write_cache_falls_back_to_distinct(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+
+    def fake_run(sql, **_kw):
+        upper = sql.upper()
+        if "CREATE OR REPLACE" in upper:
+            raise AdapterError("no create privilege")
+        if "FC_EVENT_NAMES" in upper:
+            raise AdapterError("not found")
+        assert "DISTINCT" in upper
+        return QueryResult(rows=[{"fc_value": "paid"}])
+
+    warehouse.run.side_effect = fake_run
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post("/api/event_values", json=_catalog_write_body())
+    assert res.status_code == 200
+    body = res.json()
+    assert body["values"] == ["paid"]
+    assert "cache" not in body
 
 
 def test_non_catalog_event_values_do_not_write_cache(monkeypatch, tmp_path):
