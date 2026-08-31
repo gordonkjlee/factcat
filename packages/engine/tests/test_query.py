@@ -526,6 +526,21 @@ def test_breakdown_column_fills_expression():
     sql = events_sql(spec, dialect="bigquery")
     assert "country" in sql
     assert "fc_fold_0" in sql
+    assert "APPROX_TOP_COUNT" in sql.upper()
+
+
+def test_snowflake_breakdown_uses_approx_top_k():
+    spec = spec_from_form(
+        _form(
+            kind="snowflake",
+            table="ANALYTICS.MARTS.EVENTS",
+            measure="total",
+            breakdown_column="country",
+        )
+    )
+    sql = events_sql(spec, dialect="snowflake")
+    assert "APPROX_TOP_K" in sql.upper()
+    assert "FLATTEN" in sql.upper()
 
 
 def test_json_of_sum_extracts_key():

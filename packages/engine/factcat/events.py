@@ -2,8 +2,8 @@
 
 Event family: Total, Uniques, Average (Total / Uniques). Property family:
 Sum, Average, Median of ``of``, or mean distinct ``of`` values per entity.
-``exact=False`` (default) uses approx NDV / approx median where the dialect
-has them. A chart toggle sets ``exact=True``.
+``exact=False`` (default) uses approx NDV / approx median / approx top-N
+labels where the dialect has them. A chart toggle sets ``exact=True``.
 
 Breakdowns split the series by caller SQL expressions. Empty ``breakdowns``
 emits the same SQL as a spec without those fields.
@@ -214,7 +214,8 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
     null_keep = " AND ".join(f"sliced.fc_bd_{i} IS NULL" for i in range(n))
     # LEFT JOIN, not EXISTS: BigQuery rejects correlated EXISTS against
     # another CTE ("cannot be de-correlated"). NULL is never folded into
-    # (other). top_labels keys are non-null (APPROX_TOP_COUNT skips NULL).
+    # (other). The approx pick filters NULL so it does not consume a top-N
+    # slot; the first WHEN still keeps a NULL series.
     fold_selects = []
     for i in range(n):
         fold_selects.append(
