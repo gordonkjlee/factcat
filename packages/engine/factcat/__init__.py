@@ -1,7 +1,4 @@
-"""Factcat - product analytics on the event model already in your warehouse.
-
-A **fact** table is what you build; **cat** is how you read a file. Factcat
-reads your fact tables where they sit, and never copies them anywhere.
+"""Factcat — open-source, warehouse-first product analytics.
 
     from factcat import EventsSpec, events_sql, RetentionSpec, retention_sql
 

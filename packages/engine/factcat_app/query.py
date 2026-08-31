@@ -7,7 +7,7 @@ from typing import Any
 
 from datetime import date, datetime, timedelta, timezone
 
-from factcat import EVENT_MEASURES, EventsSpec, events_sql
+from factcat import EVENT_MEASURES, PROPERTY_MEASURES, EventsSpec, events_sql
 from factcat.spec import BREAKDOWN_AT
 from factcat.warehouses.bigquery import DEFAULT_MAXIMUM_BYTES_BILLED
 from factcat._emit import transpile
@@ -15,6 +15,9 @@ from factcat.dialects import splice_placeholders
 
 _TABLE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_]+)+$")
 _COLUMN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_JSON_KEY = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$"
+)
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _GRAINS = ("day", "week", "month")
 _GRAIN_RANK = {"day": 0, "week": 1, "month": 2, "quarter": 3, "year": 4}
@@ -156,20 +159,21 @@ def _grain(form: dict[str, Any]) -> str:
 
 
 def _include_current(form: dict[str, Any], grain: str) -> bool:
-    """Day windows include today. Week/month last-N is complete periods
-    unless include_current is set. Not a library period enum."""
-    if grain == "day":
-        return True
+    """Last-N: include the in-progress grain (today / this week / this month).
+
+    Unset defaults: day includes today; week and month are complete periods.
+    Not a library period enum.
+    """
     raw = form.get("include_current")
     if raw is not None and raw != "":
         return raw in (True, "true", "on", "1", 1)
     if "exclude_current" in form:
         return form.get("exclude_current") not in (True, "true", "on", "1", 1)
-    return False
+    return grain == "day"
 
 
 def _exclude_current(form: dict[str, Any]) -> bool:
-    """Last-N complete periods: week/month default on, day never."""
+    """Last-N complete periods. Inverse of ``_include_current``."""
     grain = str(form.get("grain") or "day").strip().lower()
     if grain not in _GRAINS:
         grain = "day"
@@ -215,6 +219,18 @@ def _as_event_time(date_sql: str, form: dict[str, Any]) -> str:
     if _event_time_kind(form) == "reporting":
         return f"CAST({date_sql} AS DATETIME)"
     return f"TIMESTAMP({date_sql}, {_sql_string(tz)})"
+
+
+def _event_time_lhs(event_time: str, form: dict[str, Any]) -> str:
+    """Canonical instant. DATETIME stored as UTC CASTs to TIMESTAMP.
+
+    Used for the window compare, ``fc_event_ts`` in the SELECT list, and
+    first/last attribution. sqlglot rewrites a raw CAST to DATETIME;
+    ``factcat_as_instant`` is spliced after transpile.
+    """
+    if _event_time_kind(form) == "reporting":
+        return event_time
+    return f"factcat_as_instant({event_time})"
 
 
 def _ps(expr: str, unit: str, form: dict[str, Any], n: int) -> str:
@@ -265,6 +281,7 @@ def _normalize_range(
 def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
     """Sugar on event_time. Window unit follows the chart grain."""
     mode, unit, n = _normalize_range(form)
+    lhs = _event_time_lhs(event_time, form)
     if mode == "custom":
         kind = str(form.get("custom_kind") or "absolute").strip().lower()
         if kind == "relative":
@@ -274,19 +291,19 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
                 raise ValueError("relative from must be at least as far back as to")
             if unit == "day":
                 clauses = [
-                    f"{event_time} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {start_n} DAY)', form)}"
+                    f"{lhs} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {start_n} DAY)', form)}"
                 ]
                 if end_n > 0:
                     clauses.append(
-                        f"{event_time} < {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {end_n - 1} DAY)', form)}"
+                        f"{lhs} < {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {end_n - 1} DAY)', form)}"
                     )
                 return clauses
             clauses = [
-                f"{event_time} >= {_as_event_time(_ps('current_date', unit, form, -start_n), form)}"
+                f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, -start_n), form)}"
             ]
             if end_n > 0:
                 clauses.append(
-                    f"{event_time} < {_as_event_time(_ps('current_date', unit, form, -(end_n - 1)), form)}"
+                    f"{lhs} < {_as_event_time(_ps('current_date', unit, form, -(end_n - 1)), form)}"
                 )
             return clauses
         start = date.fromisoformat(
@@ -301,29 +318,34 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
         start = _grain_start(start, unit, week_start)
         end_exclusive = _grain_next(end, unit, week_start)
         return [
-            f"{event_time} >= {_as_event_time('DATE ' + _sql_string(start.isoformat()), form)}",
-            f"{event_time} < {_as_event_time('DATE ' + _sql_string(end_exclusive.isoformat()), form)}",
+            f"{lhs} >= {_as_event_time('DATE ' + _sql_string(start.isoformat()), form)}",
+            f"{lhs} < {_as_event_time('DATE ' + _sql_string(end_exclusive.isoformat()), form)}",
         ]
     if mode == "this":
         return [
-            f"{event_time} >= {_as_event_time(_ps('current_date', unit, form, 0), form)}"
+            f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, 0), form)}"
         ]
     if mode == "previous":
         return [
-            f"{event_time} >= {_as_event_time(_ps('current_date', unit, form, -1), form)}",
-            f"{event_time} < {_as_event_time(_ps('current_date', unit, form, 0), form)}",
+            f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, -1), form)}",
+            f"{lhs} < {_as_event_time(_ps('current_date', unit, form, 0), form)}",
         ]
     if unit == "day":
-        return [
-            f"{event_time} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {n} DAY)', form)}"
+        clauses = [
+            f"{lhs} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {n} DAY)', form)}"
         ]
+        if _exclude_current(form):
+            clauses.append(
+                f"{lhs} < {_as_event_time(_today_sql(form), form)}"
+            )
+        return clauses
     if _exclude_current(form):
         return [
-            f"{event_time} >= {_as_event_time(_ps('current_date', unit, form, -n), form)}",
-            f"{event_time} < {_as_event_time(_ps('current_date', unit, form, 0), form)}",
+            f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, -n), form)}",
+            f"{lhs} < {_as_event_time(_ps('current_date', unit, form, 0), form)}",
         ]
     return [
-        f"{event_time} >= {_as_event_time(_ps('current_date', unit, form, -(n - 1)), form)}"
+        f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, -(n - 1)), form)}"
     ]
 
 
@@ -381,21 +403,85 @@ def _top_n(form: dict[str, Any]) -> int:
     return n
 
 
+def _json_path(key: str, label: str) -> str:
+    raw = (key or "").strip()
+    if raw.startswith("$."):
+        raw = raw[2:]
+    if not raw or not _JSON_KEY.match(raw):
+        raise ValueError(f"{label} JSON key must be a dotted name (plan or user.plan)")
+    return "$." + raw
+
+
+def _json_value_sql(column: str, key: str, label: str, *, numeric: bool) -> str:
+    col = _ident_column(column, label)
+    path = _json_path(key, label)
+    expr = f"JSON_VALUE({col}, '{path}')"
+    if numeric:
+        return f"SAFE_CAST({expr} AS FLOAT64)"
+    return expr
+
+
+def _json_label(key: str) -> str:
+    return key.strip().removeprefix("$.").replace(".", "_")
+
+
+def _single_expr(raw: str, label: str) -> str:
+    expr = (raw or "").strip()
+    if not expr:
+        return ""
+    lowered = expr.lower()
+    if ";" in expr or "--" in expr or "/*" in expr:
+        raise ValueError(f"{label} must be a single SQL expression")
+    if lowered.startswith("select ") or " drop " in f" {lowered} ":
+        raise ValueError(f"{label} must be a single SQL expression")
+    return expr
+
+
 def _breakdown_from_form(form: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
-    """Fill ``breakdowns`` from a column or a SQL expression. Expression wins."""
-    expr = (form.get("breakdown_expr") or "").strip()
+    """Fill ``breakdowns`` from a column, JSON key, or SQL expression. Expression wins."""
+    expr = _single_expr(str(form.get("breakdown_expr") or ""), "breakdown expression")
     column = (form.get("breakdown_column") or "").strip()
     if expr:
-        lowered = expr.lower()
-        if ";" in expr or "--" in expr or "/*" in expr:
-            raise ValueError("breakdown expression must be a single SQL expression")
-        if lowered.startswith("select ") or " drop " in f" {lowered} ":
-            raise ValueError("breakdown expression must be a single SQL expression")
         return (expr,), None
     if not column:
         return (), None
+    json_key = (form.get("breakdown_json_key") or "").strip()
+    if json_key:
+        extracted = _json_value_sql(column, json_key, "breakdown", numeric=False)
+        label = _json_label(json_key)
+        if not _COLUMN.match(label):
+            label = "json_key"
+        return (extracted,), (label,)
     column = _ident_column(column, "breakdown")
     return (column,), (column,)
+
+
+def _of_from_form(form: dict[str, Any], *, measure: str) -> str:
+    """Property ``of=``. Expression wins over JSON key over column. Empty if unused."""
+    expr = _single_expr(str(form.get("of_expr") or ""), "of")
+    if expr:
+        return expr
+    column = (form.get("of_column") or "").strip()
+    if not column:
+        return ""
+    json_key = (form.get("of_json_key") or "").strip()
+    if json_key:
+        numeric = measure in {"sum", "average", "median"}
+        return _json_value_sql(column, json_key, "of", numeric=numeric)
+    return _ident_column(column, "of")
+
+
+def _measure_from_form(form: dict[str, Any]) -> tuple[str, str]:
+    """Return ``(on, measure)``. ``property_average`` is the form value for property Average."""
+    raw = str(form.get("measure") or "uniques").strip().lower()
+    on_raw = str(form.get("on") or "").strip().lower()
+    if raw == "property_average" or (on_raw == "property" and raw == "average"):
+        return "property", "average"
+    if raw in PROPERTY_MEASURES and raw != "average":
+        return "property", raw
+    if raw in EVENT_MEASURES:
+        return "events", raw
+    raise ValueError("measure must be total, uniques, average, sum, median, or distinct")
 
 
 def spec_from_form(form: dict[str, Any]) -> EventsSpec:
@@ -404,15 +490,13 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     if not entity:
         raise ValueError("entity is required (no default column)")
     entity = _ident_column(entity, "entity")
-    event_time = _ident_column(str(form.get("event_time") or ""), "event_time")
-    measure = str(form.get("measure") or "uniques")
-    if measure not in EVENT_MEASURES:
-        raise ValueError("measure must be total, uniques, or average")
+    event_time_col = _ident_column(str(form.get("event_time") or ""), "event_time")
+    on, measure = _measure_from_form(form)
     grain = _grain(form)
     exact_raw = form.get("exact")
     exact = exact_raw in (True, "true", "on", "1", 1)
 
-    clauses = _time_clauses(form, event_time)
+    clauses = _time_clauses(form, event_time_col)
     event_column = (form.get("event_column") or "").strip()
     event_value = (form.get("event_value") or "").strip()
     if event_value and not event_column:
@@ -420,6 +504,11 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
     if event_column and event_value:
         event_column = _ident_column(event_column, "event_column")
         clauses.append(f"{event_column} = {_sql_string(event_value)}")
+    event_time = _event_time_lhs(event_time_col, form)
+
+    of = _of_from_form(form, measure=measure) if on == "property" else None
+    if on == "property" and not of:
+        raise ValueError("of is required for property measures")
 
     breakdowns, breakdown_labels = _breakdown_from_form(form)
     breakdown_at = str(form.get("breakdown_at") or "rows").strip().lower()
@@ -431,8 +520,9 @@ def spec_from_form(form: dict[str, Any]) -> EventsSpec:
         entity=entity,
         event_time=event_time,
         measure=measure,  # type: ignore[arg-type]
-        on="events",
-        bucket=f"CAST({_ps(event_time, grain, form, 0)} AS DATE)",
+        on=on,  # type: ignore[arg-type]
+        of=of,
+        bucket=f"CAST({_ps('fc_event_ts', grain, form, 0)} AS DATE)",
         where=" AND ".join(clauses),
         exact=exact,
         breakdowns=breakdowns,
@@ -459,17 +549,23 @@ def query_row_limit(form: dict[str, Any]) -> int:
     return n
 
 
+def _indent_sql(sql: str, n: int = 4) -> str:
+    pad = " " * n
+    return "\n".join(pad + line if line else line for line in sql.splitlines())
+
+
 def events_sql_from_form(form: dict[str, Any]) -> str:
     """Events SQL with a result-row crash fuse (most recent rows)."""
     sql = events_sql(spec_from_form(form), dialect="bigquery").rstrip()
     n = query_row_limit(form)
+    inner = _indent_sql(sql, 4)
     return (
         f"SELECT * FROM (\n"
-        f"  SELECT * FROM (\n{sql}\n  )\n"
-        f"  ORDER BY bucket DESC\n"
+        f"  SELECT * FROM (\n{inner}\n  ) AS _fc_inner\n"
+        f"  ORDER BY CAST(bucket AS DATE) DESC\n"
         f"  LIMIT {n}\n"
-        f")\n"
-        f"ORDER BY bucket"
+        f") AS _fc_recent\n"
+        f"ORDER BY CAST(bucket AS DATE)"
     )
 
 
@@ -499,7 +595,7 @@ def event_values_sql(form: dict[str, Any]) -> str:
     if catalog:
         where = (
             f"{event_column} IS NOT NULL "
-            f"AND {event_time} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {CATALOG_LOOKBACK_DAYS} DAY)', form)}"
+            f"AND {_event_time_lhs(event_time, form)} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {CATALOG_LOOKBACK_DAYS} DAY)', form)}"
         )
     else:
         where = " AND ".join(

@@ -1,12 +1,8 @@
 # Factcat
 
-<img src="packages/engine/factcat_app/static/logo.svg" width="48" height="48" alt="Factcat">
+<img src="packages/engine/factcat_app/static/waiting.jpg" width="200" alt="Factcat">
 
-Product analytics on the event model already in your warehouse. Your grain, your periods,
-your definitions.
-
-Named for the two words its users already own: a **fact** table is what you build, and
-**cat** is how you read a file. Factcat reads your fact tables where they sit.
+Open-source, warehouse-first product analytics.
 
 ## The problem
 
@@ -114,6 +110,11 @@ Uniques, Distinct, and Median default to **approx** (`exact=False`):
 `APPROX_COUNT_DISTINCT` / `APPROX_QUANTILES` on BigQuery. The local app’s
 Exact toggle sets `exact=True` for `COUNT DISTINCT` / `PERCENTILE_CONT`.
 Total, Sum, and property Average stay exact either way.
+
+The Events chart lists both families: Volume / Unique {entities} /
+Average per {entity}, then Sum / Average / Median / Distinct of a
+column (`of=`). Distinct is mean distinct values **per mapped entity**,
+not a global `COUNT DISTINCT` of the column.
 
 Day/week/month buttons in the app fill a `bucket` expression (reporting
 timezone, then week start). There is no `period: day|week|month` field.

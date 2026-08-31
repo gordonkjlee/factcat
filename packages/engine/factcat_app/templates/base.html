@@ -4,8 +4,7 @@
   <meta charset="utf-8">
   <title>{% block title %}Factcat{% endblock %}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="icon" href="/favicon.ico" sizes="any">
-  <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/logo.png?v=square" type="image/png">
   {% block extra_head %}{% endblock %}
   <style>
     :root {
@@ -45,9 +44,9 @@
       display: block;
       text-align: center;
       text-decoration: none;
-      padding: 0.35rem 0 0.75rem;
+      padding: 0.35rem 0.15rem 0.75rem;
     }
-    .brand img { width: 2.1rem; height: 2.1rem; display: block; margin: 0 auto; }
+    .brand img { width: 100%; height: auto; display: block; }
     .rail-reports { display: flex; flex-direction: column; gap: 0.25rem; flex: 1; }
     .rail-item {
       display: block;
@@ -66,6 +65,12 @@
       font-weight: 600;
     }
     .rail-setup { margin-top: auto; }
+    .rail-setup .cog {
+      width: 1.2rem;
+      height: 1.2rem;
+      display: block;
+      margin: 0 auto 0.15rem;
+    }
     .app { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
     body.setup .app { overflow: auto; }
     h1 { font-size: 1.1rem; margin: 0 0 0.35rem; }
@@ -114,12 +119,18 @@
 <body class="{{ screen }}">
 <aside class="rail">
   <a class="brand" href="/" title="Factcat">
-    <img src="/static/logo.svg" width="34" height="34" alt="Factcat">
+    <img src="/static/logo.png" alt="Factcat">
   </a>
   <nav class="rail-reports" aria-label="Reports">
     <a href="/" class="rail-item{% if screen == 'events' %} active{% endif %}">Events</a>
   </nav>
-  <a href="/setup" class="rail-item rail-setup{% if screen == 'setup' %} active{% endif %}" title="Project setup">Setup</a>
+  <a href="/setup" class="rail-item rail-setup{% if screen == 'setup' %} active{% endif %}" title="Project setup">
+    <svg class="cog" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+      <circle cx="12" cy="12" r="3"/>
+    </svg>
+    Setup
+  </a>
 </aside>
 <div class="app">
 {% block body %}{% endblock %}

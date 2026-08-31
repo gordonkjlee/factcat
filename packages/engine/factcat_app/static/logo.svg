@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Factcat">
-  <!-- Chunky head + ochre glasses. No mortar. -->
-  <path fill="#5C6B73" d="M8.2 14.5 11.2 4.2 16 13.2 20.8 4.2 23.8 14.5C26.2 16.8 26.8 22 25 26.2 23.2 30.2 8.8 30.2 7 26.2 5.2 22 5.8 16.8 8.2 14.5z"/>
-  <circle cx="12.3" cy="19.2" r="3.5" fill="#C4841D"/>
-  <circle cx="19.7" cy="19.2" r="3.5" fill="#C4841D"/>
-  <circle cx="12.3" cy="19.2" r="1.7" fill="#5C6B73"/>
-  <circle cx="19.7" cy="19.2" r="1.7" fill="#5C6B73"/>
-</svg>
-

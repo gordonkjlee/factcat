@@ -42,7 +42,8 @@ jobs:
           names = zipfile.ZipFile(whls[0]).namelist()
           for needle in (
               "factcat_app/guides/setup-bigquery.md",
-              "factcat_app/static/logo.svg",
+              "factcat_app/static/logo.png",
+              "factcat_app/static/catalog.js",
           ):
               if needle not in names:
                   sys.exit(f"missing {needle} in {names}")

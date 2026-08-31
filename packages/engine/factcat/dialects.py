@@ -18,6 +18,10 @@ window functions. These constructs do not survive cleanly:
 5. **Reporting-timezone calendar.** BigQuery ``DATE(ts, tz)`` and
    ``CURRENT_DATE(tz)`` have no DuckDB equivalent sqlglot will emit.
    Week start is applied after that conversion.
+6. **UTC instant from TIMESTAMP or DATETIME.** sqlglot rewrites
+   ``CAST(col AS TIMESTAMP) >= TIMESTAMP(...)`` to ``CAST AS DATETIME``,
+   which BigQuery then rejects. ``factcat_as_instant`` is spliced after
+   transpile.
 
 Everything else is one emitter.
 """
@@ -94,7 +98,7 @@ def median_select_from_base(
         inner_keys = "fc_bucket" + extra_select
         if exact:
             return f"""SELECT
-        fc_bucket AS bucket{extra_select},
+        {bucket_out()}{extra_select},
         MIN(fc_p) AS value
     FROM (
         SELECT
@@ -107,7 +111,7 @@ def median_select_from_base(
     GROUP BY {group_by}
     ORDER BY {group_by}"""
         return f"""SELECT
-        fc_bucket AS bucket{extra_select},
+        {bucket_out()}{extra_select},
         APPROX_QUANTILES(fc_of, 100)[OFFSET(50)] AS value
     FROM {relation}
     GROUP BY {group_by}
@@ -125,7 +129,7 @@ def median_select_from_base(
     else:
         agg = "median(fc_of)"
     return f"""SELECT
-        fc_bucket AS bucket{extra_select},
+        {bucket_out()}{extra_select},
         {agg} AS value
     FROM {relation}
     GROUP BY {group_by}
@@ -234,7 +238,8 @@ def period_start_shifted(
         elif kind == "reporting":
             date_expr = f"CAST({expr} AS DATE)"
         else:
-            date_expr = f"DATE({expr}, '{tz}')"
+            # TIMESTAMP and DATETIME-stored-as-UTC both CAST to an instant.
+            date_expr = f"DATE(CAST({expr} AS TIMESTAMP), '{tz}')"
         if unit == "day":
             trunc = date_expr
         elif unit == "week":
@@ -271,6 +276,23 @@ def period_start_shifted(
     return f"({trunc} + INTERVAL {n} {unit})"
 
 
+_AS_INSTANT_RE = re.compile(
+    r"factcat_as_instant\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)",
+    re.IGNORECASE,
+)
+
+
+def as_instant(expr: str, dialect: str) -> str:
+    """TIMESTAMP instant. DATETIME values are treated as UTC."""
+    _ = dialect
+    return f"CAST({expr} AS TIMESTAMP)"
+
+
+def bucket_out(expr: str = "fc_bucket") -> str:
+    """Result time-axis column. Always DATE so ORDER BY is not DATETIME/TIMESTAMP."""
+    return f"CAST({expr} AS DATE) AS bucket"
+
+
 _PERIOD_RE = re.compile(
     r"factcat_period_start_shifted\(\s*"
     r"([A-Za-z_][A-Za-z0-9_.]*)\s*,\s*"
@@ -297,4 +319,5 @@ def splice_placeholders(sql: str, dialect: str) -> str:
             time_kind=match.group(6) or "utc",
         )
 
+    sql = _AS_INSTANT_RE.sub(lambda m: as_instant(m.group(1), dialect), sql)
     return _PERIOD_RE.sub(repl, sql)

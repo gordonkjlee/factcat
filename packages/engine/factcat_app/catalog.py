@@ -21,6 +21,14 @@ ENTITY_TYPES = frozenset(
 TIME_TYPES = frozenset({"TIMESTAMP", "DATETIME"})
 # Compared as a SQL string literal in the form (event_column = 'paid').
 EVENT_NAME_TYPES = frozenset({"STRING"})
+# Sum / Average / Median of a column. FLOAT is fine here; not for entity ids.
+PROPERTY_OF_TYPES = frozenset(
+    {"INT64", "INTEGER", "NUMERIC", "BIGNUMERIC", "FLOAT64", "FLOAT"}
+)
+# Distinct … per entity: numeric or STRING.
+DISTINCT_OF_TYPES = PROPERTY_OF_TYPES | {"STRING"}
+# JSON columns: Events asks for a key and emits JSON_VALUE. Not a property store.
+JSON_TYPES = frozenset({"JSON"})
 
 
 def column_fits(field_type: str, role: str) -> bool:
@@ -28,6 +36,8 @@ def column_fits(field_type: str, role: str) -> bool:
         "entity": ENTITY_TYPES,
         "event_time": TIME_TYPES,
         "event_column": EVENT_NAME_TYPES,
+        "of": PROPERTY_OF_TYPES | JSON_TYPES,
+        "of_distinct": DISTINCT_OF_TYPES | JSON_TYPES,
     }[role]
     return (field_type or "").strip().upper() in allowed
 
@@ -76,8 +86,11 @@ def bootstrap_project() -> str:
 
 __all__ = [
     "AdapterError",
+    "DISTINCT_OF_TYPES",
+    "JSON_TYPES",
     "ENTITY_TYPES",
     "EVENT_NAME_TYPES",
+    "PROPERTY_OF_TYPES",
     "TIME_TYPES",
     "bootstrap_project",
     "column_fits",

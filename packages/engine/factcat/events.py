@@ -15,6 +15,7 @@ import re
 
 from ._emit import transpile
 from .dialects import (
+    bucket_out,
     count_distinct,
     median_select_from_base,
     splice_placeholders,
@@ -69,18 +70,26 @@ def _inject_top_labels(sql: str, spec: EventsSpec, dialect: str) -> str:
 def _base_cte(spec: EventsSpec) -> str:
     where = f"WHERE {spec.where}" if spec.where else ""
     of_col = f"{spec.of} AS fc_of," if spec.of else ""
+    # typed.fc_event_ts is the instant used everywhere after src. src.where
+    # still filters the table column (partition prune). Same-list aliasing
+    # cannot see fc_event_ts, so the bucket is computed one CTE later.
     return f"""
     WITH src AS (
         SELECT * FROM {spec.table} {where}
     ),
-    base AS (
+    typed AS (
         SELECT
             src.*,
+            {spec.event_time} AS fc_event_ts
+        FROM src
+    ),
+    base AS (
+        SELECT
+            typed.*,
             {spec.entity}          AS fc_entity,
-            {spec.event_time}      AS fc_event_ts,
             {of_col}
             {spec.bucket_sql()}    AS fc_bucket
-        FROM src
+        FROM typed
     )
     """
 
@@ -113,7 +122,7 @@ def _plain_sql(spec: EventsSpec, dialect: str) -> str:
             GROUP BY 1, 2
         )
         SELECT
-            fc_bucket AS bucket,
+            {bucket_out()},
             AVG(fc_n) AS value
         FROM per_entity
         GROUP BY 1
@@ -128,7 +137,7 @@ def _plain_sql(spec: EventsSpec, dialect: str) -> str:
     sql = f"""
     {base}
     SELECT
-        fc_bucket AS bucket,
+        {bucket_out()},
         {_agg(spec)} AS value
     FROM base
     GROUP BY 1
@@ -201,15 +210,17 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
         )
         """
 
-    match = _pair_match("t", "sliced", n)
+    join_on = _pair_match("sliced", "t", n)
     null_keep = " AND ".join(f"sliced.fc_bd_{i} IS NULL" for i in range(n))
-    # NULL is never folded into (other).
+    # LEFT JOIN, not EXISTS: BigQuery rejects correlated EXISTS against
+    # another CTE ("cannot be de-correlated"). NULL is never folded into
+    # (other). top_labels keys are non-null (APPROX_TOP_COUNT skips NULL).
     fold_selects = []
     for i in range(n):
         fold_selects.append(
             f"""CASE
                 WHEN sliced.fc_bd_{i} IS NULL THEN sliced.fc_bd_{i}
-                WHEN EXISTS (SELECT 1 FROM top_labels t WHERE {match})
+                WHEN t.fc_bd_0 IS NOT NULL
                     THEN sliced.fc_bd_{i}
                 ELSE '{OTHER_LABEL}'
             END AS fc_fold_{i}"""
@@ -220,6 +231,7 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
         folded AS (
             SELECT sliced.*, {fold_csv}
             FROM sliced
+            LEFT JOIN top_labels t ON {join_on}
         )
         """
     else:
@@ -227,7 +239,8 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
         folded AS (
             SELECT sliced.*, {", ".join(f"sliced.{c} AS {f}" for c, f in zip(bd_cols, fold_cols))}
             FROM sliced
-            WHERE EXISTS (SELECT 1 FROM top_labels t WHERE {match})
+            LEFT JOIN top_labels t ON {join_on}
+            WHERE t.fc_bd_0 IS NOT NULL
                OR ({null_keep})
         )
         """
@@ -263,7 +276,7 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
             GROUP BY {", ".join(str(i) for i in range(1, n_group + 2))}
         )
         SELECT
-            fc_bucket AS bucket{extra_select},
+            {bucket_out()}{extra_select},
             AVG(fc_n) AS value
         FROM per_entity
         GROUP BY {group_by}
@@ -295,7 +308,7 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
     sql = f"""
     {ctes}
     SELECT
-        fc_bucket AS bucket{extra_select},
+        {bucket_out()}{extra_select},
         {_agg(spec)} AS value
     FROM folded
     GROUP BY {group_by}
