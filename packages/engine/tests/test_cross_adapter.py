@@ -60,6 +60,15 @@ def test_events_sql_from_form_emits_without_warnings(kind, sqlglot_warnings):
     events_sql_from_form(_form(kind))
     events_sql_from_form(_form(kind, grain="week", range_mode="last", range_n=8, range_unit="week"))
     events_sql_from_form(_form(kind, breakdown_column="country"))
+    events_sql_from_form(
+        _form(
+            kind,
+            breakdowns=[
+                {"breakdown_column": "country"},
+                {"breakdown_column": "browser"},
+            ],
+        )
+    )
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned for {kind}: {sqlglot_warnings.messages}"
     )

@@ -8,6 +8,7 @@ from factcat.warehouses import ADAPTERS, AdapterError
 from factcat_app.config import warehouse_kind
 from factcat.warehouses.bigquery import (
     adc_quota_project,
+    gcloud_config_project,
     list_columns,
     list_datasets,
     list_tables,
@@ -291,7 +292,12 @@ def columns_from_form(form: dict[str, Any]) -> dict[str, Any]:
 
 
 def bootstrap_project() -> str:
-    return adc_quota_project()
+    """Billing project for Setup: ADC, then gcloud CLI config.
+
+    Snowflake does not call this (no GCP project). Dataset, table, and grain
+    are not in warehouse auth — the mapping wizard still has to pick them.
+    """
+    return adc_quota_project() or gcloud_config_project()
 
 
 __all__ = [

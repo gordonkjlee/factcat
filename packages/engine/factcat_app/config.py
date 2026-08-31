@@ -76,6 +76,7 @@ DEFAULTS: dict[str, Any] = {
     "breakdown_column": "",
     "breakdown_expr": "",
     "breakdown_json_key": "",
+    "breakdowns": [],
     "breakdown_at": "rows",
     "top_n": 8,
     "include_other": True,
@@ -111,7 +112,7 @@ def entity_plural(singular: str) -> str:
 
 def config_path() -> Path:
     raw = os.environ.get(CONFIG_ENV, ".factcat.json")
-    return Path(raw)
+    return Path(raw).expanduser().resolve()
 
 
 def _merge(raw: dict[str, Any]) -> dict[str, Any]:
@@ -133,6 +134,25 @@ def load() -> dict[str, Any]:
         data = _merge(loaded)
     if "entity_label_plural" not in loaded:
         data["entity_label_plural"] = entity_plural(str(data.get("entity_label") or "User"))
+    slots = data.get("breakdowns")
+    filled = isinstance(slots, list) and any(
+        isinstance(item, dict)
+        and (
+            item.get("breakdown_column")
+            or item.get("column")
+            or item.get("breakdown_expr")
+            or item.get("expr")
+        )
+        for item in slots
+    )
+    if not filled and (data.get("breakdown_column") or data.get("breakdown_expr")):
+        data["breakdowns"] = [
+            {
+                "breakdown_column": data.get("breakdown_column") or "",
+                "breakdown_expr": data.get("breakdown_expr") or "",
+                "breakdown_json_key": data.get("breakdown_json_key") or "",
+            }
+        ]
     return data
 
 

@@ -145,6 +145,11 @@
     .range-row input[type="number"] { width: 4.5rem; }
     #breakdown-extra[hidden] { display: none !important; }
     #breakdown-extra .range-row { margin-top: 0.5rem; }
+    .breakdown-slot { margin-top: 0.45rem; }
+    .breakdown-slot:first-child { margin-top: 0; }
+    #add-breakdown { margin-top: 0.35rem; }
+    .series-bd-slot { margin-top: 0.35rem; }
+    .series-bd .remove-breakdown { margin-left: 0.4rem; }
     #of-wrap[hidden] { display: none !important; }
     #events-band { margin: 0 0 1rem; }
     .band-head {
@@ -254,7 +259,12 @@
 <main class="workspace">
   <form id="f" class="filters">
     <h1>Events</h1>
-    <p class="summary">
+    {% if not mapping_ready %}
+    <div id="needs-setup" class="callout">
+      <p>Map a table on <a href="/setup">Setup</a> before Events can run.</p>
+    </div>
+    {% endif %}
+    <p class="summary"{% if not mapping_ready %} hidden{% endif %}>
       {{ config.table }}
       · {{ config.entity_label or "User" }}
       ({{ config.entity }})
@@ -400,6 +410,7 @@
       <label for="breakdown_by_series" style="margin:0">{{ filter_ui.chrome.breakdown_each }}</label>
     </div>
     <div id="breakdown-chart">
+    <div class="breakdown-slot" data-slot="0">
     <label for="breakdown_column">{{ filter_ui.chrome.breakdown }} <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span>
       <button type="button" id="refresh-columns" class="linkish">Refresh list</button>
     </label>
@@ -415,6 +426,9 @@
       <span class="hint">Fills the spec expression. Does not replace it with a property store.</span>
     </div>
     </div>
+    <div id="breakdown-more"></div>
+    <button type="button" id="add-breakdown" class="linkish">Add breakdown</button>
+    </div>
     <div id="breakdown-extra" hidden>
       <span class="hint" id="breakdown-hint">Value on each event in this date range. First/last for an entity (chart window vs all history vs cohort) is a later control — it is not this dropdown.</span>
       <input type="hidden" name="breakdown_at" id="breakdown_at" value="rows">
@@ -427,7 +441,7 @@
     </div>
     </div>
     <div id="run-row">
-      <button type="submit" id="run">Run</button>
+      <button type="submit" id="run"{% if not mapping_ready %} disabled{% endif %}>Run</button>
       <span id="run-loading" class="loading" hidden aria-label="Running"></span>
       <span id="run-estimate-wrap" hidden>
         <span id="run-estimate-bar" aria-hidden="true"><span id="run-estimate-fill"></span></span>
@@ -497,7 +511,7 @@
         <p id="chart-stale" class="stale-note" hidden></p>
         <div id="chart-empty" class="empty-state">
           <img id="waiting-cat" src="/static/waiting.jpg" width="160" height="160" alt="">
-          <p id="empty-copy">No rows yet. The cat is waiting.</p>
+          <p id="empty-copy">{% if mapping_ready %}No rows yet. The cat is waiting.{% else %}Map a table on Setup before Events can run.{% endif %}</p>
         </div>
         <canvas id="chart" hidden></canvas>
         <p id="incomplete-note" class="incomplete-note" hidden></p>
@@ -557,6 +571,7 @@ const saved = {
   breakdown_column: {{ (config.breakdown_column or "")|tojson }},
   breakdown_expr: {{ (config.breakdown_expr or "")|tojson }},
   breakdown_json_key: {{ (config.breakdown_json_key or "")|tojson }},
+  breakdowns: {{ (config.breakdowns or [])|tojson }},
   grain: {{ (config.grain or "day")|tojson }},
   range_mode: {{ (config.range_mode or "last")|tojson }},
   range_n: {{ (config.range_n or 30)|tojson }},
@@ -676,6 +691,7 @@ function shortError(msg) {
 }
 let eventNameCache = Array.isArray(cachedEventNames) ? cachedEventNames.slice() : [];
 const SERIES_CAP = 8;
+const BREAKDOWN_SLOT_CAP = 3;
 function savedEventNames() {
   const listed = Array.isArray(saved.event_values)
     ? saved.event_values.filter(Boolean)
@@ -862,18 +878,131 @@ function paintBreakdownSelect(sel, current) {
   if (cur === CUSTOM_BREAKDOWN) sel.value = CUSTOM_BREAKDOWN;
 }
 function fillBreakdownSelect(columns) {
-  const cur = saved.breakdown_expr ? CUSTOM_BREAKDOWN : (saved.breakdown_column || breakdownColumnEl.value || "");
+  const slots = savedBreakdownSlots();
+  const first = slots[0] || {};
+  const cur = first.breakdown_expr ? CUSTOM_BREAKDOWN : (first.breakdown_column || breakdownColumnEl.value || "");
   paintBreakdownSelect(breakdownColumnEl, cur);
   breakdownColumnEl.hidden = false;
+  if (first.breakdown_json_key) document.getElementById("breakdown_json_key").value = first.breakdown_json_key;
+  if (first.breakdown_expr) document.getElementById("breakdown_expr").value = first.breakdown_expr;
+  const more = document.getElementById("breakdown-more");
+  more.innerHTML = "";
+  slots.slice(1, BREAKDOWN_SLOT_CAP).forEach((slot) => addChartBreakdownSlot(slot));
+  syncAddBreakdownBtn();
+}
+function savedBreakdownSlots() {
+  const listed = Array.isArray(saved.breakdowns) ? saved.breakdowns : [];
+  const filled = listed.filter((s) => s && (s.breakdown_column || s.column || s.breakdown_expr || s.expr));
+  if (filled.length) return filled.map(normalizeBreakdownSlot);
+  if (saved.breakdown_column || saved.breakdown_expr) {
+    return [normalizeBreakdownSlot({
+      breakdown_column: saved.breakdown_column,
+      breakdown_expr: saved.breakdown_expr,
+      breakdown_json_key: saved.breakdown_json_key,
+    })];
+  }
+  return [];
+}
+function normalizeBreakdownSlot(s) {
+  const src = s || {};
+  return {
+    breakdown_column: src.breakdown_column || src.column || "",
+    breakdown_expr: src.breakdown_expr || src.expr || "",
+    breakdown_json_key: src.breakdown_json_key || src.json_key || "",
+  };
+}
+function chartSlotCount() {
+  return 1 + document.querySelectorAll("#breakdown-more .breakdown-slot").length;
+}
+function syncAddBreakdownBtn() {
+  const btn = document.getElementById("add-breakdown");
+  if (btn) btn.hidden = chartSlotCount() >= BREAKDOWN_SLOT_CAP;
+}
+function addChartBreakdownSlot(init) {
+  if (chartSlotCount() >= BREAKDOWN_SLOT_CAP) return;
+  const data = normalizeBreakdownSlot(init);
+  const wrap = document.createElement("div");
+  wrap.className = "breakdown-slot";
+  wrap.innerHTML = (
+    "<label>" + t("breakdown") + "</label>"
+    + '<select class="bd-column" aria-label="' + t("breakdown") + '"></select>'
+    + '<button type="button" class="linkish remove-breakdown">Remove</button>'
+    + '<div class="bd-json-wrap" hidden><label>JSON key</label>'
+    + '<input class="bd-json" autocomplete="off" placeholder="plan" aria-label="JSON key"></div>'
+    + '<div class="bd-expr-wrap" hidden><label>' + t("sql_expr") + "</label>"
+    + '<input class="bd-expr" autocomplete="off" placeholder="country" aria-label="Breakdown SQL"></div>'
+  );
+  document.getElementById("breakdown-more").appendChild(wrap);
+  const sel = wrap.querySelector(".bd-column");
+  const want = data.breakdown_expr ? CUSTOM_BREAKDOWN : data.breakdown_column;
+  paintBreakdownSelect(sel, want);
+  wrap.querySelector(".bd-json").value = data.breakdown_json_key || "";
+  wrap.querySelector(".bd-expr").value = data.breakdown_expr || "";
+  sel.addEventListener("change", () => { syncExtraSlot(wrap); syncBreakdownUi(); scheduleEstimate(); });
+  wrap.querySelector(".remove-breakdown").addEventListener("click", () => {
+    wrap.remove();
+    syncAddBreakdownBtn();
+    syncBreakdownUi();
+    scheduleEstimate();
+    syncStaleNotes();
+  });
+  syncExtraSlot(wrap);
+  syncAddBreakdownBtn();
+}
+function syncExtraSlot(wrap) {
+  const col = wrap.querySelector(".bd-column").value;
+  const json = col && col !== CUSTOM_BREAKDOWN && (
+    isJsonColumn(col) || !!(wrap.querySelector(".bd-json").value && col)
+  );
+  wrap.querySelector(".bd-json-wrap").hidden = !json;
+  wrap.querySelector(".bd-expr-wrap").hidden = col !== CUSTOM_BREAKDOWN;
+}
+function breakdownJsonIncomplete() {
+  if (!document.getElementById("breakdown-json-wrap").hidden
+    && !(document.getElementById("breakdown_json_key").value || "").trim()) return true;
+  for (const wrap of document.querySelectorAll("#breakdown-more .bd-json-wrap")) {
+    if (!wrap.hidden && !(wrap.querySelector(".bd-json").value || "").trim()) return true;
+  }
+  return false;
+}
+function slotFromEls(colEl, jsonWrap, jsonEl, exprEl) {
+  const col = colEl.value;
+  const exprOn = col === CUSTOM_BREAKDOWN;
+  return {
+    breakdown_column: exprOn ? "" : col,
+    breakdown_json_key: exprOn || jsonWrap.hidden ? "" : (jsonEl.value || "").trim(),
+    breakdown_expr: exprOn ? (exprEl.value || "").trim() : "",
+  };
+}
+function chartBreakdownSlots() {
+  const slots = [slotFromEls(
+    breakdownColumnEl,
+    document.getElementById("breakdown-json-wrap"),
+    document.getElementById("breakdown_json_key"),
+    document.getElementById("breakdown_expr")
+  )];
+  document.querySelectorAll("#breakdown-more .breakdown-slot").forEach((el) => {
+    slots.push(slotFromEls(
+      el.querySelector(".bd-column"),
+      el.querySelector(".bd-json-wrap"),
+      el.querySelector(".bd-json"),
+      el.querySelector(".bd-expr")
+    ));
+  });
+  return slots.filter((s) => s.breakdown_column || s.breakdown_expr);
 }
 function paintColumns(columns) {
   columnCache = columns || [];
   fillBreakdownSelect(columnCache);
   fillOfSelect(columnCache);
-  document.querySelectorAll(".series-bd").forEach((wrap) => {
-    const sel = wrap.querySelector(".series-bd-column");
+  document.querySelectorAll(".series-bd-slot").forEach((slot) => {
+    const sel = slot.querySelector(".series-bd-column");
     paintBreakdownSelect(sel, sel.value);
-    syncSeriesBd(wrap);
+    syncSeriesBdSlot(slot);
+  });
+  document.querySelectorAll("#breakdown-more .breakdown-slot").forEach((wrap) => {
+    paintBreakdownSelect(wrap.querySelector(".bd-column"), wrap.querySelector(".bd-column").value);
+    syncExtraSlot(wrap);
   });
   syncBreakdownUi();
   syncOfUi();
@@ -1483,26 +1612,37 @@ function addFilterLine(host, init) {
 function breakdownBySeries() {
   return document.getElementById("breakdown_by_series").checked;
 }
-function syncSeriesBd(wrap) {
-  const sel = wrap.querySelector(".series-bd-column");
+function syncSeriesBdSlot(slot) {
+  const sel = slot.querySelector(".series-bd-column");
   const col = sel.value;
   const json = col && col !== CUSTOM_BREAKDOWN && (
-    isJsonColumn(col) || !!(wrap.querySelector(".series-bd-json").value && col)
+    isJsonColumn(col) || !!(slot.querySelector(".series-bd-json").value && col)
   );
-  wrap.querySelector(".series-bd-json").hidden = !json;
-  wrap.querySelector(".series-bd-expr").hidden = col !== CUSTOM_BREAKDOWN;
+  slot.querySelector(".series-bd-json").hidden = !json;
+  slot.querySelector(".series-bd-expr").hidden = col !== CUSTOM_BREAKDOWN;
+}
+function readSeriesBdSlot(slot) {
+  const col = slot.querySelector(".series-bd-column").value;
+  const exprOn = col === CUSTOM_BREAKDOWN;
+  return {
+    breakdown_column: exprOn ? "" : col,
+    breakdown_json_key: exprOn || slot.querySelector(".series-bd-json").hidden
+      ? ""
+      : (slot.querySelector(".series-bd-json").value || "").trim(),
+    breakdown_expr: exprOn ? (slot.querySelector(".series-bd-expr").value || "").trim() : "",
+  };
 }
 function readSeriesBd(host) {
   const wrap = host.querySelector(":scope > .series-bd");
   if (!wrap) return {};
-  const col = wrap.querySelector(".series-bd-column").value;
-  const exprOn = col === CUSTOM_BREAKDOWN;
+  const slots = [...wrap.querySelectorAll(".series-bd-slot")].map(readSeriesBdSlot)
+    .filter((s) => s.breakdown_column || s.breakdown_expr);
+  const first = slots[0] || {};
   return {
-    breakdown_column: exprOn ? "" : col,
-    breakdown_json_key: exprOn || wrap.querySelector(".series-bd-json").hidden
-      ? ""
-      : (wrap.querySelector(".series-bd-json").value || "").trim(),
-    breakdown_expr: exprOn ? (wrap.querySelector(".series-bd-expr").value || "").trim() : "",
+    breakdown_column: first.breakdown_column || "",
+    breakdown_json_key: first.breakdown_json_key || "",
+    breakdown_expr: first.breakdown_expr || "",
+    breakdowns: slots,
   };
 }
 function applyMeasureLabels(sel) {
@@ -1618,52 +1758,79 @@ function attachSeriesMeasure(host, data) {
   });
   syncSeriesMeasure(host);
 }
+function seriesBdSlotCount(wrap) {
+  return wrap.querySelectorAll(".series-bd-slot").length;
+}
+function addSeriesBdSlot(wrap, init) {
+  if (seriesBdSlotCount(wrap) >= BREAKDOWN_SLOT_CAP) return;
+  const data = normalizeBreakdownSlot(init);
+  const slot = document.createElement("div");
+  slot.className = "series-bd-slot";
+  slot.innerHTML = (
+    "<label>" + t("breakdown") + "</label>"
+    + '<select class="series-bd-column" aria-label="' + t("breakdown") + '"></select>'
+    + (seriesBdSlotCount(wrap) ? '<button type="button" class="linkish remove-breakdown">Remove</button>' : "")
+    + '<input class="series-bd-json" placeholder="JSON key" autocomplete="off" aria-label="JSON key">'
+    + '<input class="series-bd-expr" placeholder="' + t("sql_expr") + '" autocomplete="off" aria-label="Breakdown SQL">'
+  );
+  const list = wrap.querySelector(".series-bd-list") || wrap;
+  list.appendChild(slot);
+  const sel = slot.querySelector(".series-bd-column");
+  const want = data.breakdown_expr ? CUSTOM_BREAKDOWN : (data.breakdown_column || "");
+  paintBreakdownSelect(sel, want);
+  slot.querySelector(".series-bd-json").value = data.breakdown_json_key || "";
+  slot.querySelector(".series-bd-expr").value = data.breakdown_expr || "";
+  sel.addEventListener("change", () => { syncSeriesBdSlot(slot); syncBreakdownMode(); scheduleEstimate(); });
+  const remove = slot.querySelector(".remove-breakdown");
+  if (remove) {
+    remove.addEventListener("click", () => {
+      slot.remove();
+      syncSeriesBdAdd(wrap);
+      syncBreakdownMode();
+      scheduleEstimate();
+      syncStaleNotes();
+    });
+  }
+  syncSeriesBdSlot(slot);
+  syncSeriesBdAdd(wrap);
+}
+function syncSeriesBdAdd(wrap) {
+  const btn = wrap.querySelector(".add-series-bd");
+  if (btn) btn.hidden = seriesBdSlotCount(wrap) >= BREAKDOWN_SLOT_CAP;
+}
 function attachSeriesBd(host, init) {
   const data = init || {};
   const wrap = document.createElement("div");
   wrap.className = "series-bd";
-  wrap.innerHTML = (
-    "<label>" + t("breakdown") + "</label>"
-    + '<select class="series-bd-column" aria-label="' + t("breakdown") + '"></select>'
-    + '<input class="series-bd-json" placeholder="JSON key" autocomplete="off" aria-label="JSON key">'
-    + '<input class="series-bd-expr" placeholder="' + t("sql_expr") + '" autocomplete="off" aria-label="Breakdown SQL">'
-  );
+  wrap.innerHTML = '<div class="series-bd-list"></div><button type="button" class="linkish add-series-bd">Add breakdown</button>';
   host.appendChild(wrap);
-  const sel = wrap.querySelector(".series-bd-column");
-  const want = data.breakdown_expr ? CUSTOM_BREAKDOWN : (data.breakdown_column || "");
-  paintBreakdownSelect(sel, want);
-  wrap.querySelector(".series-bd-json").value = data.breakdown_json_key || "";
-  wrap.querySelector(".series-bd-expr").value = data.breakdown_expr || "";
-  sel.addEventListener("change", () => { syncSeriesBd(wrap); syncBreakdownMode(); scheduleEstimate(); });
-  syncSeriesBd(wrap);
+  const slots = Array.isArray(data.breakdowns) && data.breakdowns.length
+    ? data.breakdowns.map(normalizeBreakdownSlot)
+    : (data.breakdown_column || data.breakdown_expr ? [normalizeBreakdownSlot(data)] : [{}]);
+  slots.slice(0, BREAKDOWN_SLOT_CAP).forEach((slot) => addSeriesBdSlot(wrap, slot));
+  if (!seriesBdSlotCount(wrap)) addSeriesBdSlot(wrap, {});
+  wrap.querySelector(".add-series-bd").addEventListener("click", () => {
+    addSeriesBdSlot(wrap, {});
+    scheduleEstimate();
+    syncStaleNotes();
+  });
+  syncSeriesBdAdd(wrap);
   return wrap;
 }
-function chartBreakdownValue() {
-  const col = breakdownColumnEl.value;
-  const exprOn = col === CUSTOM_BREAKDOWN;
-  return {
-    breakdown_column: exprOn ? "" : col,
-    breakdown_json_key: document.getElementById("breakdown-json-wrap").hidden
-      ? ""
-      : (document.getElementById("breakdown_json_key").value || "").trim(),
-    breakdown_expr: exprOn ? (document.getElementById("breakdown_expr").value || "").trim() : "",
-  };
-}
 function copyBreakdownToSeries() {
-  const src = chartBreakdownValue();
+  const src = chartBreakdownSlots();
   document.querySelectorAll("#event-cards > .event-series").forEach((host) => {
     const wrap = host.querySelector(":scope > .series-bd");
     if (!wrap) return;
-    const sel = wrap.querySelector(".series-bd-column");
-    const want = src.breakdown_expr ? CUSTOM_BREAKDOWN : src.breakdown_column;
-    paintBreakdownSelect(sel, want);
-    wrap.querySelector(".series-bd-json").value = src.breakdown_json_key;
-    wrap.querySelector(".series-bd-expr").value = src.breakdown_expr;
-    syncSeriesBd(wrap);
+    wrap.querySelector(".series-bd-list").innerHTML = "";
+    (src.length ? src : [{}]).forEach((slot) => addSeriesBdSlot(wrap, slot));
   });
 }
 function anySeriesHasBreakdown() {
-  return collectSeries().some((u) => u.breakdown_column || u.breakdown_expr);
+  return collectSeries().some((u) =>
+    (u.breakdown_column || u.breakdown_expr)
+    || (Array.isArray(u.breakdowns) && u.breakdowns.some((s) => s && (s.breakdown_column || s.breakdown_expr)))
+  );
 }
 function syncBreakdownMode() {
   const per = breakdownBySeries();
@@ -1672,8 +1839,8 @@ function syncBreakdownMode() {
     el.hidden = !per;
   });
   document.querySelectorAll(".event-group-members .series-bd").forEach((el) => { el.hidden = true; });
-  const chartCol = breakdownColumnEl.value;
-  document.getElementById("breakdown-extra").hidden = per ? !anySeriesHasBreakdown() : !chartCol;
+  const filled = per ? anySeriesHasBreakdown() : chartBreakdownSlots().length;
+  document.getElementById("breakdown-extra").hidden = !filled;
   if (typeof syncExact === "function") syncExact();
 }
 function readCard(card) {
@@ -1827,9 +1994,16 @@ function seriesIncomplete() {
     if (isPropertyMeasureValue(unit.measure) && unit.of_column && (isJsonColumn(unit.of_column) || unit.of_json_key) && !unit.of_json_key) {
       return "Enter a JSON key.";
     }
-    if (breakdownBySeries() && unit.breakdown_column
-      && (isJsonColumn(unit.breakdown_column) || unit.breakdown_json_key)
-      && !unit.breakdown_json_key) return "Enter a JSON key.";
+    const bdSlots = Array.isArray(unit.breakdowns) && unit.breakdowns.length
+      ? unit.breakdowns
+      : [unit];
+    if (breakdownBySeries()) {
+      for (const slot of bdSlots) {
+        if (slot.breakdown_column
+          && (isJsonColumn(slot.breakdown_column) || slot.breakdown_json_key)
+          && !slot.breakdown_json_key) return "Enter a JSON key.";
+      }
+    }
   }
   return "";
 }
@@ -1868,6 +2042,12 @@ document.getElementById("breakdown_by_series").addEventListener("change", () => 
   syncStaleNotes();
 });
 breakdownColumnEl.addEventListener("change", syncBreakdownUi);
+document.getElementById("add-breakdown").addEventListener("click", () => {
+  addChartBreakdownSlot({});
+  syncBreakdownUi();
+  scheduleEstimate();
+  syncStaleNotes();
+});
 ofColumnEl.addEventListener("change", syncOfUi);
 function authBody() {
   return {
@@ -2187,13 +2367,12 @@ function defaultTitle() {
     if (u.kind === "any_of") return (u.members || []).map((m) => m.event).filter(Boolean).join(" or ");
     return u.event;
   }).filter(Boolean).join(" · ");
-  const bd = breakdownColumnEl.value;
-  const bdKey = (document.getElementById("breakdown_json_key").value || "").trim();
-  const by = !bd ? "" : (
-    bd === CUSTOM_BREAKDOWN ? "by expression"
-    : bdKey ? "by " + bd + "." + bdKey
-    : "by " + bd
-  );
+  const names = (typeof chartBreakdownSlots === "function" ? chartBreakdownSlots() : []).map((s) => {
+    if (s.breakdown_expr) return "expression";
+    if (s.breakdown_json_key) return s.breakdown_column + "." + s.breakdown_json_key;
+    return s.breakdown_column;
+  }).filter(Boolean);
+  const by = names.length ? "by " + names.join(" · ") : "";
   const range = (rangeChoiceEl.selectedOptions[0] && rangeChoiceEl.selectedOptions[0].textContent) || "";
   return [measureTitle(), ev, by, range].filter(Boolean).join(" · ");
 }
@@ -2230,13 +2409,12 @@ function payload() {
   d.event_values = names;
   d.event_value = names[0] || "";
   d.filters = [];
-  if (d.breakdown_column === CUSTOM_BREAKDOWN) {
-    d.breakdown_column = "";
-    d.breakdown_json_key = "";
-  } else {
-    d.breakdown_expr = "";
-    if (document.getElementById("breakdown-json-wrap").hidden) d.breakdown_json_key = "";
-  }
+  const slots = chartBreakdownSlots();
+  d.breakdowns = slots;
+  const slot0 = slots[0] || {};
+  d.breakdown_column = slot0.breakdown_column || "";
+  d.breakdown_json_key = slot0.breakdown_json_key || "";
+  d.breakdown_expr = slot0.breakdown_expr || "";
   return d;
 }
 function formatBytes(n) {
@@ -2262,7 +2440,9 @@ function estimateKey(body) {
     body.start_date, body.end_date, body.rel_start_n, body.rel_end_n,
     body.override_cap, body.bytes_cap_override_gb, body.bytes_cap_gb,
     body.on, body.of_column, body.of_expr, body.of_json_key,
-    body.breakdown_column, body.breakdown_expr, body.breakdown_json_key, body.breakdown_at, body.top_n, body.include_other,
+    body.breakdown_column, body.breakdown_expr, body.breakdown_json_key,
+    JSON.stringify(body.breakdowns || []),
+    body.breakdown_at, body.top_n, body.include_other,
   ].join("\0");
 }
 let lastEstimateKey = "";
@@ -2396,6 +2576,7 @@ function resultKey(body) {
     body.start_date, body.end_date, body.rel_start_n, body.rel_end_n,
     body.on, body.of_column, body.of_expr, body.of_json_key,
     body.breakdown_column, body.breakdown_expr, body.breakdown_json_key,
+    JSON.stringify(body.breakdowns || []),
     body.breakdown_at, body.top_n, body.include_other,
     body.exact ? "1" : "0",
   ].join("\0");
@@ -2457,12 +2638,79 @@ function clearLastRun() {
   lastRun = null;
   syncStaleNotes();
 }
+function tableDimKeys() {
+  if (!tableRows.length) return [];
+  const keys = tableRows[0].dimKeys || [];
+  if (!keys.length) return [];
+  const sig = keys.join("\0");
+  if (!tableRows.every((r) => (r.dimKeys || []).join("\0") === sig)) return [];
+  return keys;
+}
+function tableUsesSeriesCol() {
+  return !tableDimKeys().length && tableRows.some((r) => r.series);
+}
 function hasSeries() {
-  return tableRows.some((r) => r.series);
+  return tableUsesSeriesCol() || tableDimKeys().length > 0;
+}
+function bindTh(th) {
+  th.addEventListener("click", (e) => {
+    if (e.target.classList.contains("grip")) return;
+    const key = th.getAttribute("data-key");
+    if (sortKey === key) sortDir = -sortDir;
+    else { sortKey = key; sortDir = 1; }
+    renderTable();
+  });
+  const grip = th.querySelector(".grip");
+  if (!grip) return;
+  grip.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = th.getBoundingClientRect().width;
+    function move(ev) {
+      th.style.width = Math.max(48, startW + (ev.clientX - startX)) + "px";
+    }
+    function up() {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+    }
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
+}
+function ensureDimHeaders(keys) {
+  const tr = document.querySelector("#result-table thead tr");
+  tr.querySelectorAll("th.dim-col").forEach((th) => th.remove());
+  const valueTh = tr.querySelector('th[data-key="value"]');
+  const seriesTh = document.getElementById("th-series");
+  if (!keys.length) {
+    if (seriesTh) seriesTh.hidden = !tableUsesSeriesCol();
+    return;
+  }
+  if (seriesTh) seriesTh.hidden = true;
+  keys.forEach((key, i) => {
+    const th = document.createElement("th");
+    th.className = "dim-col";
+    th.setAttribute("data-key", "dim:" + key);
+    const grip = document.createElement("span");
+    grip.className = "grip";
+    grip.setAttribute("data-col", String(i + 1));
+    th.appendChild(grip);
+    tr.insertBefore(th, valueTh);
+    bindTh(th);
+  });
+}
+function headerLabel(key) {
+  if (key === "bucket") return grainHeader();
+  if (key === "series") return seriesHeader();
+  if (key === "value") return valueHeader();
+  if (key && key.startsWith("dim:")) return key.slice(4);
+  return key;
 }
 function syncTableHeaders() {
+  ensureDimHeaders(tableDimKeys());
   const seriesTh = document.getElementById("th-series");
-  if (seriesTh) seriesTh.hidden = !hasSeries();
+  if (seriesTh && !tableDimKeys().length) seriesTh.hidden = !tableUsesSeriesCol();
   document.querySelectorAll("#result-table th[data-key]").forEach((th) => {
     if (th.hidden) return;
     const grip = th.querySelector(".grip");
@@ -2470,12 +2718,12 @@ function syncTableHeaders() {
       if (n !== grip) n.remove();
     });
     const key = th.getAttribute("data-key");
-    const label = key === "bucket" ? grainHeader() : (key === "series" ? seriesHeader() : valueHeader());
+    const label = headerLabel(key);
     const mark = document.createElement("span");
     mark.className = "sort";
     mark.textContent = sortKey === key ? (sortDir === 1 ? " ▲" : " ▼") : "";
     th.classList.toggle("sorted", sortKey === key);
-    th.insertBefore(document.createTextNode(label), grip);
+    th.insertBefore(document.createTextNode(label + (grip ? " " : "")), grip);
     th.insertBefore(mark, grip);
   });
 }
@@ -2498,15 +2746,16 @@ function renderTable() {
   const tbody = document.getElementById("rows");
   tbody.innerHTML = "";
   const ranked = [...tableRows].sort((a, b) => {
-    const av = a[sortKey];
-    const bv = b[sortKey];
+    const av = rowSortValue(a, sortKey);
+    const bv = rowSortValue(b, sortKey);
     const an = Number(av);
     const bn = Number(bv);
     let cmp;
     if (av !== "" && bv !== "" && !Number.isNaN(an) && !Number.isNaN(bn)) cmp = an - bn;
-    else cmp = String(av).localeCompare(String(bv), undefined, { numeric: true });
+    else cmp = String(av ?? "").localeCompare(String(bv ?? ""), undefined, { numeric: true });
     return cmp * sortDir;
   });
+  const dims = tableDimKeys();
   for (const row of ranked) {
     const tr = document.createElement("tr");
     if (row.incomplete) tr.className = "incomplete";
@@ -2514,18 +2763,31 @@ function renderTable() {
     const tdValue = document.createElement("td");
     tdBucket.textContent = displayBucket(row);
     tdValue.textContent = formatValue(row.value);
-    if (hasSeries()) {
+    const extra = [];
+    if (dims.length) {
+      dims.forEach((k) => {
+        const td = document.createElement("td");
+        const v = row.dims ? row.dims[k] : "";
+        td.textContent = v == null || v === "" ? "(null)" : String(v);
+        extra.push(td);
+      });
+    } else if (tableUsesSeriesCol()) {
       const tdSeries = document.createElement("td");
       tdSeries.textContent = row.series;
-      tr.append(tdBucket, tdSeries, tdValue);
-    } else {
-      tr.append(tdBucket, tdValue);
+      extra.push(tdSeries);
     }
+    tr.append(tdBucket, ...extra, tdValue);
     tbody.appendChild(tr);
   }
 }
+function rowSortValue(row, key) {
+  if (key && key.startsWith("dim:")) return row.dims ? row.dims[key.slice(4)] : "";
+  return row[key];
+}
 function tableHeaderRow() {
-  if (hasSeries()) return [grainHeader(), seriesHeader(), valueHeader(), "incomplete"];
+  const dims = tableDimKeys();
+  if (dims.length) return [grainHeader(), ...dims, valueHeader(), "incomplete"];
+  if (tableUsesSeriesCol()) return [grainHeader(), seriesHeader(), valueHeader(), "incomplete"];
   return [grainHeader(), valueHeader(), "incomplete"];
 }
 function tableErrorText() {
@@ -2739,6 +3001,7 @@ function setChartEmpty(kind) {
   if (kind === "running") copy.textContent = "Running…";
   else if (kind === "fail") copy.textContent = "Query failed.";
   else if (kind === "empty") copy.textContent = "Nothing to `cat`.";
+  else if (document.getElementById("needs-setup")) copy.textContent = "Map a table on Setup before Events can run.";
   else copy.textContent = "No rows yet. The cat is waiting.";
 }
 function drawChart() {
@@ -3006,12 +3269,20 @@ form.addEventListener("submit", async (e) => {
     document.getElementById("result-table").hidden = false;
     setTableActions("table");
     snapshotLastRun(body);
-    tableRows = (data.rows || []).map((row) => ({
-      bucket: bucketLabel(row.bucket),
-      value: row.value,
-      series: seriesFromRow(row),
-      incomplete: !!row.incomplete,
-    }));
+    tableRows = (data.rows || []).map((row) => {
+      const dims = {};
+      Object.keys(row).forEach((k) => {
+        if (k !== "bucket" && k !== "value" && k !== "incomplete" && k !== "series") dims[k] = row[k];
+      });
+      return {
+        bucket: bucketLabel(row.bucket),
+        value: row.value,
+        series: seriesFromRow(row),
+        dims,
+        dimKeys: Object.keys(dims),
+        incomplete: !!row.incomplete,
+      };
+    });
     renderTable();
     drawChart();
     showLimitNote(!!data.truncated, data.limit || effectiveRowLimit());

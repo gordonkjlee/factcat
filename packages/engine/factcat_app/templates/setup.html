@@ -93,8 +93,10 @@
   </div>
 <form id="f" class="setup-form">
   <h1>Project setup</h1>
-  {% if request.query_params.get("events") %}
-  <p class="lede" id="need-events">Events opens after this mapping is saved.</p>
+  {% if not mapping_ready %}
+  <div id="setup-needed" class="callout">
+    <p>{% if request.query_params.get("events") %}Events opens after this mapping is saved. {% endif %}Pick the events table and map entity id and timestamp, then Save. Catalog lists load when you open each dropdown. Warehouse sign-in does not fill those fields.</p>
+  </div>
   {% endif %}
   <p class="lede" id="setup-lede">{% if config.kind == "snowflake" %}Map a table in <em>your</em> Snowflake. Mapping is saved to <code>.factcat.json</code> in this directory. Sign-in is a key-pair file.{% else %}Map a table in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code> in this directory. Uses application-default credentials unless you open Advanced.{% endif %}</p>
 
@@ -108,6 +110,7 @@
   <div id="bq-conn">
     <label for="project">GCP project that runs the query (billing)</label>
     <input id="project" name="project" autocomplete="off" value="{{ config.project }}">
+    <span class="hint">Pre-filled from ADC, <code>GOOGLE_CLOUD_PROJECT</code>, or <code>gcloud config get-value project</code> when we can read them. Dataset and table are not part of that.</span>
     <label for="data_project">Project that holds the table (blank = same as billing)</label>
     <input id="data_project" name="data_project" autocomplete="off" value="{{ config.data_project }}">
     <input type="hidden" name="location" id="location" value="{{ config.location }}">
@@ -129,29 +132,50 @@
       <input id="private_key_path" name="private_key_path" autocomplete="off" value="{{ config.private_key_path }}" placeholder="rsa_key.p8">
     </div>
     <label for="role">Role (optional) <span id="role-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="role" name="role" disabled><option value=""></option></select>
+    <select id="role" name="role" disabled>
+      <option value=""></option>
+      {% if config.role %}<option value="{{ config.role }}" selected>{{ config.role }}</option>{% endif %}
+    </select>
     <label for="warehouse">Compute warehouse <span id="warehouse-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="warehouse" name="warehouse" disabled><option value=""></option></select>
+    <select id="warehouse" name="warehouse" disabled>
+      <option value=""></option>
+      {% if config.warehouse %}<option value="{{ config.warehouse }}" selected>{{ config.warehouse }}</option>{% endif %}
+    </select>
   </div>
   <input type="hidden" name="table" id="table" value="{{ config.table }}">
 
   <h2>Table</h2>
   <div id="bq-table">
     <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="dataset" name="dataset" disabled><option value=""></option></select>
+    <select id="dataset" name="dataset" disabled>
+      <option value=""></option>
+      {% if config.dataset %}<option value="{{ config.dataset }}" selected>{{ config.dataset }}</option>{% endif %}
+    </select>
   </div>
   <div id="sf-table" hidden>
     <label for="database">Database <span id="database-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="database" name="database" disabled><option value=""></option></select>
+    <select id="database" name="database" disabled>
+      <option value=""></option>
+      {% if config.database %}<option value="{{ config.database }}" selected>{{ config.database }}</option>{% endif %}
+    </select>
     <label for="schema">Schema <span id="schema-loading" class="loading" hidden aria-label="Loading"></span></label>
-    <select id="schema" name="schema" disabled><option value=""></option></select>
+    <select id="schema" name="schema" disabled>
+      <option value=""></option>
+      {% if config.schema %}<option value="{{ config.schema }}" selected>{{ config.schema }}</option>{% endif %}
+    </select>
   </div>
   <label for="table_name">Table <span id="table_name-loading" class="loading" hidden aria-label="Loading"></span></label>
-  <select id="table_name" name="table_name" disabled><option value=""></option></select>
+  <select id="table_name" name="table_name" disabled>
+    <option value=""></option>
+    {% if config.table_name %}<option value="{{ config.table_name }}" selected>{{ config.table_name }}</option>{% endif %}
+  </select>
 
   <h2>Grain</h2>
   <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
-  <select id="entity" name="entity" required disabled><option value=""></option></select>
+  <select id="entity" name="entity" required disabled>
+    <option value=""></option>
+    {% if config.entity %}<option value="{{ config.entity }}" selected>{{ config.entity }}</option>{% endif %}
+  </select>
   <span class="hint">Stable id for this grain. Null means the event is not about that grain (dropped from uniques). Integer preferred; string is fine. Not unique on the events table.</span>
   <label for="entity_label_choice">Entity name (singular)</label>
   <select id="entity_label_choice">
@@ -170,7 +194,10 @@
   <input id="entity_label_plural" name="entity_label_plural" autocomplete="off" value="{{ config.entity_label_plural or 'Users' }}">
   <span class="hint">Display only (Unique Users, Average per User). Does not choose the id column.</span>
   <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
-  <select id="event_time" name="event_time" required disabled><option value=""></option></select>
+  <select id="event_time" name="event_time" required disabled>
+    <option value=""></option>
+    {% if config.event_time %}<option value="{{ config.event_time }}" selected>{{ config.event_time }}</option>{% endif %}
+  </select>
   <span class="hint" id="event-time-hint">TIMESTAMP (UTC instant), DATETIME (civil time), or an integer Unix epoch. Not DATE.</span>
   <div id="event-time-epoch-wrap" hidden>
     <label for="event_time_epoch">Unix epoch unit</label>
@@ -183,7 +210,10 @@
     <span class="hint">Integer seconds (or ms / µs) since 1970-01-01 UTC. Always an instant; reporting timezone is whose midnight is a day.</span>
   </div>
   <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
-  <select id="event_column" name="event_column" disabled><option value=""></option></select>
+  <select id="event_column" name="event_column" disabled>
+    <option value=""></option>
+    {% if config.event_column %}<option value="{{ config.event_column }}" selected>{{ config.event_column }}</option>{% endif %}
+  </select>
   <span class="hint">String column of event names. Save runs DISTINCT on the last 90 days and caches the list for Events.</span>
   <h2>Time</h2>
   <label for="week_start">Week starts on</label>

@@ -12,7 +12,9 @@ from factcat.warehouses import AdapterError, BytesCapError, connect
 from factcat.warehouses.bigquery import (
     DEFAULT_MAXIMUM_BYTES_BILLED,
     BigQueryAdapter,
+    _cli_project_value,
     _load_google,
+    gcloud_config_project,
 )
 
 
@@ -209,6 +211,47 @@ def test_connect_run_hits_the_mock_client(google_stack):
     result = adapter.run("SELECT 1")
     assert result.rows == [{"n": 1}]
     google_stack.client.query.assert_called()
+
+
+def test_gcloud_config_project_reads_cli(monkeypatch):
+    monkeypatch.delenv("CLOUDSDK_CORE_PROJECT", raising=False)
+
+    def fake_run(*_a, **_k):
+        return SimpleNamespace(returncode=0, stdout="cli-project\n", stderr="")
+
+    monkeypatch.setattr("factcat.warehouses.bigquery.subprocess.run", fake_run)
+    assert gcloud_config_project() == "cli-project"
+
+
+def test_gcloud_config_project_env_skips_cli(monkeypatch):
+    monkeypatch.setenv("CLOUDSDK_CORE_PROJECT", "env-project")
+
+    def boom(*_a, **_k):
+        raise AssertionError("must not spawn gcloud when CLOUDSDK_CORE_PROJECT is set")
+
+    monkeypatch.setattr("factcat.warehouses.bigquery.subprocess.run", boom)
+    assert gcloud_config_project() == "env-project"
+
+
+def test_gcloud_config_project_unset_or_missing(monkeypatch):
+    monkeypatch.delenv("CLOUDSDK_CORE_PROJECT", raising=False)
+    monkeypatch.setattr(
+        "factcat.warehouses.bigquery.subprocess.run",
+        lambda *_a, **_k: SimpleNamespace(returncode=0, stdout="(unset)\n", stderr=""),
+    )
+    assert gcloud_config_project() == ""
+
+    def missing(*_a, **_k):
+        raise FileNotFoundError("gcloud")
+
+    monkeypatch.setattr("factcat.warehouses.bigquery.subprocess.run", missing)
+    assert gcloud_config_project() == ""
+
+
+def test_cli_project_value_skips_warnings():
+    assert _cli_project_value("WARNING: your current project is unset\ncli-project\n") == "cli-project"
+    assert _cli_project_value("Your active configuration is: [default]\n(unset)\n") == ""
+    assert _cli_project_value("") == ""
 
 
 def test_sql_is_not_rewritten(google_stack):

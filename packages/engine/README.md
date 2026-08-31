@@ -45,7 +45,7 @@ print(events_sql(EventsSpec(
     entity="subscription_id",
     event_time="occurred_at",
     measure="uniques",
-    breakdowns=("country",),
+    breakdowns=("country", "browser"),
     top_n=8,
 )))
 ```
