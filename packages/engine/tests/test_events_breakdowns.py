@@ -207,6 +207,26 @@ def test_include_other_false_drops_the_tail(pages):
     assert sum(got.values()) == 15.0
 
 
+def test_duckdb_approx_top_k_executes(pages):
+    spec = EventsSpec(
+        table="pages",
+        entity="entity_id",
+        event_time="occurred_at",
+        measure="total",
+        exact=False,
+        breakdowns=("path",),
+        breakdown_labels=("path",),
+        top_n=3,
+        include_other=True,
+    )
+    sql = events_sql(spec, dialect="duckdb")
+    assert "approx_top_k" in sql.lower()
+    got = {path: value for _, path, value in _rows(pages, spec)}
+    assert OTHER_LABEL in got
+    assert set(got) <= {"/a", "/b", "/c", "/d", "/e", "/f", OTHER_LABEL}
+    assert sum(got.values()) == 21.0
+
+
 def test_fold_is_a_join_not_correlated_exists():
     sql = events_sql(_spec(), dialect="bigquery").upper()
     assert "EXISTS" not in sql

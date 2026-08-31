@@ -780,6 +780,7 @@ function syncBreakdownUi() {
   document.getElementById("breakdown-expr-wrap").hidden = col !== CUSTOM_BREAKDOWN;
   document.getElementById("breakdown-json-wrap").hidden = !json;
   syncBreakdownMode();
+  if (typeof syncExact === "function") syncExact();
 }
 function syncOfUi() {
   const property = isPropertyMeasure();
@@ -1608,6 +1609,7 @@ function syncBreakdownMode() {
   document.querySelectorAll(".event-group-members .series-bd").forEach((el) => { el.hidden = true; });
   const chartCol = breakdownColumnEl.value;
   document.getElementById("breakdown-extra").hidden = per ? !anySeriesHasBreakdown() : !chartCol;
+  if (typeof syncExact === "function") syncExact();
 }
 function readCard(card) {
   return {
@@ -2051,28 +2053,43 @@ function relabelMeasures() {
   });
 }
 function syncExact() {
-  const measures = collectSeries().map((u) => u.measure);
+  const series = (typeof collectSeries === "function") ? collectSeries() : [];
+  const measures = series.length ? series.map((u) => u.measure) : [form.measure.value];
   const v = measures.find((m) => m === "uniques" || m === "average" || m === "median" || m === "distinct")
     || form.measure.value;
-  const show = v === "uniques" || v === "average" || v === "median" || v === "distinct";
-  document.getElementById("exact-wrap").hidden = !show;
+  const hasBreakdown = (typeof anySeriesHasBreakdown === "function" && anySeriesHasBreakdown())
+    || !!(breakdownColumnEl && breakdownColumnEl.value);
+  const ndv = v === "uniques" || v === "average" || v === "distinct";
+  const median = v === "median";
+  document.getElementById("exact-wrap").hidden = !(ndv || median || hasBreakdown);
   const label = document.getElementById("exact-label");
   const hint = document.getElementById("exact-hint");
   const cpu = CAPABILITIES.has("bytes_processed")
     ? "Same bytes scanned; more CPU. "
     : "More CPU. ";
-  if (v === "median") {
+  if (median && hasBreakdown) {
+    label.textContent = "Exact median and series labels";
+    hint.textContent = cpu + "Off is approx quantiles and approx top-K.";
+  } else if (median) {
     label.textContent = "Exact median";
     hint.textContent = cpu + "Off is approx quantiles.";
+  } else if (v === "distinct" && hasBreakdown) {
+    label.textContent = "Exact distinct counts and series labels";
+    hint.textContent = cpu + "Off is HyperLogLog and approx top-K.";
   } else if (v === "distinct") {
     label.textContent = "Exact distinct counts";
     hint.textContent = cpu + "Off is HyperLogLog (faster).";
-  } else if (v === "average") {
+  } else if (ndv && hasBreakdown) {
+    label.textContent = "Exact unique counts and series labels";
+    const denom = v === "average" ? "Denominator is unique entities. " : "";
+    hint.textContent = denom + cpu + "Off is HyperLogLog and approx top-K.";
+  } else if (ndv) {
     label.textContent = "Exact unique counts";
-    hint.textContent = "Denominator is unique entities. Off is HyperLogLog (faster).";
+    hint.textContent = (v === "average" ? "Denominator is unique entities. " : cpu)
+      + "Off is HyperLogLog (faster).";
   } else {
-    label.textContent = "Exact unique counts";
-    hint.textContent = cpu + "Off is HyperLogLog (faster).";
+    label.textContent = "Exact series labels";
+    hint.textContent = cpu + "Off picks series with approx top-K; measures on those series stay exact.";
   }
 }
 relabelMeasures();

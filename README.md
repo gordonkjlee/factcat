@@ -106,10 +106,22 @@ print(events_sql(EventsSpec(
 ), dialect="bigquery"))
 ```
 
-Uniques, Distinct, and Median default to **approx** (`exact=False`):
-`APPROX_COUNT_DISTINCT` / `APPROX_QUANTILES` on BigQuery. The local app’s
-Exact toggle sets `exact=True` for `COUNT DISTINCT` / `PERCENTILE_CONT`.
-Total, Sum, and property Average stay exact either way.
+Uniques, Distinct, and Median default to **approx** (`exact=False`).
+**Break down by** picks the top-N series the same way (labels only; measures
+on those series stay exact). The app **Exact** toggle (`exact=True`) turns
+every sketch off.
+
+| Job | BigQuery | Snowflake |
+|---|---|---|
+| Uniques / Distinct | `APPROX_COUNT_DISTINCT` | `APPROX_COUNT_DISTINCT` |
+| Median | `APPROX_QUANTILES` | `APPROX_PERCENTILE` |
+| Top-N labels (one breakdown, by count) | `APPROX_TOP_COUNT` | `APPROX_TOP_K` |
+| Top-N labels (property Sum) | `APPROX_TOP_SUM` | exact `GROUP BY` `LIMIT` |
+| Total / Sum / property Average / time axis | exact | exact |
+
+Postgres and other generated dialects without a sketch keep `COUNT DISTINCT`
+/ `GROUP BY` `LIMIT`. Exact is `COUNT DISTINCT` / `PERCENTILE_CONT` or
+`MEDIAN` / `LIMIT`. Sketches are CPU and memory, not fewer bytes scanned.
 
 The Events chart lists both families: Volume / Unique {entities} /
 Average per {entity}, then Sum / Average / Median / Distinct of a

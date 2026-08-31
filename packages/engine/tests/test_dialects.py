@@ -116,6 +116,28 @@ EVENTS_BREAKDOWN_APPROX = EventsSpec(
     top_n=8,
 )
 
+EVENTS_BREAKDOWN_SUM_APPROX = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="sum",
+    of="amount",
+    exact=False,
+    breakdowns=("country",),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_PAIR = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=False,
+    breakdowns=("country", "browser"),
+    top_n=8,
+)
+
 EVENTS_WEEK = EventsSpec(
     table="events",
     entity="entity_id",
@@ -197,6 +219,8 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS_TZ, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_APPROX, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_SUM_APPROX, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_PAIR, dialect=dialect)
 
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
@@ -332,9 +356,88 @@ def test_timezone_rejects_quotes():
 def test_bigquery_approx_breakdown_uses_approx_top_count():
     sql = events_sql(EVENTS_BREAKDOWN_APPROX, dialect="bigquery")
     assert "APPROX_TOP_COUNT" in sql.upper()
+    assert "IS NOT NULL" in sql.upper()
     sql_exact = events_sql(EVENTS_BREAKDOWN, dialect="bigquery")
     assert "APPROX_TOP_COUNT" not in sql_exact.upper()
     assert "LIMIT" in sql_exact.upper()
+
+
+def test_bigquery_approx_sum_breakdown_uses_approx_top_sum():
+    sql = events_sql(EVENTS_BREAKDOWN_SUM_APPROX, dialect="bigquery")
+    assert "APPROX_TOP_SUM" in sql.upper()
+    assert "APPROX_TOP_COUNT" not in sql.upper()
+    sql_exact = events_sql(
+        EventsSpec(
+            table="events",
+            entity="entity_id",
+            event_time="occurred_at",
+            on="property",
+            measure="sum",
+            of="amount",
+            exact=True,
+            breakdowns=("country",),
+            top_n=8,
+        ),
+        dialect="bigquery",
+    )
+    assert "APPROX_TOP_SUM" not in sql_exact.upper()
+    assert "LIMIT" in sql_exact.upper()
+
+
+def test_snowflake_approx_uniques_uses_approx_count_distinct():
+    sql = events_sql(EVENTS, dialect="snowflake")
+    assert "APPROX_COUNT_DISTINCT" in sql.upper()
+    assert "COUNT(DISTINCT" not in sql.upper().replace("APPROX_COUNT_DISTINCT", "")
+
+
+def test_snowflake_approx_median_uses_approx_percentile():
+    sql = events_sql(EVENTS_MEDIAN, dialect="snowflake")
+    assert "approx_percentile" in sql.lower()
+    sql_exact = events_sql(EVENTS_MEDIAN_EXACT, dialect="snowflake")
+    assert "approx_percentile" not in sql_exact.lower()
+    assert "median(" in sql_exact.lower()
+
+
+def test_snowflake_approx_breakdown_uses_approx_top_k():
+    sql = events_sql(EVENTS_BREAKDOWN_APPROX, dialect="snowflake")
+    assert "APPROX_TOP_K" in sql.upper()
+    assert "FLATTEN" in sql.upper()
+    assert "IS NOT NULL" in sql.upper()
+    sql_exact = events_sql(EVENTS_BREAKDOWN, dialect="snowflake")
+    assert "APPROX_TOP_K" not in sql_exact.upper()
+    assert "LIMIT" in sql_exact.upper()
+
+
+def test_duckdb_approx_breakdown_uses_approx_top_k():
+    sql = events_sql(EVENTS_BREAKDOWN_APPROX, dialect="duckdb")
+    assert "approx_top_k" in sql.lower()
+    sql_exact = events_sql(EVENTS_BREAKDOWN, dialect="duckdb")
+    assert "approx_top_k" not in sql_exact.lower()
+    assert "LIMIT" in sql_exact.upper()
+
+
+def test_databricks_approx_breakdown_uses_approx_top_k():
+    sql = events_sql(EVENTS_BREAKDOWN_APPROX, dialect="databricks")
+    assert "approx_top_k" in sql.lower()
+    assert "explode" in sql.lower()
+
+
+def test_clickhouse_approx_breakdown_uses_topk():
+    sql = events_sql(EVENTS_BREAKDOWN_APPROX, dialect="clickhouse")
+    assert "topk(" in sql.lower().replace(" ", "")
+
+
+def test_pair_breakdown_stays_exact_limit():
+    for dialect in ("bigquery", "snowflake", "duckdb"):
+        sql = events_sql(EVENTS_BREAKDOWN_PAIR, dialect=dialect).upper()
+        assert "APPROX_TOP" not in sql
+        assert "LIMIT" in sql
+
+
+def test_snowflake_sum_breakdown_has_no_weighted_sketch():
+    sql = events_sql(EVENTS_BREAKDOWN_SUM_APPROX, dialect="snowflake")
+    assert "APPROX_TOP_K" not in sql.upper()
+    assert "LIMIT" in sql.upper()
 
 
 def test_bigquery_exact_uniques_uses_count_distinct():

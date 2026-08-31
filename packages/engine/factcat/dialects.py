@@ -13,8 +13,9 @@ window functions. These constructs do not survive cleanly:
 3. **Week-start DATE_TRUNC.** DuckDB ``date_trunc('week', x)`` is Monday;
    sqlglot emits BigQuery ``TIMESTAMP_TRUNC(x, WEEK)``, which is Sunday.
    ``WEEK(MONDAY)`` / ``WEEK(SUNDAY)`` must be spliced.
-4. **Top-N category labels.** BigQuery ``APPROX_TOP_COUNT`` does not transpile
-   from DuckDB ``GROUP BY … LIMIT``. Exact pick is ordinary SQL.
+4. **Top-N category labels.** ``APPROX_TOP_COUNT`` / ``APPROX_TOP_K`` /
+   ``approx_top_k`` do not transpile from DuckDB ``GROUP BY … LIMIT``. Exact
+   pick is ordinary SQL.
 5. **Reporting-timezone calendar.** BigQuery ``DATE(ts, tz)`` and
    ``CURRENT_DATE(tz)`` have no DuckDB equivalent sqlglot will emit.
    Snowflake is ``CONVERT_TIMEZONE`` plus an explicit week start (not
@@ -149,28 +150,62 @@ def top_labels_select(
 ) -> str:
     """SQL that returns the top ``n`` category keys from ``source``.
 
-    Exact pick is ``GROUP BY cols ORDER BY rank LIMIT n``. BigQuery ``exact=False``
-    and a single column ranked by ``COUNT(*)`` uses ``APPROX_TOP_COUNT``.
-    ``APPROX_TOP_COUNT`` skips NULL; the fold never maps NULL to ``(other)``.
+    Exact pick is ``GROUP BY cols ORDER BY rank LIMIT n``. ``exact=False`` and a
+    single column use the dialect's frequent-item sketch when it has one
+    (count rank; BigQuery also ``APPROX_TOP_SUM`` when ranking by ``SUM(fc_of)``).
+    NULL is excluded from the sketch so it does not consume a top-N slot; the
+    fold still keeps SQL NULL as its own series and never maps it to ``(other)``.
+    Multi-column keys stay on the exact pick.
     """
     if n < 1:
         raise ValueError("n must be >= 1")
     col_csv = ", ".join(cols)
     n_cols = len(cols)
     group_by = ", ".join(str(i) for i in range(1, n_cols + 1))
-    if dialect == "bigquery" and not exact and len(cols) == 1 and rank_sql == "COUNT(*)":
-        col = cols[0]
-        return (
-            f"SELECT rec.value AS {col} "
-            f"FROM (SELECT APPROX_TOP_COUNT({col}, {n}) AS fc_tops FROM {source}) t, "
-            f"UNNEST(t.fc_tops) rec"
-        )
-    return (
+    exact_sql = (
         f"SELECT {col_csv} FROM {source} "
         f"GROUP BY {group_by} "
         f"ORDER BY {rank_sql} DESC, {col_csv} "
         f"LIMIT {n}"
     )
+    if exact or len(cols) != 1:
+        return exact_sql
+    col = cols[0]
+    filtered = f"{source} WHERE {col} IS NOT NULL"
+    if dialect == "bigquery":
+        if rank_sql == "COUNT(*)":
+            fn = f"APPROX_TOP_COUNT({col}, {n})"
+        elif rank_sql == "SUM(fc_of)":
+            fn = f"APPROX_TOP_SUM({col}, fc_of, {n})"
+        else:
+            return exact_sql
+        return (
+            f"SELECT rec.value AS {col} "
+            f"FROM (SELECT {fn} AS fc_tops FROM {filtered}) t, "
+            f"UNNEST(t.fc_tops) rec"
+        )
+    if rank_sql != "COUNT(*)":
+        return exact_sql
+    if dialect == "snowflake":
+        return (
+            f"SELECT f.value[0] AS {col} "
+            f"FROM (SELECT APPROX_TOP_K({col}, {n}) AS fc_tops FROM {filtered}) t, "
+            f"LATERAL FLATTEN(input => t.fc_tops) f"
+        )
+    if dialect == "duckdb":
+        return (
+            f"SELECT UNNEST(approx_top_k({col}, {n})) AS {col} FROM {filtered}"
+        )
+    if dialect in ("databricks", "spark"):
+        return (
+            f"SELECT rec.item AS {col} "
+            f"FROM (SELECT explode(approx_top_k({col}, {n})) AS rec FROM {filtered}) _fc_expl"
+        )
+    if dialect == "clickhouse":
+        return (
+            f"SELECT arrayJoin(topK({n})({col})) AS {col} FROM {filtered}"
+        )
+    return exact_sql
 
 
 def period_grid(n_periods: int, dialect: str) -> str:

@@ -142,9 +142,11 @@ class EventsSpec:
                     for ``on="events"``.
         bucket:     SQL time-axis expression. Default ``date_trunc('day', {event_time})``.
         where:      optional filter on the source relation.
-        exact:      False (default) uses approx NDV / approx median where the
-                    dialect has them. True is COUNT DISTINCT / PERCENTILE_CONT.
-                    A later chart toggle sets this; Total/Sum/AVG are unchanged.
+        exact:      False (default) uses approx NDV / approx median / approx
+                    top-N labels where the dialect has them. True is
+                    COUNT DISTINCT / PERCENTILE_CONT / GROUP BY LIMIT.
+                    One chart toggle sets this. Total / Sum / property Average
+                    stay exact; the time axis is always exact GROUP BY bucket.
         breakdowns: caller SQL expressions to split the series. Empty is today's
                     one-line chart. Interpolated, never rewritten.
         breakdown_at: ``rows`` (value on the metric row), ``first`` / ``last``

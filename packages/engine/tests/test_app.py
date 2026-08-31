@@ -240,6 +240,9 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert 'e.target.id === "exact"' in res.text
     assert "class=\"sort\"" in res.text or 'className = "sort"' in res.text
     assert html.find('id="exact-wrap"') < html.find('id="exact-hint"') < html.find('id="run"')
+    assert "Exact series labels" in res.text
+    assert "hasBreakdown" in res.text
+    assert "approx top-K" in res.text
     assert "Refresh list" in res.text
     assert 'id="refresh-events"' in res.text
     assert 'id="refresh-of"' in res.text
