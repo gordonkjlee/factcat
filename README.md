@@ -261,9 +261,19 @@ taken from the dataset (do not guess `US`). Advanced is only if you use a key
 file instead of ADC.
 
 Map the event-name column on **Setup** (STRING). Event names are cached
-on **Save** (DISTINCT, last 90 days of the timestamp). On Events, **Event**
-is which name to chart (a specific event; served from that cache).
-**Refresh list** reloads the same DISTINCT and rewrites the cache. **Time grain**
+on **Save** (DISTINCT, last 90 days of the timestamp). On Events, each **event series** is a card: event name, **measure** (and Of
+when the measure is a property), and filters. Filter operators follow the
+column type (boolean, number, date, time, timestamp, string). String rows
+can contain / start with / end with several patterns (each value a pill), with a case-sensitive
+option. On a date or timestamp, a part dropdown is either **start of**
+(hour / day / week / month / quarter — month and quarter pickers, not a day
+calendar) or **extract** (hour of day, day of week, month of year, year as four
+digits, …). The mapped timestamp may be filtered on a series (intersects the
+chart date range). **Combine** nests another event
+into that series (OR); **Split** undoes it. Ungrouped series overlay as
+separate lines. **Break down by** is chart-wide unless **Break down each
+series** is on, in which case each series has its own split. **Refresh list** reloads
+the same DISTINCT and rewrites the cache. **Time grain**
 (day / week / month) comes first; **date range** is then in that grain
 (Last 30 days, Last 8 weeks, Last 6 months). Day grain also offers This
 week / Last week / This month as *windows of days*. Week and month last-N

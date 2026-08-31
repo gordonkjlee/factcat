@@ -15,6 +15,17 @@ from factcat.warehouses.snowflake import passphrase_from_env
 from factcat._emit import transpile
 from factcat.dialects import json_value_sql, splice_placeholders
 from factcat_app.config import WAREHOUSE_KINDS
+from .filters import (
+    EXACT_STRING_OPS,
+    FILTER_FAMILY_OPS,
+    FILTER_INTEGER_TYPES,
+    FILTER_OP_META,
+    FILTER_TYPE_FAMILY,
+    LIKE_OPS,
+    MONTHS,
+    WEEKDAYS,
+    date_part,
+)
 
 _TABLE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_]+)+$")
 _COLUMN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -22,6 +33,7 @@ _JSON_KEY = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$"
 )
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_TIME = re.compile(r"^\d{2}:\d{2}(?::\d{2})?$")
 _GRAINS = ("day", "week", "month")
 _GRAIN_RANK = {"day": 0, "week": 1, "month": 2, "quarter": 3, "year": 4}
 _UNITS = frozenset({"day", "week", "month", "quarter", "year"})
@@ -77,6 +89,8 @@ def _lookback_days(form: dict[str, Any]) -> int:
 
 def _iso_date(value: str, label: str) -> str:
     value = (value or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}$", value):
+        value = value + "-01"
     if not _ISO_DATE.match(value):
         raise ValueError(f"{label} must be YYYY-MM-DD")
     return value
@@ -470,15 +484,20 @@ def _single_expr(raw: str, label: str) -> str:
     return expr
 
 
-def _breakdown_from_form(form: dict[str, Any]) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
+def _breakdown_from_form(
+    form: dict[str, Any], *, unit: dict[str, Any] | None = None
+) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
     """Fill ``breakdowns`` from a column, JSON key, or SQL expression. Expression wins."""
-    expr = _single_expr(str(form.get("breakdown_expr") or ""), "breakdown expression")
-    column = (form.get("breakdown_column") or "").strip()
+    src: dict[str, Any] = form
+    if unit is not None and _bool(form, "breakdown_by_series"):
+        src = unit
+    expr = _single_expr(str(src.get("breakdown_expr") or ""), "breakdown expression")
+    column = (src.get("breakdown_column") or "").strip()
     if expr:
         return (expr,), None
     if not column:
         return (), None
-    json_key = (form.get("breakdown_json_key") or "").strip()
+    json_key = (src.get("breakdown_json_key") or "").strip()
     if json_key:
         extracted = _json_value_sql(
             column, json_key, "breakdown", numeric=False, dialect=form_kind(form)
@@ -508,10 +527,716 @@ def _of_from_form(form: dict[str, Any], *, measure: str) -> str:
     return _ident_column(column, "of")
 
 
-def _measure_from_form(form: dict[str, Any]) -> tuple[str, str]:
+_FILTER_OPS = frozenset(FILTER_OP_META)
+_NUMBER = re.compile(r"^-?[0-9]+(?:\.[0-9]+)?$")
+_INT = re.compile(r"^-?[0-9]+$")
+_LIKE_ESCAPE = "#"
+
+
+def _event_names_from_form(form: dict[str, Any]) -> list[str]:
+    raw = form.get("event_values")
+    names: list[str] = []
+    if isinstance(raw, list):
+        names = [str(item).strip() for item in raw if str(item).strip()]
+    elif isinstance(raw, str) and raw.strip():
+        names = [raw.strip()]
+    if not names:
+        single = str(form.get("event_value") or "").strip()
+        if single:
+            names = [single]
+    return names
+
+
+def _event_names_clause(event_column: str, names: list[str]) -> str:
+    col = _ident_column(event_column, "event_column")
+    if len(names) == 1:
+        return f"{col} = {_sql_string(names[0])}"
+    return f"{col} IN ({', '.join(_sql_string(name) for name in names)})"
+
+
+def _event_clause(form: dict[str, Any]) -> str | None:
+    event_column = (form.get("event_column") or "").strip()
+    names = _event_names_from_form(form)
+    if names and not event_column:
+        raise ValueError("event name requires an event column")
+    if event_column and not names:
+        raise ValueError("event name is required")
+    if not event_column:
+        return None
+    return _event_names_clause(event_column, names)
+
+
+def _split_literals(raw: str) -> list[str]:
+    out: list[str] = []
+    for chunk in (raw or "").replace("\n", ",").split(","):
+        item = chunk.strip()
+        if item:
+            out.append(item)
+    return out
+
+
+def _sql_literal(token: str, *, numeric: bool) -> str:
+    if numeric and _NUMBER.match(token):
+        return token
+    return _sql_string(token)
+
+
+def _filter_family(row: dict[str, Any], form: dict[str, Any] | None) -> str:
+    if str(row.get("json_key") or "").strip():
+        return "string"
+    raw = str(row.get("type") or "").strip().upper()
+    if raw in FILTER_TYPE_FAMILY:
+        return FILTER_TYPE_FAMILY[raw]
+    col = str(row.get("column") or "").strip()
+    if form and col and col == str(form.get("event_time") or "").strip():
+        return "timestamp"
+    if raw:
+        return "other"
+    return "string"
+
+
+def _is_event_time_col(row: dict[str, Any], form: dict[str, Any] | None) -> bool:
+    if not form or str(row.get("json_key") or "").strip():
+        return False
+    col = str(row.get("column") or "").strip()
+    return bool(col) and col == str(form.get("event_time") or "").strip()
+
+
+def _filter_lhs(
+    row: dict[str, Any], form: dict[str, Any] | None
+) -> tuple[str, str]:
+    column = str(row.get("column") or "").strip()
+    json_key = str(row.get("json_key") or "").strip()
+    if json_key:
+        return (
+            _json_value_sql(
+                column,
+                json_key,
+                "filter",
+                numeric=False,
+                dialect=form_kind(form or {}),
+            ),
+            "string",
+        )
+    ident = _ident_column(column, "filter")
+    family = _filter_family(row, form)
+    if _is_event_time_col(row, form) and form is not None:
+        return _event_time_lhs(ident, form), "timestamp"
+    return ident, family
+
+
+def _date_part_meta(row: dict[str, Any]) -> dict[str, Any] | None:
+    raw = str(row.get("date_part") or row.get("part") or "").strip()
+    if not raw:
+        return None
+    meta = date_part(raw)
+    if meta is None:
+        raise ValueError("date part is not supported")
+    if not meta.get("id"):
+        return None
+    return meta
+
+
+def _as_filter_date(
+    lhs: str, row: dict[str, Any], form: dict[str, Any] | None
+) -> str:
+    if _is_event_time_col(row, form) and form is not None:
+        if _event_time_kind(form) == "reporting":
+            return f"DATE({lhs})"
+        tz = _sql_string(_reporting_timezone(form))
+        return f"DATE({lhs}, {tz})"
+    typ = str(row.get("type") or "").strip().upper()
+    if typ == "DATE":
+        return lhs
+    if typ in {"DATETIME", "TIMESTAMP"}:
+        return f"DATE({lhs})"
+    if form is not None:
+        return f"DATE({lhs}, {_sql_string(_reporting_timezone(form))})"
+    return f"DATE({lhs})"
+
+
+def _as_filter_datetime(
+    lhs: str, row: dict[str, Any], form: dict[str, Any] | None
+) -> str:
+    if _is_event_time_col(row, form) and form is not None:
+        if _event_time_kind(form) == "reporting":
+            return lhs
+        tz = _sql_string(_reporting_timezone(form))
+        return f"DATETIME({lhs}, {tz})"
+    typ = str(row.get("type") or "").strip().upper()
+    if typ == "DATETIME":
+        return lhs
+    if typ == "TIMESTAMP":
+        return f"DATETIME({lhs})"
+    if form is not None:
+        return f"DATETIME({lhs}, {_sql_string(_reporting_timezone(form))})"
+    return f"DATETIME({lhs})"
+
+
+def _trunc_sql(date_expr: str, unit: str, form: dict[str, Any] | None) -> str:
+    if unit == "day":
+        return date_expr
+    if unit == "week":
+        week = "MONDAY"
+        if form is not None and _week_start(form) == "sunday":
+            week = "SUNDAY"
+        return f"DATE_TRUNC({date_expr}, WEEK({week}))"
+    return f"DATE_TRUNC({date_expr}, {unit.upper()})"
+
+
+def _canon_name(token: str, names: tuple[str, ...], label: str) -> str:
+    raw = (token or "").strip()
+    for name in names:
+        if name.lower() == raw.lower():
+            return name
+    raise ValueError(f"filter value must be a {label}")
+
+
+def _enum_compare(lhs: str, tokens: list[str], *, names: tuple[str, ...], label: str, negated: bool) -> str:
+    canon = [_sql_string(_canon_name(tok, names, label)) for tok in tokens]
+    if len(canon) == 1:
+        return f"{lhs} {'<>' if negated else '='} {canon[0]}"
+    inner = ", ".join(canon)
+    return f"{lhs} {'NOT IN' if negated else 'IN'} ({inner})"
+
+
+def _apply_date_part(
+    lhs: str,
+    family: str,
+    row: dict[str, Any],
+    form: dict[str, Any] | None,
+) -> tuple[str, str]:
+    if family not in {"date", "timestamp"}:
+        return lhs, family
+    meta = _date_part_meta(row)
+    if not meta:
+        return lhs, family
+    if meta.get("hour") and family == "date":
+        raise ValueError("hour is not a date part")
+    trunc = str(meta.get("trunc") or "")
+    if trunc == "hour":
+        civil = _as_filter_datetime(lhs, row, form)
+        return f"DATETIME_TRUNC({civil}, HOUR)", "timestamp"
+    date_expr = _as_filter_date(lhs, row, form)
+    if trunc:
+        return _trunc_sql(date_expr, trunc, form), "date"
+    extract = str(meta.get("extract") or "")
+    if extract == "HOUR":
+        civil = _as_filter_datetime(lhs, row, form)
+        return f"EXTRACT(HOUR FROM {civil})", "numeric"
+    if extract:
+        return f"EXTRACT({extract} FROM {date_expr})", str(meta.get("family") or "numeric")
+    if meta["id"] == "day_of_week":
+        return f"FORMAT_DATE('%A', {date_expr})", "weekday"
+    if meta["id"] == "month_of_year":
+        return f"FORMAT_DATE('%B', {date_expr})", "monthname"
+    return lhs, family
+
+
+def _date_rhs(
+    iso: str, row: dict[str, Any], form: dict[str, Any] | None
+) -> str:
+    lit = _date_lit(iso)
+    meta = _date_part_meta(row)
+    trunc = str(meta.get("trunc") or "") if meta else ""
+    if trunc and trunc != "hour":
+        return _trunc_sql(lit, trunc, form)
+    return lit
+
+
+def _hour_trunc_lit(iso: str, time_raw: str) -> str:
+    clock = _parse_time_value(time_raw) if time_raw else "00:00:00"
+    stamp = f"{_iso_date(iso, 'filter')} {clock}"
+    return f"DATETIME_TRUNC(DATETIME {_sql_string(stamp)}, HOUR)"
+
+
+def _part_numeric_lit(row: dict[str, Any], token: str) -> str:
+    meta = _date_part_meta(row)
+    if meta and meta.get("extract") == "YEAR":
+        raw = token.strip()
+        if not re.fullmatch(r"\d{4}", raw):
+            raise ValueError("year must be four digits")
+        return raw
+    integer = False
+    lo = hi = None
+    if meta and meta.get("extract"):
+        integer = True
+        lo = meta.get("min")
+        hi = meta.get("max")
+        if lo is not None:
+            lo = int(lo)
+        if hi is not None:
+            hi = int(hi)
+    elif str(row.get("type") or "").strip().upper() in FILTER_INTEGER_TYPES:
+        integer = True
+    return _numeric_lit(token, integer=integer, lo=lo, hi=hi)
+
+
+def _case_sensitive(row: dict[str, Any], op: str) -> bool:
+    raw = row.get("case_sensitive")
+    if raw in (True, "true", "on", "1", 1):
+        return True
+    if raw in (False, "false", "off", "0", 0):
+        return False
+    return op in EXACT_STRING_OPS
+
+
+def _like_escape(token: str) -> str:
+    return (
+        token.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", _LIKE_ESCAPE + "%")
+        .replace("_", _LIKE_ESCAPE + "_")
+    )
+
+
+def _like_pattern(token: str, kind: str) -> str:
+    body = _like_escape(token)
+    if kind == "starts_with":
+        return body + "%"
+    if kind == "ends_with":
+        return "%" + body
+    return "%" + body + "%"
+
+
+def _like_clause(lhs: str, tokens: list[str], *, kind: str, sensitive: bool, negated: bool) -> str:
+    parts: list[str] = []
+    esc = _sql_string(_LIKE_ESCAPE)
+    for token in tokens:
+        pat = _sql_string(_like_pattern(token, kind))
+        if sensitive:
+            pred = f"{lhs} LIKE {pat} ESCAPE {esc}"
+        else:
+            pred = f"LOWER({lhs}) LIKE LOWER({pat}) ESCAPE {esc}"
+        parts.append(f"NOT ({pred})" if negated else pred)
+    if len(parts) == 1:
+        return parts[0]
+    glue = " AND " if negated else " OR "
+    return "(" + glue.join(parts) + ")"
+
+
+def _string_eq(lhs: str, token: str, *, sensitive: bool, negated: bool = False) -> str:
+    lit = _sql_string(token)
+    cmp_op = "<>" if negated else "="
+    if sensitive:
+        return f"{lhs} {cmp_op} {lit}"
+    return f"LOWER({lhs}) {cmp_op} LOWER({lit})"
+
+
+def _string_in(lhs: str, tokens: list[str], *, sensitive: bool, negated: bool) -> str:
+    if sensitive:
+        inner = ", ".join(_sql_string(tok) for tok in tokens)
+        return f"{lhs} {'NOT IN' if negated else 'IN'} ({inner})"
+    inner = ", ".join(f"LOWER({_sql_string(tok)})" for tok in tokens)
+    return f"LOWER({lhs}) {'NOT IN' if negated else 'IN'} ({inner})"
+
+
+def _tokens_from_row(row: dict[str, Any]) -> list[str]:
+    raw = row.get("values")
+    if isinstance(raw, list):
+        tokens = [str(item).strip() for item in raw if str(item).strip()]
+        if tokens:
+            return tokens
+    return _split_literals(str(row.get("value") or ""))
+
+
+def _require_tokens(row: dict[str, Any]) -> list[str]:
+    tokens = _tokens_from_row(row)
+    if not tokens:
+        raise ValueError("filter value is required")
+    return tokens
+
+
+def _require_one(row: dict[str, Any]) -> str:
+    value = str(row.get("value") or "").strip()
+    if not value:
+        raise ValueError("filter value is required")
+    return value
+
+
+def _require_two(row: dict[str, Any]) -> tuple[str, str]:
+    left = str(row.get("value") or "").strip()
+    right = str(row.get("value_to") or "").strip()
+    if not left or not right:
+        raise ValueError("filter value is required")
+    return left, right
+
+
+def _parse_time_value(raw: str, label: str = "filter") -> str:
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    if not _ISO_TIME.match(value):
+        raise ValueError(f"{label} time must be HH:MM or HH:MM:SS")
+    if len(value) == 5:
+        return value + ":00"
+    return value
+
+
+def _date_lit(iso: str) -> str:
+    return "DATE " + _sql_string(_iso_date(iso, "filter"))
+
+
+def _time_lit(raw: str) -> str:
+    return "TIME " + _sql_string(_parse_time_value(raw))
+
+
+def _plain_stamp(iso_date: str, time_raw: str, typ: str) -> str:
+    clock = _parse_time_value(time_raw) if time_raw else "00:00:00"
+    stamp = f"{_iso_date(iso_date, 'filter')} {clock}"
+    if typ == "DATETIME":
+        return "DATETIME " + _sql_string(stamp)
+    return "TIMESTAMP " + _sql_string(stamp)
+
+
+def _next_iso(iso: str) -> str:
+    return (date.fromisoformat(_iso_date(iso, "filter")) + timedelta(days=1)).isoformat()
+
+
+def _event_time_bound(form: dict[str, Any], iso_date: str, time_raw: str) -> str:
+    if time_raw:
+        stamp = f"{_iso_date(iso_date, 'filter')} {_parse_time_value(time_raw)}"
+        if _event_time_kind(form) == "reporting":
+            return "DATETIME " + _sql_string(stamp)
+        return (
+            f"TIMESTAMP({_sql_string(stamp)}, "
+            f"{_sql_string(_reporting_timezone(form))})"
+        )
+    return _as_event_time(_date_lit(iso_date), form)
+
+
+def _stamp_typ(row: dict[str, Any], form: dict[str, Any] | None) -> str:
+    raw = str(row.get("type") or "").strip().upper()
+    if raw == "DATETIME":
+        return "DATETIME"
+    if raw == "TIMESTAMP":
+        return "TIMESTAMP"
+    if form and _event_time_kind(form) == "reporting":
+        return "DATETIME"
+    return "TIMESTAMP"
+
+
+def _ts_bound(
+    row: dict[str, Any],
+    form: dict[str, Any] | None,
+    iso_date: str,
+    time_raw: str,
+) -> str:
+    if _is_event_time_col(row, form) and form is not None:
+        return _event_time_bound(form, iso_date, time_raw)
+    return _plain_stamp(iso_date, time_raw, _stamp_typ(row, form))
+
+
+def _numeric_lit(
+    token: str, *, integer: bool = False, lo: int | None = None, hi: int | None = None
+) -> str:
+    raw = token.strip()
+    if integer:
+        if not _INT.match(raw):
+            raise ValueError("filter value must be a whole number")
+        n = int(raw)
+        if lo is not None and n < lo:
+            raise ValueError(f"filter value must be at least {lo}")
+        if hi is not None and n > hi:
+            raise ValueError(f"filter value must be at most {hi}")
+        return raw
+    if not _NUMBER.match(raw):
+        raise ValueError("filter value must be a number")
+    return raw
+
+
+def _cmp(lhs: str, op: str, lit: str) -> str:
+    return {
+        "is": f"{lhs} = {lit}",
+        "is_not": f"{lhs} <> {lit}",
+        "gt": f"{lhs} > {lit}",
+        "gte": f"{lhs} >= {lit}",
+        "lt": f"{lhs} < {lit}",
+        "lte": f"{lhs} <= {lit}",
+        "before": f"{lhs} < {lit}",
+        "on_or_before": f"{lhs} <= {lit}",
+        "after": f"{lhs} > {lit}",
+        "on_or_after": f"{lhs} >= {lit}",
+    }[op]
+
+
+def _day_predicate(
+    lhs: str,
+    op: str,
+    lo: str,
+    hi: str,
+    lo2: str | None = None,
+    hi2: str | None = None,
+) -> str:
+    """Date-only timestamp: [lo, hi) is that day. between uses [lo, hi2)."""
+    day = f"{lhs} >= {lo} AND {lhs} < {hi}"
+    if op == "is":
+        return f"({day})"
+    if op == "is_not":
+        return f"NOT ({day})"
+    if op == "before":
+        return f"{lhs} < {lo}"
+    if op == "on_or_before":
+        return f"{lhs} < {hi}"
+    if op == "after":
+        return f"{lhs} >= {hi}"
+    if op == "on_or_after":
+        return f"{lhs} >= {lo}"
+    if op == "between" and lo2 is not None and hi2 is not None:
+        return f"{lhs} >= {lo} AND {lhs} < {hi2}"
+    raise ValueError("filter operator is not supported")
+
+
+def _filter_clause(
+    row: dict[str, Any], form: dict[str, Any] | None = None
+) -> str | None:
+    expr = _single_expr(str(row.get("expr") or ""), "filter")
+    if expr:
+        return expr
+    column = str(row.get("column") or "").strip()
+    if not column:
+        return None
+    lhs, family = _filter_lhs(row, form)
+    lhs, family = _apply_date_part(lhs, family, row, form)
+    op = str(row.get("op") or "is").strip().lower()
+    if op not in _FILTER_OPS:
+        raise ValueError("filter operator is not supported")
+    allowed = FILTER_FAMILY_OPS.get(family, FILTER_FAMILY_OPS["other"])
+    if op not in allowed:
+        raise ValueError("filter operator is not supported")
+    kind = FILTER_OP_META[op]["value"]
+    if op == "is_null":
+        return f"{lhs} IS NULL"
+    if op == "is_not_null":
+        return f"{lhs} IS NOT NULL"
+    if op == "is_true":
+        return f"{lhs} IS TRUE"
+    if op == "is_false":
+        return f"{lhs} IS FALSE"
+    if op == "is_empty":
+        return f"{lhs} = ''"
+    if op == "is_not_empty":
+        return f"{lhs} <> ''"
+    if kind == "none":
+        raise ValueError("filter operator is not supported")
+    if family == "string" and op in LIKE_OPS:
+        tokens = _require_tokens(row)
+        like_kind, negated = LIKE_OPS[op]
+        return _like_clause(
+            lhs,
+            tokens,
+            kind=like_kind,
+            sensitive=_case_sensitive(row, op),
+            negated=negated,
+        )
+    if family == "string" and op in {"is_any_of", "is_none_of"}:
+        tokens = _require_tokens(row)
+        return _string_in(
+            lhs,
+            tokens,
+            sensitive=_case_sensitive(row, op),
+            negated=op == "is_none_of",
+        )
+    if family == "string" and op in {"is", "is_not"}:
+        token = _require_one(row)
+        return _string_eq(
+            lhs,
+            token,
+            sensitive=_case_sensitive(row, op),
+            negated=op == "is_not",
+        )
+    if family == "numeric":
+        if op in {"is_any_of", "is_none_of"}:
+            tokens = _require_tokens(row)
+            inner = ", ".join(_part_numeric_lit(row, tok) for tok in tokens)
+            if op == "is_any_of":
+                return f"{lhs} IN ({inner})"
+            return f"{lhs} NOT IN ({inner})"
+        if op == "between":
+            lo, hi = _require_two(row)
+            return (
+                f"{lhs} >= {_part_numeric_lit(row, lo)} AND "
+                f"{lhs} <= {_part_numeric_lit(row, hi)}"
+            )
+        return _cmp(lhs, op, _part_numeric_lit(row, _require_one(row)))
+    if family == "weekday":
+        tokens = _require_tokens(row) if op in {"is_any_of", "is_none_of"} else [_require_one(row)]
+        return _enum_compare(
+            lhs,
+            tokens,
+            names=WEEKDAYS,
+            label="weekday",
+            negated=op in {"is_not", "is_none_of"},
+        )
+    if family == "monthname":
+        tokens = _require_tokens(row) if op in {"is_any_of", "is_none_of"} else [_require_one(row)]
+        return _enum_compare(
+            lhs,
+            tokens,
+            names=MONTHS,
+            label="month",
+            negated=op in {"is_not", "is_none_of"},
+        )
+    if family == "date":
+        if op == "between":
+            lo, hi = _require_two(row)
+            return (
+                f"{lhs} >= {_date_rhs(lo, row, form)} AND "
+                f"{lhs} <= {_date_rhs(hi, row, form)}"
+            )
+        return _cmp(lhs, op, _date_rhs(_require_one(row), row, form))
+    if family == "time":
+        if op == "between":
+            lo, hi = _require_two(row)
+            return f"{lhs} >= {_time_lit(lo)} AND {lhs} <= {_time_lit(hi)}"
+        return _cmp(lhs, op, _time_lit(_require_one(row)))
+    if family == "timestamp":
+        time_raw = _parse_time_value(str(row.get("value_time") or ""))
+        time_to = _parse_time_value(str(row.get("value_to_time") or ""))
+        meta = _date_part_meta(row)
+        if meta and meta.get("trunc") == "hour":
+            if op == "between":
+                lo, hi = _require_two(row)
+                return (
+                    f"{lhs} >= {_hour_trunc_lit(lo, time_raw)} AND "
+                    f"{lhs} <= {_hour_trunc_lit(hi, time_to)}"
+                )
+            return _cmp(lhs, op, _hour_trunc_lit(_require_one(row), time_raw))
+        if op == "between":
+            lo, hi = _require_two(row)
+            start = _ts_bound(row, form, lo, time_raw)
+            if time_to:
+                return f"{lhs} >= {start} AND {lhs} <= {_ts_bound(row, form, hi, time_to)}"
+            return f"{lhs} >= {start} AND {lhs} < {_ts_bound(row, form, _next_iso(hi), '')}"
+        iso = _require_one(row)
+        lo = _ts_bound(row, form, iso, time_raw)
+        if time_raw:
+            return _cmp(lhs, op, lo)
+        hi = _ts_bound(row, form, _next_iso(iso), "")
+        return _day_predicate(lhs, op, lo, hi)
+    raise ValueError("filter operator is not supported")
+
+
+def _filters_from_form(form: dict[str, Any]) -> str:
+    raw = form.get("filters")
+    if not raw:
+        return ""
+    if not isinstance(raw, list):
+        raise ValueError("filters must be a list")
+    parts: list[tuple[str, str]] = []
+    for row in raw:
+        if row is None:
+            continue
+        if not isinstance(row, dict):
+            raise ValueError("filters must be objects")
+        clause = _filter_clause(row, form)
+        if not clause:
+            continue
+        join = str(row.get("join") or "AND").strip().upper()
+        if join not in {"AND", "OR"}:
+            join = "AND"
+        if not parts:
+            join = "AND"
+        parts.append((join, clause))
+    if not parts:
+        return ""
+    rest = {join for join, _ in parts[1:]}
+    if not rest or rest == {"AND"}:
+        return " AND ".join(clause for _, clause in parts)
+    acc = parts[0][1]
+    for join, clause in parts[1:]:
+        acc = f"({acc} {join} {clause})"
+    return acc
+
+
+SERIES_CAP = 8
+
+
+def _and_filters(
+    rows: list[Any], form: dict[str, Any] | None = None
+) -> str:
+    clauses: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("filters must be objects")
+        clause = _filter_clause(row, form)
+        if clause:
+            clauses.append(clause)
+    return " AND ".join(clauses)
+
+
+def _card_predicate(
+    card: dict[str, Any],
+    event_column: str,
+    form: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Event + AND-filters for one card. Label is the event name."""
+    event = str(card.get("event") or "").strip()
+    names = [event] if event else _event_names_from_form(card)
+    filters = card.get("filters") if isinstance(card.get("filters"), list) else []
+    parts: list[str] = []
+    if names and not event_column:
+        raise ValueError("event name requires an event column")
+    if event_column and not names:
+        raise ValueError("event name is required")
+    if event_column and names:
+        parts.append(_event_names_clause(event_column, names))
+    filt = _and_filters(filters, form)
+    if filt:
+        parts.append(filt)
+    label = " or ".join(names) if names else "Events"
+    if not parts:
+        return "", label
+    return " AND ".join(parts), label
+
+
+def _unit_predicate(
+    unit: dict[str, Any],
+    event_column: str,
+    form: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """One event series: a card, or a combined (Any-of) series."""
+    if not isinstance(unit, dict):
+        raise ValueError("series must be objects")
+    members = unit.get("members") if unit.get("kind") == "any_of" else None
+    if members is None and "any_of" in unit:
+        members = unit.get("any_of")
+    if members is not None:
+        if not isinstance(members, list) or not members:
+            raise ValueError("Any of needs at least one event")
+        if len(members) > SERIES_CAP:
+            raise ValueError("at most 8 events in a series")
+        bits: list[str] = []
+        labels: list[str] = []
+        for member in members:
+            if not isinstance(member, dict):
+                raise ValueError("series must be objects")
+            pred, lab = _card_predicate(member, event_column, form)
+            if not pred:
+                raise ValueError("event name is required")
+            bits.append(f"({pred})" if " AND " in pred else pred)
+            labels.append(lab)
+        if len(bits) == 1:
+            return bits[0], labels[0]
+        return "(" + " OR ".join(bits) + ")", " or ".join(labels)
+    return _card_predicate(unit, event_column, form)
+
+
+def _series_units(form: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = form.get("series")
+    if not isinstance(raw, list) or not raw:
+        return []
+    if len(raw) > SERIES_CAP:
+        raise ValueError("at most 8 event series")
+    return raw
+
+
+def _measure_from_form(
+    form: dict[str, Any], unit: dict[str, Any] | None = None
+) -> tuple[str, str]:
     """Return ``(on, measure)``. ``property_average`` is the form value for property Average."""
-    raw = str(form.get("measure") or "uniques").strip().lower()
-    on_raw = str(form.get("on") or "").strip().lower()
+    src: dict[str, Any] = unit if isinstance(unit, dict) and unit.get("measure") else form
+    raw = str(src.get("measure") or "uniques").strip().lower()
+    on_raw = str(src.get("on") or form.get("on") or "").strip().lower()
     if raw == "property_average" or (on_raw == "property" and raw == "average"):
         return "property", "average"
     if raw in PROPERTY_MEASURES and raw != "average":
@@ -521,33 +1246,47 @@ def _measure_from_form(form: dict[str, Any]) -> tuple[str, str]:
     raise ValueError("measure must be total, uniques, average, sum, median, or distinct")
 
 
-def spec_from_form(form: dict[str, Any]) -> EventsSpec:
+def spec_from_form(
+    form: dict[str, Any], *, unit: dict[str, Any] | None = None
+) -> EventsSpec:
     table = _ident_table(str(form.get("table") or ""), "table")
     entity = (form.get("entity") or "").strip()
     if not entity:
         raise ValueError("entity is required (no default column)")
     entity = _ident_column(entity, "entity")
     event_time_col = _ident_column(str(form.get("event_time") or ""), "event_time")
-    on, measure = _measure_from_form(form)
     grain = _grain(form)
     exact_raw = form.get("exact")
     exact = exact_raw in (True, "true", "on", "1", 1)
 
     clauses = _time_clauses(form, event_time_col)
     event_column = (form.get("event_column") or "").strip()
-    event_value = (form.get("event_value") or "").strip()
-    if event_value and not event_column:
-        raise ValueError("event name requires an event column")
-    if event_column and event_value:
-        event_column = _ident_column(event_column, "event_column")
-        clauses.append(f"{event_column} = {_sql_string(event_value)}")
+    if unit is None:
+        units = _series_units(form)
+        if len(units) > 1:
+            raise ValueError("overlay series need a UNION query")
+        if len(units) == 1:
+            unit = units[0]
+    on, measure = _measure_from_form(form, unit)
+    if unit is not None:
+        pred, _label = _unit_predicate(unit, event_column, form)
+        if pred:
+            clauses.append(pred)
+    else:
+        event_clause = _event_clause(form)
+        if event_clause:
+            clauses.append(event_clause)
+        filter_group = _filters_from_form(form)
+        if filter_group:
+            clauses.append(filter_group)
     event_time = _event_time_lhs(event_time_col, form)
 
-    of = _of_from_form(form, measure=measure) if on == "property" else None
+    of_src = unit if isinstance(unit, dict) and unit.get("measure") else form
+    of = _of_from_form(of_src, measure=measure) if on == "property" else None
     if on == "property" and not of:
         raise ValueError("of is required for property measures")
 
-    breakdowns, breakdown_labels = _breakdown_from_form(form)
+    breakdowns, breakdown_labels = _breakdown_from_form(form, unit=unit)
     breakdown_at = str(form.get("breakdown_at") or "rows").strip().lower()
     if breakdown_at not in BREAKDOWN_AT:
         raise ValueError("breakdown_at must be rows, first, or last")
@@ -591,11 +1330,44 @@ def _indent_sql(sql: str, n: int = 4) -> str:
     return "\n".join(pad + line if line else line for line in sql.splitlines())
 
 
+def _series_arm_sql(inner: str, spec, label: str, alias: str) -> str:
+    """Wrap one Events aggregation so overlay UNION ALL has bucket, series, value."""
+    quoted = _sql_string(label)
+    body = _indent_sql(inner.rstrip(), 4)
+    if spec.breakdowns:
+        bd = spec.bd_labels()[0]
+        series_expr = f"CONCAT({quoted}, ' · ', CAST({bd} AS STRING))"
+    else:
+        series_expr = quoted
+    return (
+        f"SELECT\n"
+        f"  bucket,\n"
+        f"  {series_expr} AS series,\n"
+        f"  value\n"
+        f"FROM (\n{body}\n) AS {alias}"
+    )
+
+
 def events_sql_from_form(form: dict[str, Any]) -> str:
     """Events SQL with a result-row crash fuse (most recent rows)."""
-    sql = events_sql(spec_from_form(form), dialect=form_kind(form)).rstrip()
+    dialect = form_kind(form)
+    units = _series_units(form)
+    if len(units) > 1:
+        arms: list[str] = []
+        for i, unit in enumerate(units):
+            spec = spec_from_form(form, unit=unit)
+            _pred, label = _unit_predicate(
+                unit, (form.get("event_column") or "").strip(), form
+            )
+            inner = events_sql(spec, dialect=dialect)
+            arms.append(_series_arm_sql(inner, spec, label, f"_fc_arm_{i}"))
+        sql = "\nUNION ALL\n".join(arms)
+    elif len(units) == 1:
+        sql = events_sql(spec_from_form(form, unit=units[0]), dialect=dialect)
+    else:
+        sql = events_sql(spec_from_form(form), dialect=dialect)
     n = query_row_limit(form)
-    inner = _indent_sql(sql, 4)
+    inner = _indent_sql(sql.rstrip(), 4)
     return (
         f"SELECT * FROM (\n"
         f"  SELECT * FROM (\n{inner}\n  ) AS _fc_inner\n"
