@@ -30,6 +30,9 @@ jobs:
       - name: Publish helper tests
         run: python -m pytest .github/scripts/test_pypi_smoke.py -q
 
+      - name: Pages builder tests
+        run: python -m pytest .github/scripts/test_build_pages.py -q
+
       - name: Wheel
         run: |
           pip install build

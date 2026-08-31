@@ -6,6 +6,7 @@ venv/
 *.egg-info/
 dist/
 build/
+_site/
 .env
 .factcat.json
 .DS_Store
