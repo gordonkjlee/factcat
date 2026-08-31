@@ -2681,19 +2681,37 @@ function seriesFromRow(row) {
 function cssToken(name, fallback) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 }
+function chartFurniture() {
+  return {
+    ink: cssToken("--fc-ink", "#1C1917"),
+    paper: cssToken("--fc-paper", "#F4EFE6"),
+    snow: cssToken("--fc-snow", "#FFFCF7"),
+    line: cssToken("--fc-line", "#E6DCCF"),
+  };
+}
 const SERIES_COLORS = [
-  cssToken("--fc-ochre", "#C4841D"),
-  cssToken("--fc-slate", "#5C6B73"),
-  cssToken("--fc-ink", "#1C1917"),
-  cssToken("--fc-ok", "#3F6B4B"),
-  cssToken("--fc-alert", "#B42318"),
-  "#7c3aed",
-  "#0e7490",
-  "#db2777",
+  "#C4841D",
+  "#0072B2",
+  "#CC79A7",
+  "#009E73",
+  "#56B4E9",
+  "#D55E00",
+  "#6B4C9A",
+  "#7A9A35",
+  "#44AA99",
+  "#A63D55",
+  "#5C6B73",
+  "#EE8866",
+  "#3B8C4A",
+  "#5A6AB5",
+  "#8F4E8B",
+  "#2E8B99",
+  "#C7614A",
+  "#7B6B9E",
+  "#B36A2A",
+  "#3D6F8A",
 ];
-const MUTED = cssToken("--fc-slate", "#5C6B73");
-const PAPER = cssToken("--fc-paper", "#F4EFE6");
-const LINE = cssToken("--fc-line", "#E6DCCF");
+const MUTED = "#8A8178";
 function seriesNames() {
   const names = [];
   const seen = new Set();
@@ -2770,6 +2788,7 @@ function drawChart() {
   }
   if (chart) chart.destroy();
   if (!window.Chart) return;
+  const furn = chartFurniture();
   const gridMode = document.getElementById("chart_grid").value || "major";
   const showX = document.getElementById("chart_axis_x").checked;
   const showY = document.getElementById("chart_axis_y").checked;
@@ -2805,30 +2824,38 @@ function drawChart() {
       maintainAspectRatio: false,
       scales: {
         x: {
-          ticks: { display: showX, maxRotation: 0, autoSkip: true },
+          ticks: { display: showX, maxRotation: 0, autoSkip: true, color: furn.ink },
+          border: { color: furn.line },
           grid: {
             display: gridMode !== "off",
-            color: (c) => (gridMode === "minor" && c.index % 2 ? PAPER : LINE),
+            color: (c) => (gridMode === "minor" && c.index % 2 ? furn.paper : furn.line),
           },
         },
         y: {
           beginAtZero: true,
           ticks: {
             display: showY,
+            color: furn.ink,
             callback: (v) => formatValue(v),
             count: gridMode === "minor" ? 9 : 6,
           },
+          border: { color: furn.line },
           grid: {
             display: gridMode !== "off",
-            color: (c) => (gridMode === "minor" && c.index % 2 ? PAPER : LINE),
+            color: (c) => (gridMode === "minor" && c.index % 2 ? furn.paper : furn.line),
           },
         },
       },
       plugins: {
-        legend: { display: multi },
+        legend: { display: multi, labels: { color: furn.ink } },
         filler: { propagate: false },
         tooltip: {
           enabled: true,
+          backgroundColor: furn.snow,
+          titleColor: furn.ink,
+          bodyColor: furn.ink,
+          borderColor: furn.line,
+          borderWidth: 1,
           callbacks: {
             label: (ctx) => (multi ? ctx.dataset.label + ": " : "") + formatValue(ctx.parsed.y),
           },
@@ -2842,7 +2869,7 @@ function drawChart() {
         const { ctx: g } = c;
         const meta = c.getDatasetMeta(0);
         g.save();
-        g.fillStyle = MUTED;
+        g.fillStyle = furn.ink;
         g.font = "11px ui-sans-serif, system-ui, sans-serif";
         g.textAlign = "center";
         meta.data.forEach((el, i) => {

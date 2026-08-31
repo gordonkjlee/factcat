@@ -244,6 +244,21 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "n <= 2 ? \"bar\" : \"line\"" in res.text
     assert 'id="thousand_sep"' in res.text
     assert "applySeps" in res.text
+    assert "chartFurniture" in res.text
+    assert "const furn = chartFurniture()" in res.text
+    assert 'cssToken("--fc-ochre"' not in res.text
+    palette = res.text.split("const SERIES_COLORS = [")[1].split("];")[0]
+    assert palette.count("#") >= 20
+    assert palette.strip().startswith('"#C4841D"')
+    assert '"#0072B2"' in res.text
+    assert '"#009E73"' in res.text
+    assert '"#EE8866"' in res.text
+    assert '"#3D6F8A"' in res.text
+    assert '"#8A8178"' in res.text
+    assert '"#7c3aed"' not in res.text
+    assert 'name === "(other)" ? MUTED' in res.text
+    assert "labels: { color: furn.ink }" in res.text
+    assert "border: { color: furn.line }" in res.text
     assert "Show last" not in res.text
     assert "limit-note" in res.text
     assert "Load more" in res.text
