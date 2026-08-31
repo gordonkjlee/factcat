@@ -36,6 +36,7 @@ from .catalog import (
 )
 from .extras import extra_commands, install_command, run_install
 from .config import load, mapping_ready, save, warehouse_kind
+from .filters import filter_ui
 from .query import (
     REPORTING_TIMEZONES,
     annotate_incomplete,
@@ -89,6 +90,7 @@ def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLRespon
                 name: {role: sorted(vals) for role, vals in type_sets(name).items()}
                 for name in ADAPTERS
             },
+            "filter_ui": filter_ui(),
         },
     )
 

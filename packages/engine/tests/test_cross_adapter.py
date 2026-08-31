@@ -46,6 +46,7 @@ def _form(kind: str, **extra):
         "lookback_days": 30,
         "exact": False,
         "event_column": "event_name",
+        "event_value": "paid",
         "reporting_timezone": "Europe/Berlin",
     }
     if kind == "snowflake":

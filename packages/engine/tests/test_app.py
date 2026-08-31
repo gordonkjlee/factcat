@@ -259,6 +259,48 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "SQL updates as you change the form." in res.text
     assert "/api/sql" in res.text
     assert "<summary>SQL</summary>" not in res.text
+    assert 'id="event-cards"' in res.text
+    assert "Event series" in res.text
+    assert "Add series" in res.text
+    assert "series-measure" in res.text
+    assert "event-series" in res.text
+    assert "attachSeriesMeasure" in res.text
+    assert "aria-label\", \"Measure\"" in res.text
+    assert "event group" not in res.text.lower()
+    assert 'id="add-event"' in res.text
+    assert "event-card-combine" in res.text
+    assert "event-group-split" in res.text
+    assert "Break down each series" in res.text
+    assert "collectSeries" in res.text
+    assert "Any of" in res.text
+    assert "is any of" in res.text
+    assert "starts with" in res.text
+    assert "filter-part" in res.text
+    assert "Day of week (e.g. Monday)" in res.text
+    assert "Start of" in res.text
+    assert "Extract" in res.text
+    assert "filter-month" in res.text
+    assert "filter-week-n" in res.text
+    assert "filter-quarter-q" in res.text
+    assert "2026 week 21" in res.text
+    assert "Hour of day (0-23)" in res.text
+    assert "Day of month (1-31)" in res.text
+    assert "Month of year (e.g. May)" in res.text
+    assert "Month (e.g. May 2026)" in res.text
+    assert "Choose a filter" in res.text
+    assert "Year (e.g. 2026)" in res.text
+    assert "between (inclusive)" in res.text
+    assert "numeric_op_labels" in res.text
+    assert "less than" in res.text
+    assert "Hour (e.g. 18 May 2026, 14:00)" in res.text
+    assert "Day of year (1-366)" in res.text
+    assert "Year number" not in res.text
+    assert "filter-pills" in res.text
+    assert "Add a value" in res.text
+    assert "Case sensitive" in res.text
+    assert "FILTER_UI" in res.text
+    assert "event-card-name" in res.text
+    assert "form.entity.value, eventColumnEl.value" in res.text
 
 
 def test_events_serves_cached_event_names(monkeypatch, tmp_path):
@@ -367,6 +409,58 @@ def test_sql_endpoint_compiles_without_warehouse(monkeypatch, tmp_path):
     assert body["ok"] is True
     assert "SUM" in body["sql"].upper()
     assert "revenue" in body["sql"]
+
+
+def test_sql_endpoint_compiles_event_in_and_filter(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    res = client.post(
+        "/api/sql",
+        json={
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "event_column": "event_name",
+            "event_values": ["started", "completed"],
+            "filters": [
+                {"column": "country", "op": "is", "value": "UK"},
+                {"join": "OR", "column": "country", "op": "is", "value": "IE"},
+            ],
+            "measure": "uniques",
+            "grain": "day",
+            "lookback_days": 30,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert "event_name IN ('started', 'completed')" in body["sql"]
+    assert "country = 'UK'" in body["sql"]
+    assert "country = 'IE'" in body["sql"]
+
+
+def test_sql_endpoint_overlays_ungrouped_cards(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    res = client.post(
+        "/api/sql",
+        json={
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "event_column": "event_name",
+            "series": [{"event": "started"}, {"event": "completed"}],
+            "measure": "uniques",
+            "grain": "day",
+            "lookback_days": 30,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert "UNION ALL" in body["sql"]
+    assert "'started' AS series" in body["sql"]
+    assert "'completed' AS series" in body["sql"]
 
 
 def test_run_returns_sql_when_warehouse_fails(monkeypatch, tmp_path):

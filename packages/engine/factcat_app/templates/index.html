@@ -146,6 +146,96 @@
     #breakdown-extra[hidden] { display: none !important; }
     #breakdown-extra .range-row { margin-top: 0.5rem; }
     #of-wrap[hidden] { display: none !important; }
+    #events-band { margin: 0 0 1rem; }
+    .band-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem;
+      font-size: 0.7rem; font-weight: 600; margin: 0 0 0.45rem;
+    }
+    .event-card, .event-group {
+      border: 1px solid var(--fc-line); background: var(--fc-paper);
+      padding: 0.5rem 0.55rem 0.4rem; margin: 0 0 0.5rem;
+    }
+    .event-group { padding-bottom: 0.5rem; }
+    .event-card-head, .event-group-head {
+      display: flex; align-items: center; gap: 0.35rem;
+    }
+    .event-card-head .event-card-name { flex: 1; margin: 0; min-width: 0; }
+    .event-card-head .series-measure,
+    .event-group-head .series-measure {
+      flex: 0 1 11rem; width: auto; min-width: 7rem; margin: 0; font-size: 0.8rem;
+    }
+    .event-group-title { font-size: 0.75rem; font-weight: 600; color: var(--fc-slate); flex: 0 0 auto; }
+    .event-card-filters {
+      margin: 0.35rem 0 0 0.15rem; padding-left: 0.55rem;
+      border-left: 2px solid var(--fc-line);
+    }
+    .filter-line {
+      display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+      margin-top: 0.3rem;
+    }
+    .filter-line select, .filter-line input {
+      width: auto; flex: 1 1 5.5rem; font-size: 0.75rem; margin: 0;
+    }
+    .filter-line .filter-json[hidden], .filter-line .filter-expr[hidden],
+    .filter-line .filter-op[hidden], .filter-line .filter-value[hidden],
+    .filter-line .filter-value-to[hidden], .filter-line .filter-value-time[hidden],
+    .filter-line .filter-value-to-time[hidden], .filter-line .filter-case[hidden],
+    .filter-line .filter-pills[hidden], .filter-line .filter-part[hidden],
+    .filter-line .filter-enum[hidden],
+    .filter-line .filter-period[hidden], .filter-line .filter-period-to[hidden] {
+      display: none !important;
+    }
+    .filter-period, .filter-period-to {
+      display: inline-flex; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+    }
+    .filter-week-n, .filter-week-n-to { width: 4.2rem; flex: 0 0 4.2rem; }
+    .filter-quarter-q, .filter-quarter-q-to { width: auto; flex: 0 0 auto; }
+    .filter-part { flex: 0 1 8.5rem; min-width: 7rem; }
+    .filter-pills {
+      display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center;
+      flex: 1 1 12rem; min-width: 8rem;
+      border: 1px solid var(--fc-line); background: var(--fc-snow);
+      padding: 0.15rem 0.3rem; min-height: 1.75rem;
+    }
+    .filter-pill {
+      display: inline-flex; align-items: center; gap: 0.15rem;
+      max-width: 12rem; padding: 0.05rem 0.15rem 0.05rem 0.4rem;
+      background: var(--fc-paper); border: 1px solid var(--fc-line);
+      font-size: 0.7rem; line-height: 1.2;
+    }
+    .filter-pill > span {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .filter-pill button {
+      background: none; border: none; padding: 0 0.15rem; margin: 0;
+      cursor: pointer; color: var(--fc-slate); font-size: 0.85rem; line-height: 1;
+    }
+    .filter-pill button:hover { color: var(--fc-ink); }
+    .filter-line .filter-pills-input {
+      flex: 1 1 5rem; min-width: 5rem; width: auto; margin: 0; padding: 0.15rem 0;
+      border: none; background: transparent; font-size: 0.75rem;
+    }
+    .filter-line .filter-pills-input:focus { outline: none; }
+    .filter-case {
+      display: inline-flex; align-items: center; gap: 0.25rem;
+      font-size: 0.7rem; font-weight: 400; margin: 0; flex: 0 0 auto;
+    }
+    .filter-case input { width: auto; margin: 0; flex: none; }
+    .filter-line input[type="date"], .filter-line input[type="time"],
+    .filter-line input[type="number"] { flex: 0 1 8rem; }
+    .event-group-members .event-card {
+      background: var(--fc-snow); margin: 0.4rem 0 0;
+    }
+    .card-actions { margin-top: 0.35rem; }
+    .series-bd { margin-top: 0.45rem; }
+    .series-bd[hidden], #breakdown-chart[hidden] { display: none !important; }
+    .series-bd label { font-size: 0.75rem; font-weight: 400; }
+    #chart-measure-template[hidden] { display: none !important; }
+    .series-of { margin: 0.35rem 0 0; }
+    .series-of[hidden] { display: none !important; }
+    .series-of-json[hidden], .series-of-expr[hidden] { display: none !important; }
+    .series-bd-json[hidden], .series-bd-expr[hidden] { display: none !important; }
+    #event_value-wrap[hidden] { display: none !important; }
     #top_n { width: 4.5rem; }
     .incomplete-note { font-size: 0.75rem; color: var(--fc-slate); margin: 0.35rem 0 0; }
     .stale-note {
@@ -201,13 +291,19 @@
     <input type="hidden" name="bytes_cap_gb" id="bytes_cap_gb" value="{{ config.bytes_cap_gb if config.bytes_cap_gb is not none else 10 }}">
     <input type="hidden" name="query_row_limit" id="query_row_limit" value="{{ config.query_row_limit or 1000000 }}">
 
-    <div id="event_value-wrap" {% if not config.event_column %}hidden{% endif %}>
-      <label for="event_value">Event <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span>
+    <div id="events-band">
+      <div class="band-head">
+        <span>Event series <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span></span>
+        <span id="event_value" hidden></span>
         <button type="button" id="refresh-events" class="linkish">Refresh list</button>
-      </label>
-      <select id="event_value" name="event_value"></select>
+      </div>
+      <div id="event-cards"></div>
+      <div class="card-actions">
+        <button type="button" id="add-event" class="linkish">Add series</button>
+      </div>
     </div>
 
+    <div id="chart-measure-template" hidden>
     <label for="measure">Measure</label>
     <select name="measure" id="measure">
       <optgroup label="Event">
@@ -239,6 +335,7 @@
         <span class="hint">Fills of=. Sum / Average / Median need a number. Distinct also allows STRING.</span>
       </div>
       <span class="hint" id="of-hint">Unused event types leave this column null. Pick the event that carries it (for example purchase for revenue).</span>
+    </div>
     </div>
     <div id="exact-wrap">
       <div class="row">
@@ -297,6 +394,12 @@
       </div>
     </div>
 
+    <div id="breakdown-band">
+    <div class="row">
+      <input name="breakdown_by_series" type="checkbox" id="breakdown_by_series" {% if config.breakdown_by_series %}checked{% endif %} style="width:auto">
+      <label for="breakdown_by_series" style="margin:0">Break down each series</label>
+    </div>
+    <div id="breakdown-chart">
     <label for="breakdown_column">Break down by <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span>
       <button type="button" id="refresh-columns" class="linkish">Refresh list</button>
     </label>
@@ -311,6 +414,7 @@
       <input id="breakdown_expr" name="breakdown_expr" autocomplete="off" value="{{ config.breakdown_expr }}" placeholder="country">
       <span class="hint">Fills the spec expression. Does not replace it with a property store.</span>
     </div>
+    </div>
     <div id="breakdown-extra" hidden>
       <span class="hint" id="breakdown-hint">Value on each event in this date range. First/last for an entity (chart window vs all history vs cohort) is a later control — it is not this dropdown.</span>
       <input type="hidden" name="breakdown_at" id="breakdown_at" value="rows">
@@ -320,6 +424,7 @@
         <input name="include_other" type="checkbox" id="include_other" {% if config.include_other or config.include_other is not false %}checked{% endif %} style="width:auto">
         <label for="include_other" style="margin:0">Show (other)</label>
       </div>
+    </div>
     </div>
     <div id="run-row">
       <button type="submit" id="run">Run</button>
@@ -444,6 +549,8 @@
 <script>
 const saved = {
   event_value: {{ config.event_value|tojson }},
+  event_values: {{ (config.event_values or [])|tojson }},
+  filters: {{ (config.filters or [])|tojson }},
   of_column: {{ (config.of_column or "")|tojson }},
   of_expr: {{ (config.of_expr or "")|tojson }},
   of_json_key: {{ (config.of_json_key or "")|tojson }},
@@ -514,8 +621,7 @@ const locationEl = document.getElementById("location");
 const eventTimeEl = document.getElementById("event_time");
 const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
-const eventValueEl = document.getElementById("event_value");
-const eventValueWrap = document.getElementById("event_value-wrap");
+const eventCardsEl = document.getElementById("event-cards");
 const grainEl = document.getElementById("grain");
 const rangeChoiceEl = document.getElementById("range_choice");
 const rangeModeEl = document.getElementById("range_mode");
@@ -568,10 +674,34 @@ function shortError(msg) {
   }
   return lines.join("\n") || "Query failed. See SQL below.";
 }
-function fillEventSelect(items, selected) {
-  // Empty cache must still show the control. Hiding it made Events
-  // look like it had no event picker.
-  fillSelect(eventValueEl, items || [], selected, "Pick an event");
+let eventNameCache = Array.isArray(cachedEventNames) ? cachedEventNames.slice() : [];
+const SERIES_CAP = 8;
+function savedEventNames() {
+  const listed = Array.isArray(saved.event_values)
+    ? saved.event_values.filter(Boolean)
+    : [];
+  if (listed.length) return listed;
+  return saved.event_value ? [saved.event_value] : [];
+}
+function fillEventNameSelect(sel, selected) {
+  const keep = selected || sel.value || "";
+  const ranked = [...eventNameCache].sort((a, b) => String(a).localeCompare(String(b)));
+  sel.innerHTML = "";
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "Pick an event";
+  sel.appendChild(blank);
+  ranked.forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (keep) ensureOption(sel, keep);
+  sel.value = keep;
+}
+function topSeriesCount() {
+  return eventCardsEl.querySelectorAll(":scope > .event-series").length;
 }
 function fillSelect(sel, items, selected, blankLabel) {
   const cur = selected || sel.value;
@@ -608,7 +738,7 @@ function fillSelect(sel, items, selected, blankLabel) {
   else if (!blankLabel && sel.options.length) sel.selectedIndex = 0;
   sel.hidden = false;
 }
-if (eventColumnEl.value) eventValueWrap.hidden = false;
+
 const CUSTOM_BREAKDOWN = "__expr__";
 const CUSTOM_OF = "__expr__";
 const PROPERTY_OF_TYPES = new Set({{ property_of_types|tojson }});
@@ -621,14 +751,19 @@ const ofColumnEl = document.getElementById("of_column");
 const ofWrapEl = document.getElementById("of-wrap");
 const onEl = document.getElementById("on");
 let columnCache = Array.isArray(cachedColumns) ? cachedColumns : [];
-function isPropertyMeasure() {
-  const v = form.measure.value;
+function isPropertyMeasureValue(v) {
   return v === "sum" || v === "property_average" || v === "median" || v === "distinct";
 }
-function ofAllowedTypes() {
-  const base = form.measure.value === "distinct" ? DISTINCT_OF_TYPES : PROPERTY_OF_TYPES;
+function isPropertyMeasure() {
+  return isPropertyMeasureValue(form.measure.value);
+}
+function ofAllowedTypesFor(measure) {
+  const base = measure === "distinct" ? DISTINCT_OF_TYPES : PROPERTY_OF_TYPES;
   if (!SUPPORTS_JSON_VALUE) return base;
   return new Set([...base, ...JSON_TYPES]);
+}
+function ofAllowedTypes() {
+  return ofAllowedTypesFor(form.measure.value);
 }
 function columnType(name) {
   const hit = (columnCache || []).find((c) => (c.name || c) === name);
@@ -644,7 +779,7 @@ function syncBreakdownUi() {
   );
   document.getElementById("breakdown-expr-wrap").hidden = col !== CUSTOM_BREAKDOWN;
   document.getElementById("breakdown-json-wrap").hidden = !json;
-  document.getElementById("breakdown-extra").hidden = !col;
+  syncBreakdownMode();
 }
 function syncOfUi() {
   const property = isPropertyMeasure();
@@ -674,10 +809,10 @@ function ensureOption(sel, value) {
   sel.value = value;
   sel.hidden = false;
 }
-function fillOfSelect(columns) {
-  const allowed = ofAllowedTypes();
+function paintOfSelect(sel, current, measure) {
+  const allowed = ofAllowedTypesFor(measure || "sum");
   const skip = new Set([form.entity.value, form.event_time.value, eventColumnEl.value].filter(Boolean));
-  const cols = (columns || [])
+  const cols = (columnCache || [])
     .filter((c) => {
       const name = c.name || c;
       const typ = String(c.type || "").toUpperCase();
@@ -686,41 +821,985 @@ function fillOfSelect(columns) {
       return true;
     })
     .map((c) => (typeof c === "string" ? c : { value: c.name, label: c.type ? c.name + " (" + c.type + ")" : c.name }));
-  const cur = saved.of_expr ? CUSTOM_OF : (saved.of_column || ofColumnEl.value || "");
-  fillSelect(ofColumnEl, cols, cur === CUSTOM_OF ? "" : cur, "(none)");
+  const cur = current || "";
+  fillSelect(sel, cols, cur === CUSTOM_OF ? "" : cur, "(none)");
   const custom = document.createElement("option");
   custom.value = CUSTOM_OF;
   custom.textContent = "SQL expression…";
-  ofColumnEl.appendChild(custom);
-  if (cur && cur !== CUSTOM_OF) ensureOption(ofColumnEl, cur);
-  if (cur === CUSTOM_OF) ofColumnEl.value = CUSTOM_OF;
-  ofColumnEl.hidden = false;
+  sel.appendChild(custom);
+  if (cur && cur !== CUSTOM_OF) ensureOption(sel, cur);
+  if (cur === CUSTOM_OF) sel.value = CUSTOM_OF;
+  sel.hidden = false;
 }
-function fillBreakdownSelect(columns) {
+function fillOfSelect(columns) {
+  const cur = saved.of_expr ? CUSTOM_OF : (saved.of_column || ofColumnEl.value || "");
+  paintOfSelect(ofColumnEl, cur, form.measure.value);
+  document.querySelectorAll(".series-of-column").forEach((sel) => {
+    const host = sel.closest(".event-card, .event-group");
+    const measure = host && seriesMeasureSelect(host);
+    paintOfSelect(sel, sel.value, measure ? measure.value : "sum");
+  });
+}
+function breakdownColumnOptions() {
   const skip = new Set([form.entity.value, form.event_time.value, eventColumnEl.value].filter(Boolean));
-  const cols = (columns || [])
+  return (columnCache || [])
     .filter((c) => {
       const name = c.name || c;
       return name && !skip.has(name);
     })
     .map((c) => (typeof c === "string" ? c : { value: c.name, label: c.type ? c.name + " (" + c.type + ")" : c.name }));
-  const cur = saved.breakdown_expr ? CUSTOM_BREAKDOWN : (saved.breakdown_column || breakdownColumnEl.value || "");
-  fillSelect(breakdownColumnEl, cols, cur === CUSTOM_BREAKDOWN ? "" : cur, "(none)");
+}
+function paintBreakdownSelect(sel, current) {
+  const cols = breakdownColumnOptions();
+  const cur = current || "";
+  fillSelect(sel, cols, cur === CUSTOM_BREAKDOWN ? "" : cur, "(none)");
   const custom = document.createElement("option");
   custom.value = CUSTOM_BREAKDOWN;
   custom.textContent = "SQL expression…";
-  breakdownColumnEl.appendChild(custom);
-  if (cur && cur !== CUSTOM_BREAKDOWN) ensureOption(breakdownColumnEl, cur);
-  if (cur === CUSTOM_BREAKDOWN) breakdownColumnEl.value = CUSTOM_BREAKDOWN;
+  sel.appendChild(custom);
+  if (cur && cur !== CUSTOM_BREAKDOWN) ensureOption(sel, cur);
+  if (cur === CUSTOM_BREAKDOWN) sel.value = CUSTOM_BREAKDOWN;
+}
+function fillBreakdownSelect(columns) {
+  const cur = saved.breakdown_expr ? CUSTOM_BREAKDOWN : (saved.breakdown_column || breakdownColumnEl.value || "");
+  paintBreakdownSelect(breakdownColumnEl, cur);
   breakdownColumnEl.hidden = false;
 }
 function paintColumns(columns) {
   columnCache = columns || [];
   fillBreakdownSelect(columnCache);
   fillOfSelect(columnCache);
+  document.querySelectorAll(".series-bd").forEach((wrap) => {
+    const sel = wrap.querySelector(".series-bd-column");
+    paintBreakdownSelect(sel, sel.value);
+    syncSeriesBd(wrap);
+  });
   syncBreakdownUi();
   syncOfUi();
+  syncBreakdownMode();
+  document.querySelectorAll(".filter-line").forEach(syncFilterLine);
 }
+const CUSTOM_FILTER = "__expr__";
+const FILTER_UI = {{ filter_ui|tojson }};
+let filterListSeq = 0;
+function filterFamilyOf(type, json) {
+  if (json) return "string";
+  const fam = FILTER_UI.type_family[String(type || "").toUpperCase()];
+  if (fam) return fam;
+  return type ? "other" : "string";
+}
+function filterOpKind(op) {
+  return (FILTER_UI.ops[op] || {}).value || "one";
+}
+function defaultCaseSensitive(op) {
+  return (FILTER_UI.exact_string_ops || []).indexOf(op) !== -1;
+}
+function orderedWeekdays() {
+  const names = (FILTER_UI.weekdays || []).slice();
+  if (!names.length) return names;
+  const sun = (document.getElementById("week_start") || {}).value === "sunday";
+  if (!sun) return names;
+  const sunday = names[names.length - 1];
+  return [sunday].concat(names.slice(0, -1));
+}
+function fillDateParts(sel, family, current) {
+  const parts = (FILTER_UI.date_parts || []).filter((p) => !p.hour || family === "timestamp");
+  const keep = parts.some((p) => p.id === current) ? current : "";
+  sel.innerHTML = "";
+  let groupEl = null;
+  let groupName = null;
+  parts.forEach((p) => {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = !p.id ? (family === "date" ? "The date" : "The timestamp") : p.label;
+    const g = p.group || "";
+    if (g) {
+      if (groupName !== g) {
+        groupName = g;
+        groupEl = document.createElement("optgroup");
+        groupEl.label = g;
+        sel.appendChild(groupEl);
+      }
+      groupEl.appendChild(opt);
+    } else {
+      sel.appendChild(opt);
+      groupEl = null;
+      groupName = null;
+    }
+  });
+  sel.value = keep;
+  return keep;
+}
+function fillEnumSelect(sel, names, current) {
+  const keep = names.indexOf(current) !== -1 ? current : (names[0] || "");
+  sel.innerHTML = "";
+  names.forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  sel.value = keep;
+  return keep;
+}
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function isoDateUTC(d) {
+  return d.getUTCFullYear() + "-" + pad2(d.getUTCMonth() + 1) + "-" + pad2(d.getUTCDate());
+}
+function weekStartsSunday() {
+  return (document.getElementById("week_start") || {}).value === "sunday";
+}
+function dateFromYearWeek(year, week) {
+  year = Number(year);
+  week = Number(week);
+  if (!year || !week) return "";
+  if (!weekStartsSunday()) {
+    const jan4 = new Date(Date.UTC(year, 0, 4));
+    const dow = jan4.getUTCDay() || 7;
+    const monday = new Date(jan4);
+    monday.setUTCDate(jan4.getUTCDate() - (dow - 1) + (week - 1) * 7);
+    return isoDateUTC(monday);
+  }
+  const jan1 = new Date(Date.UTC(year, 0, 1));
+  const start = new Date(jan1);
+  start.setUTCDate(1 - jan1.getUTCDay() + (week - 1) * 7);
+  return isoDateUTC(start);
+}
+function yearWeekFromIso(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || "");
+  if (!m) return { year: "", week: "" };
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  if (!weekStartsSunday()) {
+    const tmp = new Date(d);
+    tmp.setUTCDate(tmp.getUTCDate() + 4 - (tmp.getUTCDay() || 7));
+    const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((tmp - yearStart) / 86400000) + 1) / 7);
+    return { year: String(tmp.getUTCFullYear()), week: String(week) };
+  }
+  const year = d.getUTCFullYear();
+  const jan1 = new Date(Date.UTC(year, 0, 1));
+  const start = new Date(jan1);
+  start.setUTCDate(1 - jan1.getUTCDay());
+  const week = Math.floor((d - start) / 86400000 / 7) + 1;
+  return { year: String(year), week: String(week) };
+}
+function isoFromQuarter(year, q) {
+  year = String(year || "").trim();
+  q = Number(q);
+  if (!year || !q) return "";
+  return year + "-" + pad2((q - 1) * 3 + 1) + "-01";
+}
+function quarterFromIso(iso) {
+  const m = /^(\d{4})-(\d{2})/.exec(iso || "");
+  if (!m) return { year: "", q: "1" };
+  return { year: m[1], q: String(Math.floor((Number(m[2]) - 1) / 3) + 1) };
+}
+function fillQuarterSelect(sel) {
+  if (!sel || sel.options.length) return;
+  [1, 2, 3, 4].forEach((q) => {
+    const opt = document.createElement("option");
+    opt.value = String(q);
+    opt.textContent = "Q" + q;
+    sel.appendChild(opt);
+  });
+}
+function seedPeriodInputs(row, iso, isoTo) {
+  if (iso && /^\d{4}-\d{2}/.test(iso)) {
+    row.querySelector(".filter-month").value = iso.slice(0, 7);
+    const w = yearWeekFromIso(iso.length === 7 ? iso + "-01" : iso);
+    row.querySelector(".filter-week-year").value = w.year;
+    row.querySelector(".filter-week-n").value = w.week;
+    const q = quarterFromIso(iso);
+    row.querySelector(".filter-quarter-year").value = q.year;
+    row.querySelector(".filter-quarter-q").value = q.q;
+  }
+  if (isoTo && /^\d{4}-\d{2}/.test(isoTo)) {
+    row.querySelector(".filter-month-to").value = isoTo.slice(0, 7);
+    const w = yearWeekFromIso(isoTo.length === 7 ? isoTo + "-01" : isoTo);
+    row.querySelector(".filter-week-year-to").value = w.year;
+    row.querySelector(".filter-week-n-to").value = w.week;
+    const q = quarterFromIso(isoTo);
+    row.querySelector(".filter-quarter-year-to").value = q.year;
+    row.querySelector(".filter-quarter-q-to").value = q.q;
+  }
+}
+function periodValueIso(row, to) {
+  const partId = row.querySelector(".filter-part").value;
+  const meta = (FILTER_UI.date_parts || []).find((p) => p.id === partId);
+  const picker = meta && meta.picker;
+  const s = to ? "-to" : "";
+  if (picker === "month") {
+    const m = (row.querySelector(to ? ".filter-month-to" : ".filter-month").value || "").trim();
+    return m ? m + "-01" : "";
+  }
+  if (picker === "week") {
+    return dateFromYearWeek(
+      row.querySelector(to ? ".filter-week-year-to" : ".filter-week-year").value,
+      row.querySelector(to ? ".filter-week-n-to" : ".filter-week-n").value
+    );
+  }
+  if (picker === "quarter") {
+    return isoFromQuarter(
+      row.querySelector(to ? ".filter-quarter-year-to" : ".filter-quarter-year").value,
+      row.querySelector(to ? ".filter-quarter-q-to" : ".filter-quarter-q").value
+    );
+  }
+  return "";
+}
+function fillFilterOps(sel, family, current) {
+  const ids = FILTER_UI.families[family] || FILTER_UI.families.other;
+  const keep = ids.indexOf(current) !== -1 ? current : ids[0];
+  sel.innerHTML = "";
+  ids.forEach((id) => {
+    const opt = document.createElement("option");
+    opt.value = id;
+    const numericLabel = family === "numeric" && FILTER_UI.numeric_op_labels
+      && FILTER_UI.numeric_op_labels[id];
+    opt.textContent = numericLabel || (FILTER_UI.ops[id] && FILTER_UI.ops[id].label) || id;
+    sel.appendChild(opt);
+  });
+  sel.value = keep;
+  return keep;
+}
+function splitFilterTokens(raw) {
+  return String(raw || "").replace(/\n/g, ",").split(",").map((s) => s.trim()).filter(Boolean);
+}
+function pillValues(row) {
+  const pills = [...row.querySelectorAll(".filter-pill")].map((el) => el.dataset.value || "");
+  const draft = splitFilterTokens((row.querySelector(".filter-pills-input") || {}).value || "");
+  const seen = new Set();
+  const out = [];
+  pills.concat(draft).forEach((tok) => {
+    if (!tok || seen.has(tok)) return;
+    seen.add(tok);
+    out.push(tok);
+  });
+  return out;
+}
+function addFilterPill(row, token) {
+  const t = String(token || "").trim();
+  if (!t) return;
+  const host = row.querySelector(".filter-pills");
+  const input = row.querySelector(".filter-pills-input");
+  if ([...host.querySelectorAll(".filter-pill")].some((el) => el.dataset.value === t)) return;
+  const pill = document.createElement("span");
+  pill.className = "filter-pill";
+  pill.dataset.value = t;
+  const label = document.createElement("span");
+  label.textContent = t;
+  label.title = t;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.setAttribute("aria-label", "Remove " + t);
+  btn.textContent = "×";
+  btn.addEventListener("click", () => {
+    pill.remove();
+    scheduleEstimate();
+    syncStaleNotes();
+  });
+  pill.appendChild(label);
+  pill.appendChild(btn);
+  host.insertBefore(pill, input);
+}
+function addPillsFromText(row, raw) {
+  splitFilterTokens(raw).forEach((tok) => addFilterPill(row, tok));
+}
+function bindFilterPills(row) {
+  const input = row.querySelector(".filter-pills-input");
+  function commit() {
+    addPillsFromText(row, input.value);
+    input.value = "";
+  }
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      commit();
+      scheduleEstimate();
+      return;
+    }
+    if (e.key === "Backspace" && !input.value) {
+      const last = row.querySelector(".filter-pill:last-of-type");
+      if (last) {
+        last.remove();
+        scheduleEstimate();
+      }
+    }
+  });
+  input.addEventListener("paste", (e) => {
+    const text = (e.clipboardData && e.clipboardData.getData("text")) || "";
+    if (!splitFilterTokens(text).length || (splitFilterTokens(text).length === 1 && !/[,\n]/.test(text))) return;
+    e.preventDefault();
+    addPillsFromText(row, text);
+    scheduleEstimate();
+  });
+  input.addEventListener("blur", () => {
+    if (!(input.value || "").trim()) return;
+    commit();
+    scheduleEstimate();
+  });
+}
+function filterColumnOptions() {
+  const skip = new Set([form.entity.value, eventColumnEl.value].filter(Boolean));
+  return (columnCache || [])
+    .filter((c) => {
+      const name = c.name || c;
+      return name && !skip.has(name);
+    })
+    .map((c) => (typeof c === "string" ? { value: c, label: c, type: "" } : {
+      value: c.name,
+      label: c.type ? c.name + " (" + c.type + ")" : c.name,
+      type: String(c.type || "").toUpperCase(),
+    }));
+}
+function syncFilterLine(row) {
+  const colSel = row.querySelector(".filter-column");
+  const cur = colSel.value;
+  const cols = filterColumnOptions();
+  fillSelect(
+    colSel,
+    cols,
+    cur === CUSTOM_FILTER ? "" : cur,
+    cur ? "" : "Choose a filter\u2026"
+  );
+  if (![...colSel.options].some((o) => o.value === CUSTOM_FILTER)) {
+    const custom = document.createElement("option");
+    custom.value = CUSTOM_FILTER;
+    custom.textContent = "SQL expression…";
+    colSel.appendChild(custom);
+  }
+  if (cur && cur !== CUSTOM_FILTER) ensureOption(colSel, cur);
+  if (cur === CUSTOM_FILTER) colSel.value = CUSTOM_FILTER;
+  cols.forEach((c) => {
+    const opt = [...colSel.options].find((o) => o.value === c.value);
+    if (opt) opt.dataset.type = c.type || "";
+  });
+  const json = cur && cur !== CUSTOM_FILTER && (
+    isJsonColumn(cur) || !!(row.querySelector(".filter-json").value && cur)
+  );
+  const expr = cur === CUSTOM_FILTER;
+  const opt = colSel.selectedOptions[0];
+  const type = (opt && opt.dataset.type) || "";
+  const eventTime = cur && cur === (form.event_time && form.event_time.value);
+  let family = expr ? "string" : filterFamilyOf(type, json);
+  if (!expr && eventTime && !json) family = "timestamp";
+  const partSel = row.querySelector(".filter-part");
+  const showPart = !expr && (family === "date" || family === "timestamp");
+  partSel.hidden = !showPart;
+  if (showPart) {
+    const partId = fillDateParts(partSel, family, partSel.value);
+    const meta = (FILTER_UI.date_parts || []).find((p) => p.id === partId);
+    if (meta && meta.family) family = meta.family;
+  }
+  const opSel = row.querySelector(".filter-op");
+  const op = fillFilterOps(opSel, family, opSel.value);
+  const kind = filterOpKind(op);
+  const none = kind === "none";
+  const list = kind === "list";
+  const two = kind === "two";
+  const partMetaEarly = showPart
+    ? (FILTER_UI.date_parts || []).find((p) => p.id === partSel.value)
+    : null;
+  const picker = (partMetaEarly && partMetaEarly.picker) || "";
+  const periodPicker = picker === "week" || picker === "month" || picker === "quarter";
+  const ts = !expr && !none && family === "timestamp";
+  const dateFam = !expr && !none && (family === "date" || family === "timestamp") && !periodPicker;
+  const timeFam = !expr && !none && family === "time";
+  const numFam = !expr && !none && !list && family === "numeric";
+  const enumNames = family === "weekday" ? orderedWeekdays()
+    : (family === "monthname" ? (FILTER_UI.months || []) : []);
+  const showEnum = !expr && !none && kind === "one" && enumNames.length;
+  const caseful = !expr && !none && family === "string"
+    && op !== "is_empty" && op !== "is_not_empty";
+  row.querySelector(".filter-json").hidden = !json;
+  row.querySelector(".filter-expr").hidden = !expr;
+  row.querySelector(".filter-op").hidden = expr;
+  const val = row.querySelector(".filter-value");
+  const pills = row.querySelector(".filter-pills");
+  const enumSel = row.querySelector(".filter-enum");
+  val.hidden = expr || none || list || showEnum || periodPicker;
+  pills.hidden = expr || none || !list;
+  enumSel.hidden = !showEnum;
+  if (showEnum) fillEnumSelect(enumSel, enumNames, enumSel.value || val.value);
+  const listEl = row.querySelector(".filter-enum-list");
+  if (listEl) {
+    listEl.innerHTML = "";
+    enumNames.forEach((name) => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      listEl.appendChild(opt);
+    });
+  }
+  if (list && !pills.querySelector(".filter-pill") && (val.value || "").trim()) {
+    addPillsFromText(row, val.value);
+    val.value = "";
+  }
+  const partMeta = showPart
+    ? (FILTER_UI.date_parts || []).find((p) => p.id === partSel.value)
+    : null;
+  function bindNumberInput(el, placeholder) {
+    el.type = "number";
+    const extract = !!(partMeta && partMeta.extract);
+    const integerCol = (FILTER_UI.integer_types || []).indexOf(type) !== -1;
+    const integer = extract || integerCol;
+    el.step = integer ? "1" : "any";
+    if (partMeta && partMeta.min != null) el.min = String(partMeta.min);
+    else el.removeAttribute("min");
+    if (partMeta && partMeta.max != null) el.max = String(partMeta.max);
+    else el.removeAttribute("max");
+    el.placeholder = placeholder || (partMeta && partMeta.extract === "YEAR" ? "2026" : "Value");
+  }
+  if (!val.hidden) {
+    if (numFam) bindNumberInput(val, partMeta && partMeta.extract === "YEAR" ? "2026" : "Value");
+    else if (dateFam) {
+      val.type = "date"; val.removeAttribute("min"); val.removeAttribute("max"); val.removeAttribute("step"); val.placeholder = "";
+    } else if (timeFam) {
+      val.type = "time"; val.step = "1"; val.removeAttribute("min"); val.removeAttribute("max"); val.placeholder = "";
+    } else {
+      val.type = "text"; val.removeAttribute("min"); val.removeAttribute("max"); val.removeAttribute("step"); val.placeholder = "Value";
+    }
+  }
+  row.querySelector(".filter-value-time").hidden = !ts;
+  if (ts) row.querySelector(".filter-value-time").step = picker === "hour" ? "3600" : "1";
+  const valTo = row.querySelector(".filter-value-to");
+  valTo.hidden = !two || periodPicker;
+  ["month", "week", "quarter"].forEach((name) => {
+    row.querySelector(".filter-period-" + name).hidden = expr || none || picker !== name;
+    row.querySelector(".filter-period-" + name + "-to").hidden = expr || none || !two || picker !== name;
+  });
+  if (two) {
+    if (numFam) bindNumberInput(valTo, "And");
+    else if (dateFam) { valTo.type = "date"; valTo.placeholder = ""; }
+    else if (timeFam) { valTo.type = "time"; valTo.step = "1"; valTo.placeholder = ""; }
+    else { valTo.type = "text"; valTo.placeholder = "And"; }
+  }
+  row.querySelector(".filter-value-to-time").hidden = !(ts && two);
+  row.querySelector(".filter-case").hidden = !caseful;
+}
+function readFilterLine(row) {
+  const col = row.querySelector(".filter-column").value;
+  const exprOn = col === CUSTOM_FILTER;
+  const opt = row.querySelector(".filter-column").selectedOptions[0];
+  const caseWrap = row.querySelector(".filter-case");
+  const caseBox = row.querySelector(".filter-case-sensitive");
+  return {
+    column: exprOn ? "" : col,
+    json_key: exprOn || row.querySelector(".filter-json").hidden
+      ? ""
+      : (row.querySelector(".filter-json").value || "").trim(),
+    op: row.querySelector(".filter-op").value || "is",
+    date_part: row.querySelector(".filter-part").hidden
+      ? ""
+      : (row.querySelector(".filter-part").value || ""),
+    value: filterOpKind(row.querySelector(".filter-op").value || "is") === "list"
+      ? pillValues(row).join("\n")
+      : (!row.querySelector(".filter-enum").hidden
+        ? (row.querySelector(".filter-enum").value || "")
+        : (periodValueIso(row, false) || row.querySelector(".filter-value").value || "")),
+    values: filterOpKind(row.querySelector(".filter-op").value || "is") === "list"
+      ? pillValues(row)
+      : [],
+    value_to: periodValueIso(row, true) || row.querySelector(".filter-value-to").value || "",
+    value_time: row.querySelector(".filter-value-time").value || "",
+    value_to_time: row.querySelector(".filter-value-to-time").value || "",
+    expr: exprOn ? (row.querySelector(".filter-expr").value || "").trim() : "",
+    type: (opt && opt.dataset.type) || "",
+    case_sensitive: !!(caseWrap && !caseWrap.hidden && caseBox && caseBox.checked),
+  };
+}
+function addFilterLine(host, init) {
+  const data = init || {};
+  const row = document.createElement("div");
+  row.className = "filter-line";
+  row.innerHTML = (
+    '<select class="filter-column" aria-label="Filter column"></select>'
+    + '<input class="filter-json" placeholder="JSON key" autocomplete="off" aria-label="JSON key">'
+    + '<select class="filter-part" aria-label="Date part" hidden></select>'
+    + '<select class="filter-op" aria-label="Filter operator"></select>'
+    + '<select class="filter-enum" aria-label="Filter value" hidden></select>'
+    + '<input class="filter-value" placeholder="Value" autocomplete="off" aria-label="Filter value">'
+    + '<div class="filter-pills" hidden><input class="filter-pills-input" placeholder="Add a value" autocomplete="off" aria-label="Add filter value"></div>'
+    + '<datalist class="filter-enum-list"></datalist>'
+    + '<div class="filter-period filter-period-month" hidden><input class="filter-month" type="month" aria-label="Month"></div>'
+    + '<div class="filter-period filter-period-week" hidden>'
+    + '<input class="filter-week-year" type="number" min="1000" max="9999" placeholder="Year" aria-label="Week year">'
+    + '<input class="filter-week-n" type="number" min="1" max="53" placeholder="Week" aria-label="Week number">'
+    + "</div>"
+    + '<div class="filter-period filter-period-quarter" hidden>'
+    + '<input class="filter-quarter-year" type="number" min="1000" max="9999" placeholder="Year" aria-label="Quarter year">'
+    + '<select class="filter-quarter-q" aria-label="Quarter"></select>'
+    + "</div>"
+    + '<input class="filter-value-time" type="time" step="3600" aria-label="Time">'
+    + '<input class="filter-value-to" placeholder="And" autocomplete="off" aria-label="Filter value to">'
+    + '<div class="filter-period-to filter-period-month-to" hidden><input class="filter-month-to" type="month" aria-label="Month to"></div>'
+    + '<div class="filter-period-to filter-period-week-to" hidden>'
+    + '<input class="filter-week-year-to" type="number" min="1000" max="9999" placeholder="Year" aria-label="Week year to">'
+    + '<input class="filter-week-n-to" type="number" min="1" max="53" placeholder="Week" aria-label="Week number to">'
+    + "</div>"
+    + '<div class="filter-period-to filter-period-quarter-to" hidden>'
+    + '<input class="filter-quarter-year-to" type="number" min="1000" max="9999" placeholder="Year" aria-label="Quarter year to">'
+    + '<select class="filter-quarter-q-to" aria-label="Quarter to"></select>'
+    + "</div>"
+    + '<input class="filter-value-to-time" type="time" step="3600" aria-label="End time">'
+    + '<label class="filter-case"><input type="checkbox" class="filter-case-sensitive"> Case sensitive</label>'
+    + '<input class="filter-expr" placeholder="SQL boolean" autocomplete="off" aria-label="Filter SQL">'
+    + '<button type="button" class="linkish filter-remove">Remove</button>'
+  );
+  const opSel = row.querySelector(".filter-op");
+  fillQuarterSelect(row.querySelector(".filter-quarter-q"));
+  fillQuarterSelect(row.querySelector(".filter-quarter-q-to"));
+  row.querySelector(".filter-json").value = data.json_key || "";
+  row.querySelector(".filter-expr").value = data.expr || "";
+  const caseBox = row.querySelector(".filter-case-sensitive");
+  if (data.case_sensitive === true || data.case_sensitive === false) {
+    caseBox.checked = !!data.case_sensitive;
+  } else {
+    caseBox.checked = defaultCaseSensitive(data.op || "is");
+  }
+  host.appendChild(row);
+  filterListSeq += 1;
+  const listId = "filter-enum-list-" + filterListSeq;
+  row.querySelector(".filter-enum-list").id = listId;
+  row.querySelector(".filter-pills-input").setAttribute("list", listId);
+  const colSel = row.querySelector(".filter-column");
+  const partSel = row.querySelector(".filter-part");
+  const enumSel = row.querySelector(".filter-enum");
+  const want = data.expr ? CUSTOM_FILTER : (data.column || "");
+  function applyValues() {
+    row.querySelector(".filter-value").value = data.value || "";
+    row.querySelector(".filter-value-to").value = data.value_to || "";
+    row.querySelector(".filter-value-time").value = data.value_time || "";
+    row.querySelector(".filter-value-to-time").value = data.value_to_time || "";
+    if (data.value) enumSel.value = data.value;
+    seedPeriodInputs(row, data.value || "", data.value_to || "");
+  }
+  syncFilterLine(row);
+  if (want) {
+    if (want !== CUSTOM_FILTER) ensureOption(colSel, want);
+    colSel.value = want;
+    syncFilterLine(row);
+  }
+  if (data.date_part) {
+    partSel.value = data.date_part;
+    syncFilterLine(row);
+  }
+  if (data.op) {
+    ensureOption(opSel, data.op);
+    opSel.value = data.op;
+    syncFilterLine(row);
+  }
+  applyValues();
+  addPillsFromText(row, Array.isArray(data.values) && data.values.length
+    ? data.values.join("\n")
+    : (filterOpKind(data.op || "is") === "list" ? (data.value || "") : ""));
+  bindFilterPills(row);
+  colSel.addEventListener("change", () => { syncFilterLine(row); scheduleEstimate(); });
+  partSel.addEventListener("change", () => { syncFilterLine(row); scheduleEstimate(); });
+  enumSel.addEventListener("change", () => { scheduleEstimate(); });
+  opSel.addEventListener("change", () => {
+    const op = opSel.value;
+    if ((FILTER_UI.like_ops || []).indexOf(op) !== -1) caseBox.checked = false;
+    else if ((FILTER_UI.exact_string_ops || []).indexOf(op) !== -1) caseBox.checked = true;
+    syncFilterLine(row);
+    scheduleEstimate();
+  });
+  ["filter-value", "filter-value-to", "filter-value-time", "filter-value-to-time",
+    "filter-json", "filter-expr", "filter-month", "filter-month-to",
+    "filter-week-year", "filter-week-n", "filter-week-year-to", "filter-week-n-to",
+    "filter-quarter-year", "filter-quarter-q", "filter-quarter-year-to", "filter-quarter-q-to"
+    ].forEach((cls) => {
+    row.querySelector("." + cls).addEventListener("change", () => {
+      syncFilterLine(row);
+      scheduleEstimate();
+    });
+  });
+  caseBox.addEventListener("change", () => { scheduleEstimate(); });
+  row.querySelector(".filter-remove").addEventListener("click", () => {
+    row.remove();
+    scheduleEstimate();
+    syncStaleNotes();
+  });
+}
+function breakdownBySeries() {
+  return document.getElementById("breakdown_by_series").checked;
+}
+function syncSeriesBd(wrap) {
+  const sel = wrap.querySelector(".series-bd-column");
+  const col = sel.value;
+  const json = col && col !== CUSTOM_BREAKDOWN && (
+    isJsonColumn(col) || !!(wrap.querySelector(".series-bd-json").value && col)
+  );
+  wrap.querySelector(".series-bd-json").hidden = !json;
+  wrap.querySelector(".series-bd-expr").hidden = col !== CUSTOM_BREAKDOWN;
+}
+function readSeriesBd(host) {
+  const wrap = host.querySelector(":scope > .series-bd");
+  if (!wrap) return {};
+  const col = wrap.querySelector(".series-bd-column").value;
+  const exprOn = col === CUSTOM_BREAKDOWN;
+  return {
+    breakdown_column: exprOn ? "" : col,
+    breakdown_json_key: exprOn || wrap.querySelector(".series-bd-json").hidden
+      ? ""
+      : (wrap.querySelector(".series-bd-json").value || "").trim(),
+    breakdown_expr: exprOn ? (wrap.querySelector(".series-bd-expr").value || "").trim() : "",
+  };
+}
+function applyMeasureLabels(sel) {
+  const w = (document.getElementById("entity_label").value || "").trim() || "User";
+  const p = (document.getElementById("entity_label_plural").value || "").trim() || (w + "s");
+  for (const o of sel.options) {
+    if (o.value === "total") { o.textContent = "Volume"; o.title = "Count of event rows in the bucket"; }
+    else if (o.value === "uniques") { o.textContent = "Unique " + p; o.title = "Count distinct of the mapped entity id (" + p + ")"; }
+    else if (o.value === "average") { o.textContent = "Average per " + w; o.title = "Volume divided by unique " + p.toLowerCase(); }
+    else if (o.value === "sum") { o.textContent = "Sum"; o.title = "Sum of a numeric column"; }
+    else if (o.value === "property_average") { o.textContent = "Average"; o.title = "Average of a numeric column"; }
+    else if (o.value === "median") { o.textContent = "Median"; o.title = "Median of a numeric column"; }
+    else if (o.value === "distinct") { o.textContent = "Distinct per " + w; o.title = "Mean distinct values of a column per " + w.toLowerCase(); }
+  }
+}
+function seriesMeasureSelect(host) {
+  if (!host) return null;
+  return host.querySelector(":scope > .event-card-head > .series-measure, :scope > .event-group-head > .series-measure, :scope > .series-measure");
+}
+function formMeasureValue(unit) {
+  const src = unit || {};
+  let measure = src.measure || "uniques";
+  if ((src.on || "") === "property" && measure === "average") return "property_average";
+  return measure;
+}
+function savedMeasureFields() {
+  return {
+    measure: formMeasureValue(saved),
+    on: saved.on || "",
+    of_column: saved.of_column || "",
+    of_json_key: saved.of_json_key || "",
+    of_expr: saved.of_expr || "",
+  };
+}
+function withMeasure(unit) {
+  const u = Object.assign({}, unit || {});
+  if (!u.measure) Object.assign(u, savedMeasureFields(), u);
+  u.measure = formMeasureValue(u);
+  return u;
+}
+function syncSeriesMeasure(host) {
+  const sel = seriesMeasureSelect(host);
+  const ofWrap = host.querySelector(":scope > .series-of");
+  if (!sel || !ofWrap) return;
+  const prop = isPropertyMeasureValue(sel.value);
+  ofWrap.hidden = !prop;
+  if (!prop) return;
+  const colSel = ofWrap.querySelector(".series-of-column");
+  paintOfSelect(colSel, colSel.value, sel.value);
+  const col = colSel.value;
+  const json = col && col !== CUSTOM_OF && (
+    isJsonColumn(col) || !!(ofWrap.querySelector(".series-of-json").value && col)
+  );
+  ofWrap.querySelector(".series-of-json").hidden = !json;
+  ofWrap.querySelector(".series-of-expr").hidden = col !== CUSTOM_OF;
+}
+function readSeriesMeasure(host) {
+  const sel = seriesMeasureSelect(host);
+  const ofWrap = host.querySelector(":scope > .series-of");
+  if (!sel) return {};
+  const col = ofWrap ? ofWrap.querySelector(".series-of-column").value : "";
+  const exprOn = col === CUSTOM_OF;
+  const prop = isPropertyMeasureValue(sel.value);
+  return {
+    measure: sel.value,
+    on: prop ? "property" : "events",
+    of_column: !prop || exprOn ? "" : col,
+    of_json_key: !prop || exprOn || !ofWrap || ofWrap.querySelector(".series-of-json").hidden
+      ? ""
+      : (ofWrap.querySelector(".series-of-json").value || "").trim(),
+    of_expr: !prop || !exprOn || !ofWrap ? "" : (ofWrap.querySelector(".series-of-expr").value || "").trim(),
+  };
+}
+function attachSeriesMeasure(host, data) {
+  const init = data || {};
+  const sel = document.getElementById("measure").cloneNode(true);
+  sel.removeAttribute("id");
+  sel.removeAttribute("name");
+  sel.className = "series-measure";
+  sel.setAttribute("aria-label", "Measure");
+  applyMeasureLabels(sel);
+  sel.value = formMeasureValue(init);
+  const ofWrap = document.createElement("div");
+  ofWrap.className = "series-of";
+  ofWrap.innerHTML = (
+    "<label>Of</label>"
+    + '<select class="series-of-column" aria-label="Of"></select>'
+    + '<input class="series-of-json" placeholder="JSON key" autocomplete="off" aria-label="Of JSON key">'
+    + '<input class="series-of-expr" placeholder="SQL expression" autocomplete="off" aria-label="Of SQL">'
+  );
+  const head = host.querySelector(".event-card-head, .event-group-head");
+  const before = head.querySelector(".event-card-remove, .event-group-split");
+  if (before) head.insertBefore(sel, before);
+  else head.appendChild(sel);
+  head.after(ofWrap);
+  paintOfSelect(
+    ofWrap.querySelector(".series-of-column"),
+    init.of_expr ? CUSTOM_OF : (init.of_column || ""),
+    sel.value
+  );
+  ofWrap.querySelector(".series-of-json").value = init.of_json_key || "";
+  ofWrap.querySelector(".series-of-expr").value = init.of_expr || "";
+  sel.addEventListener("change", () => { syncSeriesMeasure(host); syncExact(); scheduleEstimate(); });
+  ofWrap.querySelector(".series-of-column").addEventListener("change", () => {
+    syncSeriesMeasure(host); scheduleEstimate();
+  });
+  syncSeriesMeasure(host);
+}
+function attachSeriesBd(host, init) {
+  const data = init || {};
+  const wrap = document.createElement("div");
+  wrap.className = "series-bd";
+  wrap.innerHTML = (
+    "<label>Break down by</label>"
+    + '<select class="series-bd-column" aria-label="Break down by"></select>'
+    + '<input class="series-bd-json" placeholder="JSON key" autocomplete="off" aria-label="JSON key">'
+    + '<input class="series-bd-expr" placeholder="SQL expression" autocomplete="off" aria-label="Breakdown SQL">'
+  );
+  host.appendChild(wrap);
+  const sel = wrap.querySelector(".series-bd-column");
+  const want = data.breakdown_expr ? CUSTOM_BREAKDOWN : (data.breakdown_column || "");
+  paintBreakdownSelect(sel, want);
+  wrap.querySelector(".series-bd-json").value = data.breakdown_json_key || "";
+  wrap.querySelector(".series-bd-expr").value = data.breakdown_expr || "";
+  sel.addEventListener("change", () => { syncSeriesBd(wrap); syncBreakdownMode(); scheduleEstimate(); });
+  syncSeriesBd(wrap);
+  return wrap;
+}
+function chartBreakdownValue() {
+  const col = breakdownColumnEl.value;
+  const exprOn = col === CUSTOM_BREAKDOWN;
+  return {
+    breakdown_column: exprOn ? "" : col,
+    breakdown_json_key: document.getElementById("breakdown-json-wrap").hidden
+      ? ""
+      : (document.getElementById("breakdown_json_key").value || "").trim(),
+    breakdown_expr: exprOn ? (document.getElementById("breakdown_expr").value || "").trim() : "",
+  };
+}
+function copyBreakdownToSeries() {
+  const src = chartBreakdownValue();
+  document.querySelectorAll("#event-cards > .event-series").forEach((host) => {
+    const wrap = host.querySelector(":scope > .series-bd");
+    if (!wrap) return;
+    const sel = wrap.querySelector(".series-bd-column");
+    const want = src.breakdown_expr ? CUSTOM_BREAKDOWN : src.breakdown_column;
+    paintBreakdownSelect(sel, want);
+    wrap.querySelector(".series-bd-json").value = src.breakdown_json_key;
+    wrap.querySelector(".series-bd-expr").value = src.breakdown_expr;
+    syncSeriesBd(wrap);
+  });
+}
+function anySeriesHasBreakdown() {
+  return collectSeries().some((u) => u.breakdown_column || u.breakdown_expr);
+}
+function syncBreakdownMode() {
+  const per = breakdownBySeries();
+  document.getElementById("breakdown-chart").hidden = per;
+  document.querySelectorAll("#event-cards > .event-series > .series-bd").forEach((el) => {
+    el.hidden = !per;
+  });
+  document.querySelectorAll(".event-group-members .series-bd").forEach((el) => { el.hidden = true; });
+  const chartCol = breakdownColumnEl.value;
+  document.getElementById("breakdown-extra").hidden = per ? !anySeriesHasBreakdown() : !chartCol;
+}
+function readCard(card) {
+  return {
+    event: (card.querySelector(".event-card-name").value || "").trim(),
+    filters: [...card.querySelectorAll(".filter-line")].map(readFilterLine),
+  };
+}
+function addEventCard(init, parent, before) {
+  const data = init || {};
+  const nested = !!(parent && parent !== eventCardsEl);
+  const card = document.createElement("section");
+  card.className = "event-card";
+  card.innerHTML = (
+    '<div class="event-card-head">'
+    + '<select class="event-card-name" aria-label="Event"></select>'
+    + '<button type="button" class="linkish event-card-remove">Remove</button>'
+    + "</div>"
+    + '<div class="event-card-filters"></div>'
+    + '<div class="card-actions">'
+    + '<button type="button" class="linkish add-card-filter">Add filter</button>'
+    + (nested ? "" : '<button type="button" class="linkish event-card-combine">Combine</button>')
+    + "</div>"
+  );
+  const host = parent || eventCardsEl;
+  if (!nested) card.classList.add("event-series");
+  if (before) host.insertBefore(card, before);
+  else host.appendChild(card);
+  const nameSel = card.querySelector(".event-card-name");
+  fillEventNameSelect(nameSel, data.event || "");
+  nameSel.hidden = !eventColumnEl.value;
+  (data.filters || []).forEach((f) => addFilterLine(card.querySelector(".event-card-filters"), f));
+  if (!nested) {
+    attachSeriesMeasure(card, data);
+    attachSeriesBd(card, data);
+  }
+  card.querySelector(".add-card-filter").addEventListener("click", () => {
+    addFilterLine(card.querySelector(".event-card-filters"));
+    scheduleEstimate();
+  });
+  const combineBtn = card.querySelector(".event-card-combine");
+  if (combineBtn) combineBtn.addEventListener("click", () => combineCard(card));
+  card.querySelector(".event-card-remove").addEventListener("click", () => {
+    const nest = card.parentElement;
+    const root = nest === eventCardsEl;
+    card.remove();
+    if (root && !topSeriesCount()) addEventCard({});
+    else if (!root && nest && nest.classList.contains("event-group-members")
+      && nest.querySelectorAll(":scope > .event-card").length < 2) {
+      splitGroup(nest.parentElement);
+    }
+    scheduleEstimate();
+    syncStaleNotes();
+    syncBreakdownMode();
+  });
+  syncBreakdownMode();
+  return card;
+}
+function addAnyOf(members, bd, before) {
+  const group = document.createElement("section");
+  group.className = "event-group event-series";
+  group.innerHTML = (
+    '<div class="event-group-head">'
+    + '<span class="event-group-title">Any of</span>'
+    + '<button type="button" class="linkish event-group-split">Split</button>'
+    + '<button type="button" class="linkish event-group-remove">Remove</button>'
+    + "</div>"
+    + '<div class="event-group-members"></div>'
+    + '<div class="card-actions"><button type="button" class="linkish add-group-event">Add event</button></div>'
+  );
+  if (before) eventCardsEl.insertBefore(group, before);
+  else eventCardsEl.appendChild(group);
+  const nest = group.querySelector(".event-group-members");
+  const seed = members && members.length ? members : [{}, {}];
+  seed.forEach((m) => addEventCard(m, nest));
+  attachSeriesMeasure(group, bd || {});
+  attachSeriesBd(group, bd || {});
+  group.querySelector(".add-group-event").addEventListener("click", () => {
+    addEventCard({}, nest);
+    scheduleEstimate();
+  });
+  group.querySelector(".event-group-split").addEventListener("click", () => splitGroup(group));
+  group.querySelector(".event-group-remove").addEventListener("click", () => {
+    group.remove();
+    if (!topSeriesCount()) addEventCard({});
+    scheduleEstimate();
+    syncStaleNotes();
+    syncBreakdownMode();
+  });
+  syncBreakdownMode();
+  return group;
+}
+function combineCard(card) {
+  const data = readCard(card);
+  Object.assign(data, readSeriesBd(card), readSeriesMeasure(card));
+  addAnyOf([data, {}], Object.assign({}, readSeriesBd(card), readSeriesMeasure(card)), card);
+  card.remove();
+  scheduleEstimate();
+  syncStaleNotes();
+  syncBreakdownMode();
+}
+function splitGroup(group) {
+  if (!group || !group.classList.contains("event-group")) return;
+  const extra = Object.assign({}, readSeriesBd(group), readSeriesMeasure(group));
+  const members = [...group.querySelectorAll(":scope > .event-group-members > .event-card")].map((c) => {
+    return Object.assign(readCard(c), extra);
+  });
+  members.reverse().forEach((m) => addEventCard(m, eventCardsEl, group));
+  group.remove();
+  if (!topSeriesCount()) addEventCard({});
+  scheduleEstimate();
+  syncStaleNotes();
+  syncBreakdownMode();
+}
+function collectSeries() {
+  const units = [];
+  [...eventCardsEl.children].forEach((node) => {
+    if (node.classList.contains("event-group")) {
+      const members = [...node.querySelectorAll(":scope > .event-group-members > .event-card")].map(readCard);
+      units.push(Object.assign({ kind: "any_of", members }, readSeriesBd(node), readSeriesMeasure(node)));
+    } else if (node.classList.contains("event-card")) {
+      units.push(Object.assign(readCard(node), readSeriesBd(node), readSeriesMeasure(node)));
+    }
+  });
+  return units;
+}
+function seriesIncomplete() {
+  for (const unit of collectSeries()) {
+    const cards = unit.kind === "any_of" ? (unit.members || []) : [unit];
+    for (const card of cards) {
+      if (eventColumnEl.value && !card.event) return "Pick an event.";
+      for (const row of card.filters || []) {
+        if (row.expr) continue;
+        if (!row.column) continue;
+        if ((isJsonColumn(row.column) || row.json_key) && !row.json_key) return "Enter a JSON key.";
+        const kind = filterOpKind(row.op);
+        if (kind === "none") continue;
+        if (kind === "two" && (!(row.value || "").trim() || !(row.value_to || "").trim())) {
+          return "Enter a filter value.";
+        }
+        if (kind === "list") {
+          if (!(row.values || []).length && !(row.value || "").trim()) return "Enter a filter value.";
+          continue;
+        }
+        if (!(row.value || "").trim()) return "Enter a filter value.";
+      }
+    }
+    if (isPropertyMeasureValue(unit.measure) && !((unit.of_expr || "").trim() || (unit.of_column || "").trim())) {
+      return "Pick a column.";
+    }
+    if (isPropertyMeasureValue(unit.measure) && unit.of_column && (isJsonColumn(unit.of_column) || unit.of_json_key) && !unit.of_json_key) {
+      return "Enter a JSON key.";
+    }
+    if (breakdownBySeries() && unit.breakdown_column
+      && (isJsonColumn(unit.breakdown_column) || unit.breakdown_json_key)
+      && !unit.breakdown_json_key) return "Enter a JSON key.";
+  }
+  return "";
+}
+function seedSeries() {
+  const listed = Array.isArray(saved.series) ? saved.series : [];
+  if (listed.length) {
+    listed.forEach((unit) => {
+      if (unit && (unit.kind === "any_of" || unit.members || unit.any_of)) {
+        addAnyOf(unit.members || unit.any_of || [], withMeasure(unit));
+      } else addEventCard(withMeasure(unit || {}));
+    });
+    return;
+  }
+  const names = savedEventNames();
+  const filters = Array.isArray(saved.filters) ? saved.filters : [];
+  const measure = savedMeasureFields();
+  if (names.length > 1) {
+    addAnyOf(names.map((n) => ({ event: n, filters })), measure);
+    return;
+  }
+  addEventCard(Object.assign({ event: names[0] || "", filters }, measure));
+}
+document.getElementById("add-event").addEventListener("click", () => {
+  if (topSeriesCount() >= SERIES_CAP) return;
+  const last = eventCardsEl.querySelector(":scope > .event-series:last-child");
+  addEventCard(last ? readSeriesMeasure(last) : {});
+  if (breakdownBySeries()) copyBreakdownToSeries();
+  scheduleEstimate();
+  syncStaleNotes();
+});
+seedSeries();
+document.getElementById("breakdown_by_series").addEventListener("change", () => {
+  if (breakdownBySeries()) copyBreakdownToSeries();
+  syncBreakdownMode();
+  scheduleEstimate();
+  syncStaleNotes();
+});
 breakdownColumnEl.addEventListener("change", syncBreakdownUi);
 ofColumnEl.addEventListener("change", syncOfUi);
 function authBody() {
@@ -741,14 +1820,10 @@ async function post(url, body) {
 bindCachedList({
   items: cachedEventNames || [],
   paint: (items) => {
-    if (!eventColumnEl.value) {
-      eventValueWrap.hidden = true;
-      return;
-    }
-    eventValueWrap.hidden = false;
-    fillEventSelect(items, eventValueEl.value || saved.event_value);
+    eventNameCache = items || [];
+    document.querySelectorAll(".event-card-name").forEach((sel) => fillEventNameSelect(sel, sel.value));
   },
-  loadingFor: eventValueEl,
+  loadingFor: [document.getElementById("event_value")],
   refreshButtons: [document.getElementById("refresh-events")],
   loadIfEmpty: false,
   async load() {
@@ -968,37 +2043,17 @@ function bucketLabel(raw) {
   return m ? m[1] : s;
 }
 function relabelMeasures() {
-  const w = (document.getElementById("entity_label").value || "").trim() || "User";
-  const p = (document.getElementById("entity_label_plural").value || "").trim() || (w + "s");
-  const unique = "Unique " + p;
-  const avg = "Average per " + w;
-  for (const o of form.measure.options) {
-    if (o.value === "total") {
-      o.textContent = "Volume";
-      o.title = "Count of event rows in the bucket";
-    } else if (o.value === "uniques") {
-      o.textContent = unique;
-      o.title = "Count distinct of the mapped entity id (" + p + ")";
-    } else if (o.value === "average") {
-      o.textContent = avg;
-      o.title = "Volume divided by unique " + p.toLowerCase();
-    } else if (o.value === "sum") {
-      o.textContent = "Sum";
-      o.title = "Sum of a numeric column";
-    } else if (o.value === "property_average") {
-      o.textContent = "Average";
-      o.title = "Average of a numeric column";
-    } else if (o.value === "median") {
-      o.textContent = "Median";
-      o.title = "Median of a numeric column";
-    } else if (o.value === "distinct") {
-      o.textContent = "Distinct per " + w;
-      o.title = "Mean distinct values of a column per " + w.toLowerCase();
-    }
-  }
+  applyMeasureLabels(form.measure);
+  document.querySelectorAll(".series-measure").forEach((sel) => {
+    const v = sel.value;
+    applyMeasureLabels(sel);
+    sel.value = v;
+  });
 }
 function syncExact() {
-  const v = form.measure.value;
+  const measures = collectSeries().map((u) => u.measure);
+  const v = measures.find((m) => m === "uniques" || m === "average" || m === "median" || m === "distinct")
+    || form.measure.value;
   const show = v === "uniques" || v === "average" || v === "median" || v === "distinct";
   document.getElementById("exact-wrap").hidden = !show;
   const label = document.getElementById("exact-label");
@@ -1024,30 +2079,32 @@ relabelMeasures();
 syncExact();
 syncOfUi();
 syncTableHeaders();
-form.measure.addEventListener("change", () => {
-  syncExact();
-  syncOfUi();
-});
 
 function ofTitlePart() {
-  if (!isPropertyMeasure()) return "";
-  const col = (ofColumnEl.value || "").trim();
+  const u = collectSeries()[0] || {};
+  if (!isPropertyMeasureValue(u.measure)) return "";
+  if ((u.of_expr || "").trim()) return u.of_expr.trim();
+  const col = (u.of_column || "").trim();
   if (!col) return "";
-  if (col === CUSTOM_OF) return (document.getElementById("of_expr").value || "").trim();
-  const key = (document.getElementById("of_json_key").value || "").trim();
+  const key = (u.of_json_key || "").trim();
   return key ? col + "." + key : col;
 }
 function measureTitle() {
-  const label = (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "Events";
+  const host = eventCardsEl.querySelector(":scope > .event-series");
+  const sel = seriesMeasureSelect(host) || form.measure;
+  const label = (sel.selectedOptions[0] && sel.selectedOptions[0].textContent) || "Events";
   const of = ofTitlePart();
   if (!of) return label;
-  if (form.measure.value === "distinct") {
+  if (sel.value === "distinct") {
     return label.replace(/^Distinct per /, "Distinct " + of + " per ");
   }
   return label + " " + of;
 }
 function defaultTitle() {
-  const ev = (eventValueEl.value || "").trim();
+  const ev = collectSeries().map((u) => {
+    if (u.kind === "any_of") return (u.members || []).map((m) => m.event).filter(Boolean).join(" or ");
+    return u.event;
+  }).filter(Boolean).join(" · ");
   const bd = breakdownColumnEl.value;
   const bdKey = (document.getElementById("breakdown_json_key").value || "").trim();
   const by = !bd ? "" : (
@@ -1079,25 +2136,24 @@ function payload() {
   d.override_cap = document.getElementById("override_cap").checked;
   d.query_row_limit_run = String(effectiveRowLimit());
   d.include_other = document.getElementById("include_other").checked;
-  d.on = isPropertyMeasure() ? "property" : "events";
+  d.breakdown_by_series = breakdownBySeries();
+  d.series = collectSeries();
+  const first = d.series[0] || {};
+  d.measure = first.measure || "uniques";
+  d.on = first.on || (isPropertyMeasureValue(d.measure) ? "property" : "events");
+  d.of_column = first.of_column || "";
+  d.of_expr = first.of_expr || "";
+  d.of_json_key = first.of_json_key || "";
+  const names = d.series.flatMap((u) => u.kind === "any_of" ? (u.members || []).map((m) => m.event) : [u.event]).filter(Boolean);
+  d.event_values = names;
+  d.event_value = names[0] || "";
+  d.filters = [];
   if (d.breakdown_column === CUSTOM_BREAKDOWN) {
     d.breakdown_column = "";
     d.breakdown_json_key = "";
   } else {
     d.breakdown_expr = "";
     if (document.getElementById("breakdown-json-wrap").hidden) d.breakdown_json_key = "";
-  }
-  if (d.of_column === CUSTOM_OF) {
-    d.of_column = "";
-    d.of_json_key = "";
-  } else {
-    d.of_expr = "";
-    if (document.getElementById("of-json-wrap").hidden) d.of_json_key = "";
-  }
-  if (!isPropertyMeasure()) {
-    d.of_column = "";
-    d.of_expr = "";
-    d.of_json_key = "";
   }
   return d;
 }
@@ -1117,7 +2173,9 @@ let estimateGen = 0;
 let estimateTimer = 0;
 function estimateKey(body) {
   return [
-    body.table, body.event_value, body.grain, body.range_mode, body.range_n,
+    body.table, JSON.stringify(body.series || []), JSON.stringify(body.event_values || []),
+    body.breakdown_by_series,
+    body.event_value, body.grain, body.range_mode, body.range_n,
     body.range_unit, body.include_current, body.measure, body.custom_kind,
     body.start_date, body.end_date, body.rel_start_n, body.rel_end_n,
     body.override_cap, body.bytes_cap_override_gb, body.bytes_cap_gb,
@@ -1142,7 +2200,7 @@ async function runEstimate() {
     wrap.hidden = true;
     return;
   }
-  if (eventColumnEl.value && !(body.event_value || "").trim()) {
+  if (seriesIncomplete()) {
     wrap.hidden = true;
     return;
   }
@@ -1200,11 +2258,7 @@ async function compileSql() {
     showSql("");
     return;
   }
-  if (isPropertyMeasure() && !((body.of_expr || "").trim() || (body.of_column || "").trim())) {
-    showSql("");
-    return;
-  }
-  if (!document.getElementById("of-json-wrap").hidden && !(body.of_json_key || "").trim()) {
+  if (seriesIncomplete()) {
     showSql("");
     return;
   }
@@ -1253,7 +2307,9 @@ function csvCell(value) {
 }
 function resultKey(body) {
   return [
-    body.table, body.event_value, body.grain, body.range_mode, body.range_n,
+    body.table, JSON.stringify(body.series || []), JSON.stringify(body.event_values || []),
+    body.breakdown_by_series,
+    body.event_value, body.grain, body.range_mode, body.range_n,
     body.range_unit, body.include_current, body.measure, body.custom_kind,
     body.start_date, body.end_date, body.rel_start_n, body.rel_end_n,
     body.on, body.of_column, body.of_expr, body.of_json_key,
@@ -1267,7 +2323,12 @@ function draftGrainHeader() {
   return g ? g.charAt(0).toUpperCase() + g.slice(1) : "Day";
 }
 function draftValueHeader() {
-  return (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "Value";
+  const units = collectSeries();
+  const measures = [...new Set(units.map((u) => u.measure || "uniques"))];
+  if (measures.length !== 1) return "Value";
+  const host = eventCardsEl.querySelector(":scope > .event-series");
+  const sel = seriesMeasureSelect(host);
+  return (sel && sel.selectedOptions[0] && sel.selectedOptions[0].textContent) || "Value";
 }
 function draftSeriesHeader() {
   const col = (form.breakdown_column && form.breakdown_column.value) || "";
@@ -1789,19 +2850,12 @@ form.addEventListener("submit", async (e) => {
     setError("Mapping is incomplete. Open Setup.");
     return;
   }
-  if (eventColumnEl.value && !(body.event_value || "").trim()) {
-    setError("Pick an event.");
+  const seriesErr = seriesIncomplete();
+  if (seriesErr) {
+    setError(seriesErr);
     return;
   }
-  if (isPropertyMeasure() && !((body.of_expr || "").trim() || (body.of_column || "").trim())) {
-    setError("Pick a column.");
-    return;
-  }
-  if (!document.getElementById("of-json-wrap").hidden && !(body.of_json_key || "").trim()) {
-    setError("Enter a JSON key.");
-    return;
-  }
-  if (!document.getElementById("breakdown-json-wrap").hidden && !(body.breakdown_json_key || "").trim()) {
+  if (!breakdownBySeries() && !document.getElementById("breakdown-json-wrap").hidden && !(body.breakdown_json_key || "").trim()) {
     setError("Enter a JSON key.");
     return;
   }

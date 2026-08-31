@@ -7,6 +7,7 @@ import pytest
 from datetime import date
 
 from factcat import events_sql
+from factcat_app.filters import FILTER_FAMILY_OPS, FILTER_OP_META
 from factcat_app.query import (
     EVENT_VALUE_LIMIT,
     annotate_incomplete,
@@ -368,9 +369,9 @@ def test_lookback_too_large_is_rejected():
         spec_from_form(_form(lookback_days=3651))
 
 
-def test_event_column_without_value_is_no_filter():
-    spec = spec_from_form(_form(event_column="event_name", event_value=""))
-    assert "event_name =" not in spec.where
+def test_event_column_without_value_is_rejected():
+    with pytest.raises(ValueError, match="event name is required"):
+        spec_from_form(_form(event_column="event_name", event_value=""))
 
 
 def test_event_value_without_column_is_rejected():
@@ -554,6 +555,143 @@ def test_json_key_rejected_for_snowflake():
         )
 
 
+def test_two_event_names_compile_to_in():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_values=["started", "completed"],
+        )
+    )
+    assert "event_name IN ('started', 'completed')" in spec.where
+    assert "event_name = 'started'" not in spec.where
+
+
+def test_one_event_name_stays_equals():
+    spec = spec_from_form(
+        _form(event_column="event_name", event_values=["paid"])
+    )
+    assert "event_name = 'paid'" in spec.where
+    assert " IN (" not in spec.where
+
+
+def test_event_values_win_over_event_value():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="ignored",
+            event_values=["started", "completed"],
+        )
+    )
+    assert "ignored" not in spec.where
+    assert "event_name IN ('started', 'completed')" in spec.where
+
+
+def test_filter_is_and_is_not():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {"column": "country", "op": "is", "value": "UK"},
+                {"join": "AND", "column": "plan", "op": "is_not", "value": "free"},
+            ],
+        )
+    )
+    assert "event_name = 'paid'" in spec.where
+    assert "country = 'UK'" in spec.where
+    assert "plan <> 'free'" in spec.where
+    assert spec.where.count(" AND ") >= 2
+
+
+def test_filter_in_and_null():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {"column": "country", "op": "is_any_of", "value": "UK, IE"},
+                {"join": "AND", "column": "plan", "op": "is_null"},
+            ],
+        )
+    )
+    assert "country IN ('UK', 'IE')" in spec.where
+    assert "plan IS NULL" in spec.where
+
+
+def test_filter_none_of_and_not_null():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {"column": "country", "op": "is_none_of", "value": "US\nUK"},
+                {"join": "AND", "column": "plan", "op": "is_not_null"},
+            ],
+        )
+    )
+    assert "country NOT IN ('US', 'UK')" in spec.where
+    assert "plan IS NOT NULL" in spec.where
+
+
+def test_filter_numeric_literal_unquoted():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "amount",
+                    "op": "is",
+                    "value": "10",
+                    "type": "INT64",
+                }
+            ],
+        )
+    )
+    assert "amount = 10" in spec.where
+    assert "amount = '10'" not in spec.where
+
+
+def test_filter_json_key_is_json_value():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "properties",
+                    "json_key": "plan",
+                    "op": "is",
+                    "value": "pro",
+                }
+            ],
+        )
+    )
+    assert "JSON_VALUE(properties, '$.plan') = 'pro'" in spec.where
+
+
+def test_filter_sql_expression_interpolated():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[{"expr": "amount > 0"}],
+        )
+    )
+    assert "amount > 0" in spec.where
+
+
+def test_filter_sql_expression_rejects_statements():
+    with pytest.raises(ValueError, match="single SQL expression"):
+        spec_from_form(
+            _form(
+                event_column="event_name",
+                event_value="paid",
+                filters=[{"expr": "amount > 0; drop table x"}],
+            )
+        )
+
+
 def test_snowflake_events_sql_uses_convert_timezone():
     sql = events_sql_from_form(
         _form(
@@ -565,6 +703,749 @@ def test_snowflake_events_sql_uses_convert_timezone():
     assert "CONVERT_TIMEZONE" in sql.upper()
     assert "JSON_VALUE" not in sql.upper()
     assert "MAXIMUMBYTESBILLED" not in sql.upper()
+
+
+def test_filter_mixed_and_or_is_left_folded():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {"column": "country", "op": "is", "value": "UK"},
+                {"join": "OR", "column": "country", "op": "is", "value": "IE"},
+                {"join": "AND", "column": "plan", "op": "is", "value": "pro"},
+            ],
+        )
+    )
+    assert (
+        "(country = 'UK' OR country = 'IE') AND plan = 'pro'" in spec.where
+        or "((country = 'UK' OR country = 'IE') AND plan = 'pro')" in spec.where
+    )
+
+
+def test_filter_matrix_ops_are_defined():
+    for ops in FILTER_FAMILY_OPS.values():
+        for op in ops:
+            assert op in FILTER_OP_META
+            assert FILTER_OP_META[op]["value"] in {"none", "one", "two", "list"}
+
+
+def test_filter_boolean_is_true():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[{"column": "active", "op": "is_true", "type": "BOOL"}],
+        )
+    )
+    assert "active IS TRUE" in spec.where
+
+
+def test_filter_integer_rejects_decimal():
+    with pytest.raises(ValueError, match="whole number"):
+        spec_from_form(
+            _form(
+                event_column="event_name",
+                event_value="paid",
+                filters=[
+                    {
+                        "column": "n",
+                        "op": "is",
+                        "value": "10.5",
+                        "type": "INT64",
+                    }
+                ],
+            )
+        )
+
+
+def test_filter_float_allows_decimal():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "amount",
+                    "op": "gt",
+                    "value": "10.5",
+                    "type": "FLOAT64",
+                }
+            ],
+        )
+    )
+    assert "amount > 10.5" in spec.where
+
+
+def test_filter_week_of_year_rejects_out_of_range():
+    with pytest.raises(ValueError, match="at most 53"):
+        spec_from_form(
+            _form(
+                event_column="event_name",
+                event_value="paid",
+                filters=[
+                    {
+                        "column": "dt",
+                        "op": "is",
+                        "value": "54",
+                        "type": "DATE",
+                        "date_part": "week_of_year",
+                    }
+                ],
+            )
+        )
+
+
+def test_filter_numeric_comparisons_and_between():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {"column": "amount", "op": "gte", "value": "10", "type": "INT64"},
+                {"join": "AND", "column": "amount", "op": "between", "value": "1", "value_to": "9", "type": "FLOAT64"},
+            ],
+        )
+    )
+    assert "amount >= 10" in spec.where
+    assert "amount >= 1 AND amount <= 9" in spec.where
+
+
+def test_filter_trunc_month_on_date():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "dt",
+                    "op": "is",
+                    "value": "2026-05-18",
+                    "type": "DATE",
+                    "date_part": "month",
+                }
+            ],
+        )
+    )
+    assert "DATE_TRUNC(dt, MONTH) = DATE_TRUNC(DATE '2026-05-18', MONTH)" in spec.where
+    ym = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "dt",
+                    "op": "is",
+                    "value": "2026-05",
+                    "type": "DATE",
+                    "date_part": "month",
+                }
+            ],
+        )
+    )
+    assert "DATE_TRUNC(DATE '2026-05-01', MONTH)" in ym.where
+
+
+def test_filter_trunc_month_on_event_time():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "occurred_at",
+                    "op": "is",
+                    "value": "2026-05-18",
+                    "type": "TIMESTAMP",
+                    "date_part": "month",
+                }
+            ],
+        )
+    )
+    assert (
+        "DATE_TRUNC(DATE(factcat_as_instant(occurred_at), 'UTC'), MONTH)"
+        in spec.where
+    )
+    assert "DATE_TRUNC(DATE '2026-05-18', MONTH)" in spec.where
+
+
+def test_filter_day_of_week():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "occurred_at",
+                    "op": "is_any_of",
+                    "values": ["Saturday", "sunday"],
+                    "type": "TIMESTAMP",
+                    "date_part": "day_of_week",
+                }
+            ],
+        )
+    )
+    assert "FORMAT_DATE('%A', DATE(factcat_as_instant(occurred_at), 'UTC'))" in spec.where
+    assert "IN ('Saturday', 'Sunday')" in spec.where
+
+
+def test_filter_month_of_year():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "dt",
+                    "op": "is",
+                    "value": "May",
+                    "type": "DATE",
+                    "date_part": "month_of_year",
+                }
+            ],
+        )
+    )
+    assert "FORMAT_DATE('%B', dt) = 'May'" in spec.where
+
+
+def test_filter_day_of_month_numeric():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "dt",
+                    "op": "gte",
+                    "value": "15",
+                    "type": "DATE",
+                    "date_part": "day_of_month",
+                }
+            ],
+        )
+    )
+    assert "EXTRACT(DAY FROM dt) >= 15" in spec.where
+
+
+def test_filter_hour_on_timestamp():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "occurred_at",
+                    "op": "between",
+                    "value": "9",
+                    "value_to": "17",
+                    "type": "TIMESTAMP",
+                    "date_part": "hour_of_day",
+                }
+            ],
+        )
+    )
+    assert (
+        "EXTRACT(HOUR FROM DATETIME(factcat_as_instant(occurred_at), 'UTC')) >= 9"
+        in spec.where
+    )
+    assert (
+        "EXTRACT(HOUR FROM DATETIME(factcat_as_instant(occurred_at), 'UTC')) <= 17"
+        in spec.where
+    )
+
+
+def test_filter_year_is_four_digits():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "dt",
+                    "op": "is",
+                    "value": "2026",
+                    "type": "DATE",
+                    "date_part": "year",
+                }
+            ],
+        )
+    )
+    assert "EXTRACT(YEAR FROM dt) = 2026" in spec.where
+    with pytest.raises(ValueError, match="year must be four digits"):
+        spec_from_form(
+            _form(
+                event_column="event_name",
+                event_value="paid",
+                filters=[
+                    {
+                        "column": "dt",
+                        "op": "is",
+                        "value": "26",
+                        "type": "DATE",
+                        "date_part": "year",
+                    }
+                ],
+            )
+        )
+
+
+def test_filter_day_of_year():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "dt",
+                    "op": "lte",
+                    "value": "31",
+                    "type": "DATE",
+                    "date_part": "day_of_year",
+                }
+            ],
+        )
+    )
+    assert "EXTRACT(DAYOFYEAR FROM dt) <= 31" in spec.where
+
+
+def test_filter_same_hour():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "occurred_at",
+                    "op": "is",
+                    "value": "2026-05-18",
+                    "value_time": "14:30",
+                    "type": "TIMESTAMP",
+                    "date_part": "hour",
+                }
+            ],
+        )
+    )
+    assert (
+        "DATETIME_TRUNC(DATETIME(factcat_as_instant(occurred_at), 'UTC'), HOUR)"
+        in spec.where
+    )
+    assert "DATETIME_TRUNC(DATETIME '2026-05-18 14:30:00', HOUR)" in spec.where
+
+
+def test_filter_hour_on_date_is_rejected():
+    with pytest.raises(ValueError, match="hour is not a date part"):
+        spec_from_form(
+            _form(
+                event_column="event_name",
+                event_value="paid",
+                filters=[
+                    {
+                        "column": "dt",
+                        "op": "is",
+                        "value": "9",
+                        "type": "DATE",
+                        "date_part": "hour_of_day",
+                    }
+                ],
+            )
+        )
+
+
+def test_filter_date_before():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[{"column": "dt", "op": "before", "value": "2026-08-01", "type": "DATE"}],
+        )
+    )
+    assert "dt < DATE '2026-08-01'" in spec.where
+
+
+def test_filter_time_between():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "t",
+                    "op": "between",
+                    "value": "09:00",
+                    "value_to": "17:30:00",
+                    "type": "TIME",
+                }
+            ],
+        )
+    )
+    assert "t >= TIME '09:00:00'" in spec.where
+    assert "t <= TIME '17:30:00'" in spec.where
+
+
+def test_event_time_filter_is_that_day():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "occurred_at",
+                    "op": "is",
+                    "value": "2026-08-01",
+                    "type": "TIMESTAMP",
+                }
+            ],
+        )
+    )
+    assert "factcat_as_instant(occurred_at) >= factcat_ts_at_date(DATE '2026-08-01', 'UTC', 'utc')" in spec.where
+    assert "factcat_as_instant(occurred_at) < factcat_ts_at_date(DATE '2026-08-02', 'UTC', 'utc')" in spec.where
+
+
+def test_other_timestamp_is_stored_clock():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "trial_ends_at",
+                    "op": "on_or_after",
+                    "value": "2026-08-01",
+                    "type": "TIMESTAMP",
+                }
+            ],
+        )
+    )
+    assert "trial_ends_at >= TIMESTAMP '2026-08-01 00:00:00'" in spec.where
+    assert "factcat_as_instant(trial_ends_at)" not in spec.where
+
+
+def test_filter_contains_is_like_case_insensitive():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[{"column": "course_code", "op": "contains", "value": "xyz"}],
+        )
+    )
+    assert "LOWER(course_code) LIKE LOWER('%xyz%') ESCAPE '#'" in spec.where
+
+
+def test_filter_values_list_is_tokens():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "course_code",
+                    "op": "starts_with",
+                    "values": ["AB", "CD"],
+                    "case_sensitive": True,
+                }
+            ],
+        )
+    )
+    assert (
+        "(course_code LIKE 'AB%' ESCAPE '#' OR course_code LIKE 'CD%' ESCAPE '#')"
+        in spec.where
+    )
+
+
+def test_filter_starts_with_several_patterns():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "course_code",
+                    "op": "starts_with",
+                    "value": "AB, CD",
+                    "case_sensitive": True,
+                }
+            ],
+        )
+    )
+    assert "(course_code LIKE 'AB%' ESCAPE '#' OR course_code LIKE 'CD%' ESCAPE '#')" in spec.where
+
+
+def test_filter_like_escapes_wildcards():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[{"column": "name", "op": "contains", "value": "100%", "case_sensitive": True}],
+        )
+    )
+    assert "name LIKE '%100#%%' ESCAPE '#'" in spec.where
+
+
+def test_filter_does_not_contain_ands_negations():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[{"column": "name", "op": "not_contains", "value": "foo, bar"}],
+        )
+    )
+    assert "NOT (LOWER(name) LIKE LOWER('%foo%') ESCAPE '#')" in spec.where
+    assert "NOT (LOWER(name) LIKE LOWER('%bar%') ESCAPE '#')" in spec.where
+
+
+def test_json_contains_is_string_like():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "properties",
+                    "json_key": "plan",
+                    "op": "contains",
+                    "value": "pro",
+                    "type": "JSON",
+                }
+            ],
+        )
+    )
+    assert (
+        "LOWER(JSON_VALUE(properties, '$.plan')) LIKE LOWER('%pro%') ESCAPE '#'"
+        in spec.where
+    )
+
+
+def test_series_event_time_filter_uses_form_clock():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            series=[
+                {
+                    "event": "started",
+                    "filters": [
+                        {
+                            "column": "occurred_at",
+                            "op": "before",
+                            "value": "2026-08-15",
+                            "type": "TIMESTAMP",
+                        }
+                    ],
+                }
+            ],
+        )
+    )
+    assert "event_name = 'started'" in spec.where
+    assert "factcat_as_instant(occurred_at) < factcat_ts_at_date(DATE '2026-08-15', 'UTC', 'utc')" in spec.where
+
+
+def test_day_of_week_filter_transpiles_without_sqlglot_warning(caplog):
+    import logging
+
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "occurred_at",
+                    "op": "is",
+                    "value": "Monday",
+                    "type": "TIMESTAMP",
+                    "date_part": "day_of_week",
+                }
+            ],
+        )
+    )
+    with caplog.at_level(logging.WARNING, logger="sqlglot"):
+        sql = events_sql(spec, dialect="bigquery")
+    assert not [r.message for r in caplog.records if r.name.startswith("sqlglot")]
+    assert "FORMAT_DATE" in sql.upper() or "DAYOFWEEK" in sql.upper() or "%A" in sql
+
+
+def test_contains_filter_transpiles_without_sqlglot_warning(caplog):
+    import logging
+
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[{"column": "name", "op": "contains", "value": "xyz"}],
+        )
+    )
+    with caplog.at_level(logging.WARNING, logger="sqlglot"):
+        sql = events_sql(spec, dialect="bigquery")
+    assert not [r.message for r in caplog.records if r.name.startswith("sqlglot")]
+    assert "LIKE" in sql.upper()
+
+
+def test_filter_wrong_op_for_boolean_is_rejected():
+    with pytest.raises(ValueError, match="filter operator is not supported"):
+        spec_from_form(
+            _form(
+                event_column="event_name",
+                event_value="paid",
+                filters=[{"column": "active", "op": "contains", "value": "x", "type": "BOOL"}],
+            )
+        )
+
+
+def test_filter_empty_value_is_rejected():
+    with pytest.raises(ValueError, match="filter value is required"):
+        spec_from_form(
+            _form(
+                event_column="event_name",
+                event_value="paid",
+                filters=[{"column": "country", "op": "is", "value": ""}],
+            )
+        )
+
+
+def test_series_card_owns_filters():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            series=[
+                {
+                    "event": "started",
+                    "filters": [{"column": "course_code", "op": "is", "value": "XYZ"}],
+                }
+            ],
+        )
+    )
+    assert "event_name = 'started'" in spec.where
+    assert "course_code = 'XYZ'" in spec.where
+
+
+def test_any_of_is_or_with_per_member_filters():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            series=[
+                {
+                    "kind": "any_of",
+                    "members": [
+                        {
+                            "event": "started",
+                            "filters": [
+                                {"column": "course_code", "op": "is", "value": "XYZ"}
+                            ],
+                        },
+                        {"event": "completed", "filters": []},
+                    ],
+                }
+            ],
+        )
+    )
+    assert (
+        "(event_name = 'started' AND course_code = 'XYZ') OR event_name = 'completed'"
+        in spec.where
+        or "(event_name = 'started' AND course_code = 'XYZ') OR (event_name = 'completed')"
+        in spec.where
+    )
+
+
+def test_overlay_per_series_breakdown():
+    sql = events_sql_from_form(
+        _form(
+            event_column="event_name",
+            breakdown_by_series=True,
+            series=[
+                {"event": "started", "breakdown_column": "country"},
+                {"event": "completed"},
+            ],
+        )
+    )
+    assert "UNION ALL" in sql
+    assert "CONCAT('started', ' · ', CAST(country AS STRING)) AS series" in sql
+    assert "'completed' AS series" in sql
+
+
+def test_series_measure_overrides_chart_measure():
+    spec = spec_from_form(
+        _form(
+            measure="uniques",
+            event_column="event_name",
+            series=[{"event": "paid", "measure": "total"}],
+        )
+    )
+    assert spec.measure == "total"
+    assert spec.on == "events"
+
+
+def test_series_property_measure_uses_of():
+    spec = spec_from_form(
+        _form(
+            measure="uniques",
+            event_column="event_name",
+            series=[{"event": "paid", "measure": "sum", "of_column": "revenue"}],
+        )
+    )
+    assert spec.measure == "sum"
+    assert spec.on == "property"
+    assert spec.of == "revenue"
+
+
+def test_combined_series_measure_is_on_the_nest():
+    spec = spec_from_form(
+        _form(
+            measure="uniques",
+            event_column="event_name",
+            series=[
+                {
+                    "kind": "any_of",
+                    "measure": "total",
+                    "members": [{"event": "started"}, {"event": "completed"}],
+                }
+            ],
+        )
+    )
+    assert spec.measure == "total"
+    assert "event_name = 'started'" in spec.where
+    assert "event_name = 'completed'" in spec.where
+
+
+def test_overlay_per_series_measure():
+    sql = events_sql_from_form(
+        _form(
+            event_column="event_name",
+            series=[
+                {"event": "started", "measure": "total"},
+                {
+                    "event": "completed",
+                    "measure": "sum",
+                    "of_column": "revenue",
+                },
+            ],
+        )
+    )
+    assert "UNION ALL" in sql
+    upper = sql.upper()
+    assert "COUNT(*)" in upper.replace(" ", "") or "COUNT(*)" in sql.upper()
+    assert "SUM(" in sql.upper()
+    assert "revenue" in sql
+
+
+def test_overlay_union_labels_series():
+    sql = events_sql_from_form(
+        _form(
+            event_column="event_name",
+            series=[{"event": "started"}, {"event": "completed"}],
+        )
+    )
+    assert "UNION ALL" in sql
+    assert "'started' AS series" in sql
+    assert "'completed' AS series" in sql
+
+
+def test_empty_filter_row_is_skipped():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[{}, {"column": "country", "op": "is", "value": "UK"}],
+        )
+    )
+    assert "country = 'UK'" in spec.where
 
 
 def test_json_breakdown_extracts_key():
