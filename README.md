@@ -264,7 +264,10 @@ timestamp. Catalog lists load when you open a dropdown, not when you
 visit the page. **Save** writes `.factcat.json` and, if an event-name
 column is mapped, runs DISTINCT on the last 90 days and caches the names.
 It stays on Setup and shows **Saved**. Setup is a separate control at the
-bottom of the left rail, not an analysis.
+bottom of the left rail, not an analysis. **Preferences** sits above it
+(wording, thousand/decimal separators, weekday/month display).
+Those follow the person in `~/.factcat/preferences.json`, not the project
+file.
 
 **BigQuery.** After the extra is present: `gcloud auth application-default login`
 and `gcloud config set project YOUR_GCP_PROJECT`. Billing project from ADC, then
@@ -293,8 +296,11 @@ default to complete periods so the first bar is a full week or month.
 Include this week/month is opt-in and the current bar is marked incomplete.
 Custom is specific dates (snapped to the grain) or relative (12 weeks ago
 to 3 weeks ago; 0 = this grain). Sugar on `event_time`, not a period enum.
-**Refresh list** always writes the event-name cache. **Formatting** on Setup is week start plus thousand/decimal separators
-for chart and table numbers. Catalog dropdowns are alphabetical.
+**Refresh list** always writes the event-name cache. Week start and reporting
+timezone stay on Setup (they change SQL). Thousand/decimal separators, wording
+(business user / SQL analyst), and weekday/month display are **Preferences**; number filters
+use those separators, and the SQL pane stays warehouse SQL (period decimal, no
+grouping). Catalog dropdowns are alphabetical.
 Entity lists string and integer columns; timestamp lists TIMESTAMP /
 DATETIME.
 

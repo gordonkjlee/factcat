@@ -35,7 +35,7 @@ def test_unmapped_root_redirects_to_setup(monkeypatch, tmp_path):
     client = TestClient(app)
     res = client.get("/", follow_redirects=False)
     assert res.status_code == 303
-    assert res.headers["location"] == "/setup"
+    assert res.headers["location"] == "/setup?events=1"
 
 
 def test_setup_renders(monkeypatch, tmp_path):
@@ -75,11 +75,14 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "Plural" in res.text
     assert "Event name column" in res.text
     assert "Week starts on" in res.text
-    assert "Formatting" in res.text
-    assert "Thousand separator" in res.text
-    assert "Decimal separator" in res.text
-    assert 'id="thousand_sep"' in res.text
-    assert 'id="decimal_sep"' in res.text
+    assert "Formatting" not in res.text
+    assert "Thousand separator" not in res.text
+    assert "Decimal separator" not in res.text
+    assert 'id="thousand_sep"' not in res.text
+    assert 'id="decimal_sep"' not in res.text
+    assert "Limits" in res.text
+    assert 'href="/preferences"' in res.text
+    assert "rail-foot" in res.text
     assert ">Other<" in res.text
     assert 'value="User"' in res.text
     assert "Volume" not in res.text
@@ -103,11 +106,21 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "Result row limit" in res.text
     assert 'id="query_row_limit"' in res.text
     assert "Save and open Events" not in res.text
+    assert "Events opens after this mapping is saved." not in res.text
     assert 'id="save"' in res.text
     assert ">Save<" in res.text
     assert "window.location.href" not in res.text
     assert "Saved" in res.text
     assert "catalog: true" in res.text
+
+
+def test_setup_explains_events_redirect(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr("factcat_app.main.bootstrap_project", lambda: "adc-project")
+    client = TestClient(app)
+    res = client.get("/setup?events=1")
+    assert res.status_code == 200
+    assert "Events opens after this mapping is saved." in res.text
 
 
 def test_events_renders_when_mapped(monkeypatch, tmp_path):
@@ -177,7 +190,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert 'v === "uniques" || v === "average"' in res.text
     assert "Break down by" in res.text
     assert "Show (other)" in res.text
-    assert "SQL expression…" in res.text
+    assert "SQL expression" in res.text
+    assert "sql_expr_ellipsis" in res.text
     assert 'id="breakdown_at"' in res.text
     assert 'value="rows"' in res.text
     assert "On each event" not in res.text
@@ -864,6 +878,7 @@ def test_template_ships_with_package():
     assert (templates / "index.html").is_file()
     assert (templates / "setup.html").is_file()
     assert (templates / "base.html").is_file()
+    assert (templates / "preferences.html").is_file()
     static = Path(APP_DIR) / "static"
     assert (static / "logo.png").is_file()
     assert (static / "catalog.js").is_file()
@@ -871,6 +886,8 @@ def test_template_ships_with_package():
     assert not (static / "logo.svg").exists()
     assert not (static / "favicon.ico").exists()
     assert (static / "waiting.jpg").is_file()
+    assert (static / "cat-business.jpg").is_file()
+    assert (static / "cat-analyst.jpg").is_file()
     assert (Path(APP_DIR) / "guides" / "setup-bigquery.md").is_file()
     assert (Path(APP_DIR) / "guides" / "setup-snowflake.md").is_file()
 
@@ -896,12 +913,16 @@ def test_chrome_uses_tokens_and_empty_state(monkeypatch, tmp_path):
     client = TestClient(app)
     setup = client.get("/setup").text
     assert "--fc-ochre: #C4841D" in setup
+    assert 'html[data-theme="dark"]' in setup
     assert "/static/logo.png" in setup
     assert 'class="cog"' in setup
+    assert ".rail-item.active" in setup
+    assert "background: var(--fc-ochre)" in setup
     assert "purrfect" not in setup.lower()
     _map_cfg(tmp_path, monkeypatch)
     events = client.get("/").text
     assert "--fc-ochre: #C4841D" in events
+    assert 'html[data-theme="dark"]' in events
     assert "/static/logo.png" in events
     assert 'class="cog"' in events
     assert "/static/waiting.jpg" in events
@@ -919,6 +940,8 @@ def test_readme_keeps_slogan_and_points_at_the_mark():
     assert "setup-bigquery.md" in text
     assert "setup-snowflake.md" in text
     assert "factcat[snowflake]" in text
+    assert "Preferences" in text
+    assert "~/.factcat/preferences.json" in text
 
 
 def test_mapping_ready_requires_table_entity_and_time():
@@ -1192,6 +1215,113 @@ def test_non_catalog_event_values_do_not_write_cache(monkeypatch, tmp_path):
     assert res.status_code == 200
     saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
     assert saved["event_names"] == ["keep"]
+
+
+def test_preferences_renders(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr("factcat_app.main.bootstrap_project", lambda: "adc-project")
+    client = TestClient(app)
+    res = client.get("/preferences")
+    assert res.status_code == 200
+    assert "<h1>User Preferences</h1>" in res.text
+    assert "Follows you" not in res.text
+    assert "Thousand separator" in res.text
+    assert "Decimal separator" in res.text
+    assert 'id="vocab"' in res.text
+    assert "I'm a business user" in res.text
+    assert "I'm an analyst familiar with SQL" in res.text
+    assert "Factcat will tailor its wording for you." in res.text
+    assert "/static/cat-business.jpg" in res.text
+    assert "/static/cat-analyst.jpg" in res.text
+    assert "Wording" in res.text
+    assert "Vocabulary" not in res.text
+    assert ">Plain<" not in res.text
+    assert "Stored operators" not in res.text
+    assert "Warehouse EXTRACT" not in res.text
+    assert "Monday" in res.text
+    assert ">Mon<" in res.text
+    assert "January" in res.text
+    assert ">Jan<" in res.text
+    assert "1–31 / 0–23" in res.text
+    assert "01–31 / 00–23" in res.text
+    assert 'id="theme-btn"' in res.text
+    assert "the palette is not applied yet" not in res.text
+    assert "<h1>Project setup</h1>" not in res.text
+    assert 'href="/setup"' in res.text
+    assert "data-theme=" in res.text
+
+
+def test_preferences_save_roundtrip(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    res = client.post(
+        "/api/preferences",
+        json={
+            "thousand_sep": "period",
+            "decimal_sep": "comma",
+            "vocab": "sql",
+            "weekday_style": "short",
+            "month_style": "short",
+            "pad_calendar": True,
+            "theme": "dark",
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["prefs"]["vocab"] == "sql"
+    assert body["prefs"]["decimal_sep"] == "comma"
+    stored = json.loads((tmp_path / "preferences.json").read_text(encoding="utf-8"))
+    assert stored["theme"] == "dark"
+    html = client.get("/preferences").text
+    assert "selected" in html
+    assert 'data-theme="dark"' in html
+    events = client.get("/setup").text
+    assert 'id="thousand_sep"' not in events
+
+
+def test_preferences_rejects_same_separators(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    res = client.post(
+        "/api/preferences",
+        json={"thousand_sep": "comma", "decimal_sep": "comma"},
+    )
+    assert res.status_code == 400
+    assert "differ" in res.json()["error"]
+
+
+def test_events_sql_vocab(monkeypatch, tmp_path):
+    from factcat_app.prefs import save as save_prefs
+
+    _map_cfg(tmp_path, monkeypatch)
+    save_prefs({"vocab": "sql", "weekday_style": "short", "pad_calendar": True})
+    html = TestClient(app).get("/").text
+    assert "GROUP BY" in html
+    assert '"vocab": "sql"' in html
+    assert "Break down by" not in html
+    assert "is any of" not in html
+    assert '"label": "IN"' in html
+    assert "Hour of day (00-23)" in html
+    assert "Day of month (01-31)" in html
+    assert ">Mon<" in html or '"Mon"' in html
+
+
+def test_save_strips_separators_from_project(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    client.post(
+        "/api/save",
+        json={
+            "project": "acme",
+            "thousand_sep": "space",
+            "decimal_sep": "comma",
+        },
+    )
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert "thousand_sep" not in saved
+    assert "decimal_sep" not in saved
+    assert saved["project"] == "acme"
 
 
 def test_columns_list_names(monkeypatch, tmp_path):

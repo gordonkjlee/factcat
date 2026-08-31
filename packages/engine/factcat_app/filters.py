@@ -254,6 +254,69 @@ FILTER_OP_NUMERIC_LABELS = {
     "lte": "at most (\u2264)",
 }
 
+FILTER_OP_SQL_LABELS = {
+    "is": "=",
+    "is_not": "<>",
+    "is_any_of": "IN",
+    "is_none_of": "NOT IN",
+    "contains": "LIKE",
+    "not_contains": "NOT LIKE",
+    "starts_with": "LIKE prefix",
+    "not_starts_with": "NOT LIKE prefix",
+    "ends_with": "LIKE suffix",
+    "not_ends_with": "NOT LIKE suffix",
+    "is_empty": "= ''",
+    "is_not_empty": "<> ''",
+    "is_true": "IS TRUE",
+    "is_false": "IS FALSE",
+    "gt": ">",
+    "gte": ">=",
+    "lt": "<",
+    "lte": "<=",
+    "before": "<",
+    "on_or_before": "<=",
+    "after": ">",
+    "on_or_after": ">=",
+    "between": "BETWEEN",
+    "is_null": "IS NULL",
+    "is_not_null": "IS NOT NULL",
+}
+
+CHROME = {
+    "plain": {
+        "add_filter": "Add filter",
+        "combine": "Combine",
+        "breakdown": "Break down by",
+        "breakdown_each": "Break down each series",
+        "breakdown_th": "Break down",
+        "sql_expr": "SQL expression",
+        "sql_expr_ellipsis": "SQL expression…",
+        "of": "Of",
+        "volume": "Volume",
+        "unique": "Unique {plural}",
+        "average_per": "Average per {singular}",
+        "filter_column": "Filter column",
+        "filter_op": "Filter operator",
+        "filter_sql": "Filter SQL",
+    },
+    "sql": {
+        "add_filter": "WHERE",
+        "combine": "OR",
+        "breakdown": "GROUP BY",
+        "breakdown_each": "GROUP BY each series",
+        "breakdown_th": "GROUP BY",
+        "sql_expr": "SQL",
+        "sql_expr_ellipsis": "SQL…",
+        "of": "of=",
+        "volume": "COUNT",
+        "unique": "COUNT DISTINCT",
+        "average_per": "COUNT / COUNT DISTINCT",
+        "filter_column": "column",
+        "filter_op": "op",
+        "filter_sql": "SQL",
+    },
+}
+
 FILTER_TYPE_FAMILY: dict[str, str] = {
     "STRING": "string",
     "BOOL": "boolean",
@@ -283,19 +346,62 @@ LIKE_OPS: dict[str, tuple[str, bool]] = {
 EXACT_STRING_OPS = frozenset({"is", "is_not", "is_any_of", "is_none_of"})
 
 
-def filter_ui() -> dict[str, Any]:
+def _short_names(names: tuple[str, ...]) -> list[str]:
+    return [name[:3] for name in names]
+
+
+def display_weekdays(style: str) -> list[str]:
+    return _short_names(WEEKDAYS) if style == "short" else list(WEEKDAYS)
+
+
+def display_months(style: str) -> list[str]:
+    return _short_names(MONTHS) if style == "short" else list(MONTHS)
+
+
+def filter_ui(prefs: dict[str, Any] | None = None) -> dict[str, Any]:
     """One payload for the Events form. Do not copy this matrix in JS."""
+    if prefs is None:
+        from .prefs import load as load_prefs
+
+        prefs = load_prefs()
+    vocab = str(prefs.get("vocab") or "plain")
+    if vocab not in CHROME:
+        vocab = "plain"
+    ops = {key: dict(meta) for key, meta in FILTER_OP_META.items()}
+    numeric_labels = dict(FILTER_OP_NUMERIC_LABELS)
+    if vocab == "sql":
+        for key, label in FILTER_OP_SQL_LABELS.items():
+            if key in ops:
+                ops[key]["label"] = label
+        numeric_labels = {
+            key: FILTER_OP_SQL_LABELS.get(key, label)
+            for key, label in FILTER_OP_NUMERIC_LABELS.items()
+        }
+    pad = bool(prefs.get("pad_calendar"))
+    parts = []
+    for item in FILTER_DATE_PARTS:
+        row = dict(item)
+        if row.get("id") == "hour_of_day":
+            row["label"] = "Hour of day (00-23)" if pad else "Hour of day (0-23)"
+        if row.get("id") == "day_of_month":
+            row["label"] = "Day of month (01-31)" if pad else "Day of month (1-31)"
+        parts.append(row)
     return {
         "type_family": dict(FILTER_TYPE_FAMILY),
-        "ops": {key: dict(meta) for key, meta in FILTER_OP_META.items()},
-        "families": {key: list(ops) for key, ops in FILTER_FAMILY_OPS.items()},
+        "ops": ops,
+        "families": {key: list(ops_ids) for key, ops_ids in FILTER_FAMILY_OPS.items()},
         "exact_string_ops": sorted(EXACT_STRING_OPS),
         "like_ops": sorted(LIKE_OPS),
-        "date_parts": [dict(item) for item in FILTER_DATE_PARTS],
-        "weekdays": list(WEEKDAYS),
-        "months": list(MONTHS),
+        "date_parts": parts,
+        "weekdays": display_weekdays(str(prefs.get("weekday_style") or "long")),
+        "months": display_months(str(prefs.get("month_style") or "long")),
         "integer_types": sorted(FILTER_INTEGER_TYPES),
-        "numeric_op_labels": dict(FILTER_OP_NUMERIC_LABELS),
+        "numeric_op_labels": numeric_labels,
+        "chrome": dict(CHROME[vocab]),
+        "vocab": vocab,
+        "thousand_sep": str(prefs.get("thousand_sep") or "comma"),
+        "decimal_sep": str(prefs.get("decimal_sep") or "period"),
+        "pad_calendar": pad,
     }
 
 

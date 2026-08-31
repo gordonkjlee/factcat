@@ -667,6 +667,53 @@ def test_filter_numeric_literal_unquoted():
     assert "amount = '10'" not in spec.where
 
 
+def test_filter_numeric_local_separators(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "preferences.json"))
+    from factcat_app.prefs import save
+
+    save({"thousand_sep": "period", "decimal_sep": "comma"})
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "amount",
+                    "op": "gt",
+                    "value": "1.234,56",
+                    "type": "FLOAT64",
+                }
+            ],
+        )
+    )
+    assert "amount > 1234.56" in spec.where
+    assert "1.234,56" not in spec.where
+
+
+def test_filter_numeric_canonical_still_accepted_with_comma_prefs(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "preferences.json"))
+    from factcat_app.prefs import save
+
+    save({"thousand_sep": "period", "decimal_sep": "comma"})
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "amount",
+                    "op": "is",
+                    "value": "1234.56",
+                    "type": "FLOAT64",
+                }
+            ],
+        )
+    )
+    assert "amount = 1234.56" in spec.where
+
+
 def test_filter_json_key_is_json_value():
     spec = spec_from_form(
         _form(
@@ -902,6 +949,44 @@ def test_filter_day_of_week():
     )
     assert "FORMAT_DATE('%A', DATE(factcat_as_instant(occurred_at), 'UTC'))" in spec.where
     assert "IN ('Saturday', 'Sunday')" in spec.where
+
+
+def test_filter_day_of_week_accepts_short_names():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "occurred_at",
+                    "op": "is",
+                    "value": "Mon",
+                    "type": "TIMESTAMP",
+                    "date_part": "day_of_week",
+                }
+            ],
+        )
+    )
+    assert "FORMAT_DATE('%A', DATE(factcat_as_instant(occurred_at), 'UTC')) = 'Monday'" in spec.where
+
+
+def test_filter_month_accepts_short_name():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "dt",
+                    "op": "is",
+                    "value": "Jan",
+                    "type": "DATE",
+                    "date_part": "month_of_year",
+                }
+            ],
+        )
+    )
+    assert "FORMAT_DATE('%B', dt) = 'January'" in spec.where
 
 
 def test_filter_month_of_year():

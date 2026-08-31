@@ -57,7 +57,7 @@
       padding: 0.85rem 1.1rem;
       border: 1px solid var(--fc-ochre);
       border-radius: 0.75rem;
-      background: #FBF3E4;
+      background: var(--fc-ochre-wash);
     }
     #extra-card[hidden] { display: none !important; }
     #extra-lede { flex: 1 1 14rem; font-size: 0.88rem; margin: 0; color: var(--fc-ink); }
@@ -73,9 +73,9 @@
     #extra-status { flex: 1 1 100%; font-size: 0.85rem; color: var(--fc-ink-soft); min-height: 0; margin: 0; }
     #extra-status:empty { display: none; }
     .setup-form select:disabled {
-      opacity: 0.55;
+      opacity: 1;
       background: var(--fc-paper);
-      color: var(--fc-ink-soft);
+      color: var(--fc-ink);
       cursor: not-allowed;
     }
     @media (max-width: 56rem) {
@@ -93,6 +93,9 @@
   </div>
 <form id="f" class="setup-form">
   <h1>Project setup</h1>
+  {% if request.query_params.get("events") %}
+  <p class="lede" id="need-events">Events opens after this mapping is saved.</p>
+  {% endif %}
   <p class="lede" id="setup-lede">{% if config.kind == "snowflake" %}Map a table in <em>your</em> Snowflake. Mapping is saved to <code>.factcat.json</code> in this directory. Sign-in is a key-pair file.{% else %}Map a table in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code> in this directory. Uses application-default credentials unless you open Advanced.{% endif %}</p>
 
   <h2>Warehouse</h2>
@@ -205,20 +208,7 @@
     </select>
     <span class="hint" id="event-time-tz-hint">TIMESTAMP_TZ and TIMESTAMP_LTZ are instants (offset or UTC storage). TIMESTAMP_NTZ / DATETIME are wall-clock numbers — say whether those numbers are UTC or already in the reporting timezone.</span>
   </div>
-  <h2>Formatting</h2>
-  <label for="thousand_sep">Thousand separator</label>
-  <select id="thousand_sep" name="thousand_sep">
-    <option value="comma" {% if config.thousand_sep == "comma" or not config.thousand_sep %}selected{% endif %}>Comma (1,234)</option>
-    <option value="period" {% if config.thousand_sep == "period" %}selected{% endif %}>Period (1.234)</option>
-    <option value="space" {% if config.thousand_sep == "space" %}selected{% endif %}>Space (1 234)</option>
-    <option value="none" {% if config.thousand_sep == "none" %}selected{% endif %}>None (1234)</option>
-  </select>
-  <label for="decimal_sep">Decimal separator</label>
-  <select id="decimal_sep" name="decimal_sep">
-    <option value="period" {% if config.decimal_sep == "period" or not config.decimal_sep %}selected{% endif %}>Period (1.23)</option>
-    <option value="comma" {% if config.decimal_sep == "comma" %}selected{% endif %}>Comma (1,23)</option>
-  </select>
-  <span class="hint" id="num-example">Example: 1,234.56</span>
+  <h2>Limits</h2>
   <div id="scan-cap-wrap">
     <label for="bytes_cap_gb">Job scan cap (GB)</label>
     <input id="bytes_cap_gb" name="bytes_cap_gb" type="number" min="0" step="1" value="{{ config.bytes_cap_gb if config.bytes_cap_gb is not none else 10 }}">
@@ -736,41 +726,11 @@ labelChoiceEl.addEventListener("change", syncEntityName);
 labelOtherEl.addEventListener("input", syncEntityName);
 seedEntityName();
 
-function thousandChar() {
-  const v = document.getElementById("thousand_sep").value;
-  if (v === "none") return "";
-  if (v === "space") return " ";
-  if (v === "period") return ".";
-  return ",";
-}
-function decimalChar() {
-  return document.getElementById("decimal_sep").value === "comma" ? "," : ".";
-}
-function syncNumExample() {
-  const thou = thousandChar();
-  const dec = decimalChar();
-  const el = document.getElementById("num-example");
-  if ((thou === "." || thou === ",") && thou === dec) {
-    el.textContent = "Thousand and decimal separators must differ.";
-    return false;
-  }
-  el.textContent = "Example: 1" + (thou || "") + "234" + dec + "56";
-  return true;
-}
-["thousand_sep", "decimal_sep"].forEach((id) => {
-  document.getElementById(id).addEventListener("change", syncNumExample);
-});
-syncNumExample();
-
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   setError("");
   setStatus("");
   syncEntityName();
-  if (!syncNumExample()) {
-    setError("Thousand and decimal separators must differ.");
-    return;
-  }
   tableEl.value = combinedTable();
   const body = Object.fromEntries(new FormData(form).entries());
   body.kind = currentKind();
