@@ -256,8 +256,9 @@ bottom of the left rail, not an analysis.
 
 **BigQuery.** After the extra is present: `gcloud auth application-default login`
 and `gcloud config set project YOUR_GCP_PROJECT`. Billing project from ADC, then
-dataset → table. Location is taken from the dataset (do not guess `US`).
-Advanced is only if you use a key file instead of ADC.
+dataset → table (lists; greyed until the previous step is set). Location is
+taken from the dataset (do not guess `US`). Advanced is only if you use a key
+file instead of ADC.
 
 Map the event-name column on **Setup** (STRING). Event names are cached
 on **Save** (DISTINCT, last 90 days of the timestamp). On Events, **Event**
@@ -278,8 +279,10 @@ DATETIME.
 If the BigQuery table lives in another GCP project (billing in `dev`, data in `prod`), set
 **Project that holds the table** before loading datasets.
 
-**Snowflake.** Account identifier, user, compute warehouse, path to a private key
-(`rsa_key.p8`), then database → schema → table. An encrypted key's passphrase is
+**Snowflake.** Account identifier, user, and sign-in (key-pair path or browser
+SSO). Then Role (optional) and compute warehouse from lists, then
+database → schema → table. Catalog fields stay visible and greyed until the
+previous step is set. An encrypted key's passphrase is
 `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` in the environment, not in `.factcat.json`.
 
 There is no `user_id` default. **Entity name** on Setup is a display label

@@ -8,7 +8,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from factcat.warehouses import AdapterError, DryRunNotSupported, connect
-from factcat.warehouses.snowflake import SnowflakeAdapter, _load_snowflake
+from factcat.warehouses.snowflake import (
+    SnowflakeAdapter,
+    _load_snowflake,
+    list_roles,
+    list_warehouses,
+)
 
 
 def _adapter(**extra):
@@ -114,6 +119,43 @@ def test_externalbrowser_does_not_need_a_key(snowflake_stack):
 def test_key_pair_still_requires_a_file():
     with pytest.raises(ValueError, match="private_key_path"):
         _adapter(private_key_path="", authenticator="key_pair")
+
+
+def test_list_warehouses_does_not_need_compute_warehouse(snowflake_stack):
+    snowflake_stack.cur.description = [("name",), ("is_default",)]
+    snowflake_stack.cur.fetchall.return_value = [
+        ("LOAD_WH", "N"),
+        ("COMPUTE_WH", "Y"),
+    ]
+    payload = list_warehouses(
+        account="xy12345",
+        user="ANALYST",
+        private_key_path=snowflake_stack.key,
+        role="ANALYST",
+    )
+    kwargs = snowflake_stack.connector.connect.call_args.kwargs
+    assert "warehouse" not in kwargs
+    assert kwargs["role"] == "ANALYST"
+    snowflake_stack.cur.execute.assert_called_with("SHOW WAREHOUSES")
+    assert payload["warehouses"] == ["COMPUTE_WH", "LOAD_WH"]
+    assert payload["default"] == "COMPUTE_WH"
+
+
+def test_list_roles_uses_grants_to_user(snowflake_stack):
+    snowflake_stack.cur.description = [("role",)]
+    snowflake_stack.cur.fetchall.return_value = [("PUBLIC",), ("ANALYST",)]
+    names = list_roles(
+        account="xy12345",
+        user="ANALYST",
+        private_key_path=snowflake_stack.key,
+    )
+    kwargs = snowflake_stack.connector.connect.call_args.kwargs
+    assert "warehouse" not in kwargs
+    assert "role" not in kwargs
+    sql = snowflake_stack.cur.execute.call_args[0][0]
+    assert sql.startswith("SHOW GRANTS TO USER")
+    assert "ANALYST" in sql
+    assert names == ["ANALYST", "PUBLIC"]
 
 
 def test_missing_extra_names_install(monkeypatch, tmp_path):

@@ -25,8 +25,11 @@ ALTER ACCOUNT SET ALLOW_ID_TOKEN = TRUE;
 That is an account-admin setting, not something Factcat can turn on.
 If caching is off, every new connection opens a browser again.
 
-You also need an **account identifier**, **user**, **compute warehouse**,
-**database**, and **schema**. Role is optional.
+You also need an **account identifier** and **user**. After sign-in,
+**Role** (optional; blank is the user's default) and **Compute warehouse**
+are lists, then **database → schema → table**. Catalog fields stay visible
+and greyed until the previous step is set (same as BigQuery dataset → table).
+Do not type those names.
 
 ## Table shape
 

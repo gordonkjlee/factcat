@@ -54,7 +54,22 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert ">Snowflake<" in res.text
     assert 'id="private_key_path"' in res.text
     assert 'id="database"' in res.text
-    assert "/api/schemas" in res.text
+    assert '"endpoint": "schemas"' in res.text
+    assert '"endpoint": "roles"' in res.text
+    assert '"endpoint": "warehouses"' in res.text
+    assert '"/api/" + step.endpoint' in res.text
+    assert 'id="role-loading"' in res.text
+    assert 'id="warehouse-loading"' in res.text
+    assert 'name="dataset" hidden' not in res.text
+    assert 'name="database" hidden' not in res.text
+    assert 'name="schema" hidden' not in res.text
+    assert 'name="table_name" hidden' not in res.text
+    assert "Listed after sign-in" not in res.text
+    assert "no compute warehouse needed" not in res.text
+    assert 'name="dataset" disabled' in res.text
+    assert 'name="database" disabled' in res.text
+    assert "CATALOG =" in res.text
+    assert "bindCatalog" in res.text
     assert "This grain is called" not in res.text
     assert "Entity name (singular)" in res.text
     assert "Plural" in res.text
@@ -902,6 +917,34 @@ def test_save_overlays_without_resetting_lookback(monkeypatch, tmp_path):
     assert saved["location"] == "EU"
     assert saved["lookback_days"] == 90
     assert saved["measure"] == "total"
+
+
+def test_snowflake_roles_and_warehouses_from_adapter(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr(
+        "factcat_app.catalog.sf_list_roles",
+        lambda **kw: ["ANALYST", "PUBLIC"],
+    )
+    monkeypatch.setattr(
+        "factcat_app.catalog.sf_list_warehouses",
+        lambda **kw: {"warehouses": ["COMPUTE_WH", "LOAD_WH"], "default": "COMPUTE_WH"},
+    )
+    client = TestClient(app)
+    roles = client.post(
+        "/api/roles",
+        json={"kind": "snowflake", "account": "xy", "user": "ANALYST"},
+    )
+    assert roles.status_code == 200
+    assert roles.json()["roles"] == ["ANALYST", "PUBLIC"]
+    houses = client.post(
+        "/api/warehouses",
+        json={"kind": "snowflake", "account": "xy", "user": "ANALYST", "role": "ANALYST"},
+    )
+    assert houses.status_code == 200
+    assert houses.json()["default"] == "COMPUTE_WH"
+    assert "COMPUTE_WH" in houses.json()["warehouses"]
+    bq = client.post("/api/roles", json={"kind": "bigquery", "project": "p"})
+    assert bq.status_code == 400
 
 
 def test_datasets_lists_from_adapter(monkeypatch, tmp_path):

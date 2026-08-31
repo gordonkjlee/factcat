@@ -12,7 +12,7 @@ import logging
 import pytest
 
 from factcat.warehouses import ADAPTERS, capabilities, extra_installed, extra_requirement
-from factcat_app.catalog import type_sets
+from factcat_app.catalog import catalog_steps, catalog_steps_by_kind, type_sets
 from factcat_app.main import SETUP_DOCS
 from factcat_app.query import event_values_sql, events_sql_from_form
 
@@ -99,6 +99,21 @@ def test_type_sets_declared(kind):
     ):
         assert role in sets
         assert isinstance(sets[role], frozenset)
+
+
+def test_catalog_steps_cover_every_adapter():
+    assert set(catalog_steps_by_kind()) == set(ADAPTERS)
+    for kind in ADAPTERS:
+        steps = catalog_steps(kind)
+        assert steps, f"{kind} has no catalog steps"
+        ids = []
+        for step in steps:
+            assert "needs" in step
+            assert "endpoint" in step
+            ids.extend(
+                [fill["id"] for fill in step["fill"]] if step.get("fill") else [step["id"]]
+            )
+        assert "table_name" in ids, f"{kind} catalog must pick a table"
 
 
 def test_setup_docs_cover_every_adapter():

@@ -25,11 +25,14 @@ from factcat.warehouses import (
 
 from .catalog import (
     bootstrap_project,
+    catalog_steps_by_kind,
     columns_from_form,
     datasets_from_form,
+    roles_from_form,
     schemas_from_form,
     tables_from_form,
     type_sets,
+    warehouses_from_form,
 )
 from .extras import extra_commands, install_command, run_install
 from .config import load, mapping_ready, save, warehouse_kind
@@ -47,10 +50,7 @@ from .query import (
 APP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = APP_DIR / "static"
 DOCS_DIR = APP_DIR / "guides"
-SETUP_DOCS = {
-    "bigquery": DOCS_DIR / "setup-bigquery.md",
-    "snowflake": DOCS_DIR / "setup-snowflake.md",
-}
+SETUP_DOCS = {kind: DOCS_DIR / f"setup-{kind}.md" for kind in ADAPTERS}
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
 
@@ -129,6 +129,7 @@ def setup(request: Request) -> HTMLResponse:
             },
             "extras": extras_status(),
             "extra_commands": extra_commands(),
+            "catalog_steps_by_kind": catalog_steps_by_kind(),
         },
     )
 
@@ -141,6 +142,26 @@ def _catalog_error(exc: Exception, form: dict | None = None) -> JSONResponse:
             payload["missing_extra"] = kind
             payload["command"] = install_command(kind)
     return JSONResponse(payload, status_code=400)
+
+
+@app.post("/api/roles")
+async def api_roles(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        roles = roles_from_form(form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc, form)
+    return JSONResponse({"ok": True, "roles": roles})
+
+
+@app.post("/api/warehouses")
+async def api_warehouses(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        payload = warehouses_from_form(form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc, form)
+    return JSONResponse({"ok": True, **payload})
 
 
 @app.post("/api/datasets")

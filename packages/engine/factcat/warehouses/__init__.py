@@ -53,6 +53,11 @@ each kind: same behaviour, gated off via ``capabilities`` / a dialect helper,
 or an explicit branch with a test. A BigQuery-only edit on a path Snowflake
 also executes is a regression. Identity and cost knobs stay on the concrete
 class — do not copy ``project`` / ``maximum_bytes_billed`` onto Snowflake.
+Say whether that warehouse's Setup guide / README still match, and whether
+the other kinds get the same chrome or why not. Setup catalog fields are
+``factcat_app.catalog.CATALOG_STEPS`` (one list per kind): enable when
+``needs`` are met, load ``endpoint`` on first open, greyed until then. Do
+not copy a second enable/load chain in the template.
 
 No shared base class until a second real adapter shows duplicated code.
 """
