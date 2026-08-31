@@ -934,7 +934,7 @@ def test_chrome_uses_tokens_and_empty_state(monkeypatch, tmp_path):
 def test_readme_keeps_slogan_and_points_at_the_mark():
     readme = Path(APP_DIR).resolve().parents[2] / "README.md"
     text = readme.read_text(encoding="utf-8")
-    assert "Open-source, warehouse-first product analytics." in text
+    assert "An open-source alternative to Amplitude and Mixpanel" in text
     assert "packages/engine/factcat_app/static/waiting.jpg" in text
     assert "one wide events table" in text
     assert "setup-bigquery.md" in text

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "factcat"
 version = "0.4.1"
-description = "Open-source, warehouse-first product analytics"
+description = "Open-source alternative to Amplitude and Mixpanel that runs in your own data warehouse"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
