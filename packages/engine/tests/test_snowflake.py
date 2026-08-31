@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from factcat.warehouses import AdapterError, DryRunNotSupported, connect
-from factcat.warehouses.snowflake import SnowflakeAdapter
+from factcat.warehouses.snowflake import SnowflakeAdapter, _load_snowflake
 
 
 def _adapter(**extra):
@@ -114,3 +114,19 @@ def test_externalbrowser_does_not_need_a_key(snowflake_stack):
 def test_key_pair_still_requires_a_file():
     with pytest.raises(ValueError, match="private_key_path"):
         _adapter(private_key_path="", authenticator="key_pair")
+
+
+def test_missing_extra_names_install(monkeypatch, tmp_path):
+    def boom(name: str):
+        raise ImportError("simulated missing extra")
+
+    monkeypatch.setattr(
+        "factcat.warehouses.snowflake.importlib.import_module", boom
+    )
+    with pytest.raises(ImportError, match=r"factcat\[snowflake\]"):
+        _load_snowflake()
+    key = tmp_path / "rsa_key.p8"
+    key.write_text("-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n", encoding="utf-8")
+    adapter = _adapter(private_key_path=str(key))
+    with pytest.raises(ImportError, match=r"factcat\[snowflake\]"):
+        adapter.run("SELECT 1")

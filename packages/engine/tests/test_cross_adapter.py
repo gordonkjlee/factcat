@@ -11,7 +11,7 @@ import logging
 
 import pytest
 
-from factcat.warehouses import ADAPTERS, capabilities
+from factcat.warehouses import ADAPTERS, capabilities, extra_installed, extra_requirement
 from factcat_app.catalog import type_sets
 from factcat_app.main import SETUP_DOCS
 from factcat_app.query import event_values_sql, events_sql_from_form
@@ -79,6 +79,12 @@ def test_capabilities_declared(kind):
 
 
 @pytest.mark.parametrize("kind", list(ADAPTERS))
+def test_extra_probe_declared(kind):
+    assert extra_requirement(kind) == f"factcat[{kind}]"
+    assert extra_installed(kind) in (True, False)
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
 def test_type_sets_declared(kind):
     sets = type_sets(kind)
     for role in (
@@ -99,3 +105,7 @@ def test_setup_docs_cover_every_adapter():
     assert set(SETUP_DOCS) == set(ADAPTERS)
     for kind, path in SETUP_DOCS.items():
         assert path.is_file(), f"missing Setup guide for {kind}: {path}"
+        text = path.read_text(encoding="utf-8")
+        assert f"pip install factcat[{kind}]" not in text, (
+            f"Setup guide must not duplicate the extra banner: {path}"
+        )

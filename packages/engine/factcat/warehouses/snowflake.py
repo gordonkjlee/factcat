@@ -207,6 +207,14 @@ class SnowflakeAdapter:
     dialect: ClassVar[str] = "snowflake"
     capabilities: ClassVar[frozenset[str]] = frozenset()
 
+    @classmethod
+    def driver_available(cls) -> bool:
+        try:
+            _load_snowflake()
+        except ImportError:
+            return False
+        return True
+
     def __post_init__(self) -> None:
         _require_ident(self.account, "account")
         _require_ident(self.user, "user")

@@ -116,6 +116,14 @@ class BigQueryAdapter:
         {CAP_DRY_RUN, CAP_BYTES_PROCESSED, CAP_SCAN_CAP}
     )
 
+    @classmethod
+    def driver_available(cls) -> bool:
+        try:
+            _load_google()
+        except ImportError:
+            return False
+        return True
+
     def __post_init__(self) -> None:
         if not isinstance(self.project, str) or not self.project.strip():
             raise ValueError("project is required")

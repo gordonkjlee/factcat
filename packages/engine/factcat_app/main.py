@@ -19,6 +19,8 @@ from factcat.warehouses import (
     BytesCapError,
     capabilities,
     connect,
+    extra_installed,
+    extras_status,
 )
 
 from .catalog import (
@@ -29,6 +31,7 @@ from .catalog import (
     tables_from_form,
     type_sets,
 )
+from .extras import extra_commands, install_command, run_install
 from .config import load, mapping_ready, save, warehouse_kind
 from .query import (
     REPORTING_TIMEZONES,
@@ -124,12 +127,20 @@ def setup(request: Request) -> HTMLResponse:
                 name: {role: sorted(vals) for role, vals in type_sets(name).items()}
                 for name in ADAPTERS
             },
+            "extras": extras_status(),
+            "extra_commands": extra_commands(),
         },
     )
 
 
-def _catalog_error(exc: Exception) -> JSONResponse:
-    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+def _catalog_error(exc: Exception, form: dict | None = None) -> JSONResponse:
+    payload = {"ok": False, "error": str(exc)}
+    if isinstance(exc, ImportError) and form is not None:
+        kind = form_kind(form)
+        if kind in ADAPTERS and not extra_installed(kind):
+            payload["missing_extra"] = kind
+            payload["command"] = install_command(kind)
+    return JSONResponse(payload, status_code=400)
 
 
 @app.post("/api/datasets")
@@ -138,7 +149,7 @@ async def api_datasets(request: Request) -> JSONResponse:
     try:
         datasets = datasets_from_form(form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
-        return _catalog_error(exc)
+        return _catalog_error(exc, form)
     return JSONResponse({"ok": True, "datasets": datasets})
 
 
@@ -148,7 +159,7 @@ async def api_schemas(request: Request) -> JSONResponse:
     try:
         schemas = schemas_from_form(form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
-        return _catalog_error(exc)
+        return _catalog_error(exc, form)
     return JSONResponse({"ok": True, "schemas": schemas})
 
 
@@ -158,7 +169,7 @@ async def api_tables(request: Request) -> JSONResponse:
     try:
         payload = tables_from_form(form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
-        return _catalog_error(exc)
+        return _catalog_error(exc, form)
     return JSONResponse({"ok": True, **payload})
 
 
@@ -168,7 +179,7 @@ async def api_columns(request: Request) -> JSONResponse:
     try:
         payload = columns_from_form(form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
-        return _catalog_error(exc)
+        return _catalog_error(exc, form)
     save({"columns": payload.get("columns") or []})
     return JSONResponse({"ok": True, **payload})
 
@@ -190,7 +201,7 @@ async def api_event_values(request: Request) -> JSONResponse:
         warehouse = connect(form_kind(form), **conn)
         result = warehouse.run(sql)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
-        return _catalog_error(exc)
+        return _catalog_error(exc, form)
     seen: set[str] = set()
     for row in result.rows:
         text = _event_value_text(row)
@@ -207,6 +218,20 @@ async def api_save(request: Request) -> JSONResponse:
     form = await request.json()
     save(form)
     return JSONResponse({"ok": True})
+
+
+@app.post("/api/install_extra")
+async def api_install_extra(request: Request) -> JSONResponse:
+    form = await request.json()
+    kind = form.get("kind") if isinstance(form, dict) else None
+    if not isinstance(kind, str) or kind not in ADAPTERS:
+        return JSONResponse(
+            {"ok": False, "error": "unknown warehouse extra"},
+            status_code=400,
+        )
+    result = run_install(kind)
+    status = 200 if result.get("ok") else 400
+    return JSONResponse(result, status_code=status)
 
 
 # Job SQL in warehouse exceptions (indented, line-numbered, or the

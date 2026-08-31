@@ -47,6 +47,31 @@
       font-size: 0.8rem;
     }
     #status { color: var(--fc-ok); font-size: 0.85rem; }
+    #extra-card {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.65rem 1rem;
+      margin: 0;
+      padding: 0.85rem 1.1rem;
+      border: 1px solid var(--fc-ochre);
+      border-radius: 0.75rem;
+      background: #FBF3E4;
+    }
+    #extra-card[hidden] { display: none !important; }
+    #extra-lede { flex: 1 1 14rem; font-size: 0.88rem; margin: 0; color: var(--fc-ink); }
+    #extra-command {
+      flex: 1 1 18rem;
+      margin: 0;
+      padding: 0.45rem 0.6rem;
+      font-size: 0.78rem;
+      overflow: auto;
+      background: var(--fc-snow);
+    }
+    #extra-install { margin: 0; }
+    #extra-status { flex: 1 1 100%; font-size: 0.85rem; color: var(--fc-ink-soft); min-height: 0; margin: 0; }
+    #extra-status:empty { display: none; }
     @media (max-width: 56rem) {
       .setup-page { grid-template-columns: 1fr; }
       .setup-docs { max-height: none; }
@@ -54,6 +79,12 @@
 {% endblock %}
 {% block body %}
 <div class="setup-page">
+  <div id="extra-card" hidden>
+    <p id="extra-lede"></p>
+    <pre id="extra-command"></pre>
+    <button type="button" id="extra-install">Install</button>
+    <p id="extra-status"></p>
+  </div>
 <form id="f" class="setup-form">
   <h1>Project setup</h1>
   <p class="lede" id="setup-lede">{% if config.kind == "snowflake" %}Map a table in <em>your</em> Snowflake. Mapping is saved to <code>.factcat.json</code> in this directory. Sign-in is a key-pair file.{% else %}Map a table in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code> in this directory. Uses application-default credentials unless you open Advanced.{% endif %}</p>
@@ -232,6 +263,8 @@ const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
 const TYPE_SETS = {{ type_sets|tojson }};
 const SETUP_DOCS = {{ setup_docs_by_kind|tojson }};
+const EXTRAS = {{ extras|tojson }};
+const EXTRA_COMMANDS = {{ extra_commands|tojson }};
 function currentKind() {
   return kindEl.value === "snowflake" ? "snowflake" : "bigquery";
 }
@@ -254,6 +287,28 @@ function setError(text) {
 }
 function setStatus(text) {
   document.getElementById("status").textContent = text || "";
+}
+function setExtraStatus(text) {
+  document.getElementById("extra-status").textContent = text || "";
+}
+function noteMissingExtra(data) {
+  if (!data || !data.missing_extra) return;
+  EXTRAS[data.missing_extra] = false;
+  if (data.command) EXTRA_COMMANDS[data.missing_extra] = data.command;
+  syncExtraCard();
+}
+function syncExtraCard() {
+  const kind = kindEl.value;
+  const card = document.getElementById("extra-card");
+  const missing = EXTRAS[kind] === false;
+  card.hidden = !missing;
+  if (!missing) {
+    setExtraStatus("");
+    return;
+  }
+  document.getElementById("extra-lede").textContent =
+    "This warehouse extra is not installed. Install factcat[" + kind + "] into this environment.";
+  document.getElementById("extra-command").textContent = EXTRA_COMMANDS[kind] || "";
 }
 function setLoading(sel, on) {
   const hint = document.getElementById(sel.id + "-loading");
@@ -405,6 +460,7 @@ function syncKindUi(clearIdentity) {
     tablesFetched = false;
     columnsFetched = false;
   }
+  syncExtraCard();
 }
 async function post(url, body) {
   const res = await fetch(url, {
@@ -425,6 +481,7 @@ async function loadDatasets() {
   if (gen !== dsGen) return;
   setLoading(sel, false);
   if (!data.ok) {
+    noteMissingExtra(data);
     setError(data.error || (snow ? "Could not list databases" : "Could not list datasets"));
     return;
   }
@@ -440,6 +497,7 @@ async function loadSchemas() {
   if (gen !== schGen) return;
   setLoading(schemaEl, false);
   if (!data.ok) {
+    noteMissingExtra(data);
     setError(data.error || "Could not list schemas");
     return;
   }
@@ -459,6 +517,7 @@ async function loadTables() {
   if (gen !== tblGen) return;
   setLoading(tableNameEl, false);
   if (!data.ok) {
+    noteMissingExtra(data);
     setError(data.error || "Could not list tables");
     return;
   }
@@ -484,6 +543,7 @@ async function loadColumns() {
   setLoading(eventTimeEl, false);
   setLoading(eventColumnEl, false);
   if (!data.ok) {
+    noteMissingExtra(data);
     setError(data.error || "Could not list columns");
     return;
   }
@@ -610,6 +670,31 @@ tableNameEl.addEventListener("change", () => {
   });
 });
 kindEl.addEventListener("change", () => syncKindUi(true));
+document.getElementById("extra-install").addEventListener("click", async () => {
+  const btn = document.getElementById("extra-install");
+  const kind = kindEl.value;
+  btn.disabled = true;
+  setError("");
+  setExtraStatus("Installing…");
+  try {
+    const data = await post("/api/install_extra", {kind});
+    if (data.ok) {
+      EXTRAS[kind] = true;
+      setExtraStatus("");
+      syncExtraCard();
+      return;
+    }
+    if (data.command) EXTRA_COMMANDS[kind] = data.command;
+    document.getElementById("extra-command").textContent = EXTRA_COMMANDS[kind] || "";
+    setError(data.error || "Install failed");
+    setExtraStatus("");
+    btn.disabled = false;
+  } catch (err) {
+    setError(err && err.message ? err.message : "Install failed");
+    setExtraStatus("");
+    btn.disabled = false;
+  }
+});
 syncKindUi(false);
 if (currentKind() === "snowflake") {
   seedSelect(databaseEl, saved.database);
@@ -743,6 +828,7 @@ form.addEventListener("submit", async (e) => {
         week_start: body.week_start,
       });
       if (!ev.ok) {
+        noteMissingExtra(ev);
         setStatus("Saved");
         setError(ev.error || "Could not cache event names");
         return;
