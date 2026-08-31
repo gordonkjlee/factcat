@@ -8,17 +8,23 @@ no SDK, no ingestion, nothing hosted.
 
 ## The problem
 
-Every product analytics tool hard-codes three things. SaaS tools do it, and so do the
-warehouse-native ones:
+Product analytics tools make your modelling decisions for you. The entity is a user
+(accounts or groups are a paid add-on), a period is a calendar bucket, and "active",
+"retained", or "converted" means an event occurred — never a predicate over your own
+columns:
 
 ```
-entity   = user
+entity   = a user
 period   = a calendar bucket (day / week / month)
-retained = did any event
+retained = did an event
 ```
 
-Real businesses violate all three. Here is a retention definition negotiated in an actual
-room, for an actual subscription business:
+It starts with the simplest chart: weekly active *what*? Users, accounts, subscriptions,
+bookings — that is a modelling decision, and Factcat's Uniques is `COUNT DISTINCT` of
+whatever you say the entity is.
+
+It compounds in the definitions that actually get negotiated. Here is a retention
+definition from an actual room, for an actual subscription business:
 
 > 1. Who is being measured: **the subscription**
 > 2. Period: **35 days.** Billing periods are 30 days with 5 extra days allotted for dunning

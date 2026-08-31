@@ -4,8 +4,9 @@ An open-source alternative to Amplitude and Mixpanel that runs in your own data
 warehouse. Factcat generates SQL and runs it in your BigQuery or Snowflake —
 no SDK, no ingestion, nothing hosted.
 
-Every other product analytics tool hard-codes `entity = user`, `period = a calendar bucket`,
-and `retained = did any event`. Real definitions violate all three:
+Product analytics tools make your modelling decisions for you: `entity = a user`,
+`period = a calendar bucket`, `retained = did an event`. Real definitions violate all
+three:
 
 ```python
 from factcat import RetentionSpec, retention_sql
