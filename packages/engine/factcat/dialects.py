@@ -17,7 +17,8 @@ window functions. These constructs do not survive cleanly:
    from DuckDB ``GROUP BY … LIMIT``. Exact pick is ordinary SQL.
 5. **Reporting-timezone calendar.** BigQuery ``DATE(ts, tz)`` and
    ``CURRENT_DATE(tz)`` have no DuckDB equivalent sqlglot will emit.
-   Week start is applied after that conversion.
+   Snowflake is ``CONVERT_TIMEZONE`` plus an explicit week start (not
+   session ``WEEK_START``). Week start is applied after that conversion.
 6. **UTC instant from TIMESTAMP or DATETIME.** sqlglot rewrites
    ``CAST(col AS TIMESTAMP) >= TIMESTAMP(...)`` to ``CAST AS DATETIME``,
    which BigQuery then rejects. ``factcat_as_instant`` is spliced after
@@ -29,6 +30,7 @@ Everything else is one emitter.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 SUPPORTED: tuple[str, ...] = (
     "duckdb",
@@ -202,6 +204,34 @@ def period_grid(n_periods: int, dialect: str) -> str:
     return _union_all_grid(n)
 
 
+UNIX_KINDS = frozenset({"unix_s", "unix_ms", "unix_us"})
+TIME_KINDS = frozenset({"utc", "reporting", "instant"}) | UNIX_KINDS
+
+
+def from_unix(expr: str, dialect: str, kind: str) -> str:
+    """Integer epoch → timestamp instant (UTC)."""
+    kind = kind.lower()
+    if kind == "unix_s":
+        if dialect == "bigquery":
+            return f"TIMESTAMP_SECONDS({expr})"
+        if dialect == "snowflake":
+            return f"TO_TIMESTAMP_TZ({expr})"
+        return f"to_timestamp({expr})"
+    if kind == "unix_ms":
+        if dialect == "bigquery":
+            return f"TIMESTAMP_MILLIS({expr})"
+        if dialect == "snowflake":
+            return f"TO_TIMESTAMP_TZ({expr}, 3)"
+        return f"to_timestamp(({expr}) / 1000.0)"
+    if kind == "unix_us":
+        if dialect == "bigquery":
+            return f"TIMESTAMP_MICROS({expr})"
+        if dialect == "snowflake":
+            return f"TO_TIMESTAMP_TZ({expr}, 6)"
+        return f"to_timestamp(({expr}) / 1000000.0)"
+    raise ValueError("time_kind must be unix_s, unix_ms, or unix_us")
+
+
 def period_start_shifted(
     expr: str,
     unit: str,
@@ -214,8 +244,10 @@ def period_start_shifted(
     """Trunc ``expr`` to ``unit`` then shift ``n`` periods (negative = back).
 
     Week start is explicit so BigQuery does not inherit Sunday ``WEEK``.
-    ``timezone`` is IANA. ``time_kind`` is ``utc`` (TIMESTAMP instant) or
-    ``reporting`` (DATETIME already in that zone).
+    ``timezone`` is IANA. ``time_kind`` is ``instant`` (TIMESTAMP_TZ /
+    TIMESTAMP_LTZ / BigQuery TIMESTAMP), ``utc`` (TIMESTAMP_NTZ / DATETIME
+    whose wall-clock numbers are UTC), or ``reporting`` (NTZ / DATETIME
+    already in that zone).
     """
     unit = unit.lower()
     week_start = week_start.lower()
@@ -223,8 +255,10 @@ def period_start_shifted(
     if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
         raise ValueError("timezone must be an IANA name")
     kind = (time_kind or "utc").strip().lower()
-    if kind not in {"utc", "reporting"}:
-        raise ValueError("time_kind must be utc or reporting")
+    if kind not in TIME_KINDS:
+        raise ValueError(
+            "time_kind must be utc, reporting, instant, unix_s, unix_ms, or unix_us"
+        )
     if unit not in {"day", "week", "month", "quarter", "year"}:
         raise ValueError("unit must be day, week, month, quarter, or year")
     if week_start not in {"monday", "sunday"}:
@@ -235,6 +269,8 @@ def period_start_shifted(
     if dialect == "bigquery":
         if expr.lower() == "current_date":
             date_expr = f"CURRENT_DATE('{tz}')"
+        elif kind in UNIX_KINDS:
+            date_expr = f"DATE({from_unix(expr, dialect, kind)}, '{tz}')"
         elif kind == "reporting":
             date_expr = f"CAST({expr} AS DATE)"
         else:
@@ -251,6 +287,8 @@ def period_start_shifted(
         op = "DATE_ADD" if n > 0 else "DATE_SUB"
         return f"{op}({trunc}, INTERVAL {abs(n)} {unit.upper()})"
     if dialect == "duckdb":
+        if kind in UNIX_KINDS:
+            expr = from_unix(expr, dialect, kind)
         if unit == "day":
             trunc = f"CAST({expr} AS DATE)"
         elif unit == "week" and week_start == "sunday":
@@ -266,6 +304,39 @@ def period_start_shifted(
         if unit == "week":
             return f"({trunc} + {n * 7})"
         return f"({trunc} + INTERVAL {n} {unit})"
+    if dialect == "snowflake":
+        if expr.lower() == "current_date":
+            date_expr = f"CAST(CONVERT_TIMEZONE('{tz}', CURRENT_TIMESTAMP()) AS DATE)"
+        elif kind in UNIX_KINDS:
+            date_expr = (
+                f"CAST(CONVERT_TIMEZONE('{tz}', {from_unix(expr, dialect, kind)}) AS DATE)"
+            )
+        elif kind == "reporting":
+            # TIMESTAMP_NTZ / DATETIME already civil in ``tz``.
+            date_expr = f"CAST({expr} AS DATE)"
+        elif kind == "instant":
+            # TIMESTAMP_TZ (offset on the value) / TIMESTAMP_LTZ (UTC storage).
+            date_expr = f"CAST(CONVERT_TIMEZONE('{tz}', {expr}) AS DATE)"
+        else:
+            # TIMESTAMP_NTZ wall-clock stored as UTC numbers.
+            date_expr = (
+                f"CAST(CONVERT_TIMEZONE('UTC', '{tz}', {expr}) AS DATE)"
+            )
+        if unit == "day":
+            trunc = date_expr
+        elif unit == "week" and week_start == "sunday":
+            trunc = (
+                f"DATEADD('day', -MOD(DAYOFWEEKISO({date_expr}), 7), {date_expr})"
+            )
+        elif unit == "week":
+            trunc = f"DATEADD('day', 1 - DAYOFWEEKISO({date_expr}), {date_expr})"
+        else:
+            trunc = f"CAST(DATE_TRUNC('{unit}', {date_expr}) AS DATE)"
+        if n == 0:
+            return trunc
+        if unit == "week":
+            return f"DATEADD('day', {n * 7}, {trunc})"
+        return f"DATEADD('{unit}', {n}, {trunc})"
     # Fallback: ISO week (Monday) via date_trunc.
     if unit == "day":
         trunc = f"CAST({expr} AS DATE)"
@@ -277,15 +348,64 @@ def period_start_shifted(
 
 
 _AS_INSTANT_RE = re.compile(
-    r"factcat_as_instant\(\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\)",
+    r"factcat_as_instant\(\s*([A-Za-z_][A-Za-z0-9_.]*)"
+    r"(?:\s*,\s*'(unix_s|unix_ms|unix_us)')?\s*\)",
     re.IGNORECASE,
 )
 
 
-def as_instant(expr: str, dialect: str) -> str:
-    """TIMESTAMP instant. DATETIME values are treated as UTC."""
+def as_instant(expr: str, dialect: str, time_kind: str = "") -> str:
+    """TIMESTAMP instant. DATETIME values are treated as UTC. Unix integers
+    become TIMESTAMP_SECONDS / TO_TIMESTAMP_TZ / …"""
+    kind = (time_kind or "").strip().lower()
+    if kind in UNIX_KINDS:
+        return from_unix(expr, dialect, kind)
     _ = dialect
     return f"CAST({expr} AS TIMESTAMP)"
+
+
+def supports_json_value(dialect: str) -> bool:
+    """JSON key extract (``JSON_VALUE``) is BigQuery SQL sugar in v1."""
+    return dialect == "bigquery"
+
+
+def json_value_sql(
+    column: str, path: str, dialect: str, *, numeric: bool = False
+) -> str:
+    if not supports_json_value(dialect):
+        raise ValueError("JSON key extract is not available for this warehouse")
+    expr = f"JSON_VALUE({column}, '{path}')"
+    if numeric:
+        return f"SAFE_CAST({expr} AS FLOAT64)"
+    return expr
+
+
+def timestamp_at_date(
+    date_sql: str, dialect: str, timezone: str, time_kind: str
+) -> str:
+    """Midnight of ``date_sql`` as an instant comparable to event_time."""
+    tz = (timezone or "UTC").strip() or "UTC"
+    if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
+        raise ValueError("timezone must be an IANA name")
+    kind = (time_kind or "utc").strip().lower()
+    if kind not in TIME_KINDS:
+        raise ValueError(
+            "time_kind must be utc, reporting, instant, unix_s, unix_ms, or unix_us"
+        )
+    if kind == "reporting":
+        if dialect == "snowflake":
+            return f"CAST({date_sql} AS TIMESTAMP_NTZ)"
+        return f"CAST({date_sql} AS DATETIME)"
+    if dialect == "snowflake":
+        if kind == "instant" or kind in UNIX_KINDS:
+            return (
+                f"CONVERT_TIMEZONE('{tz}', "
+                f"CAST({date_sql} AS TIMESTAMP_TZ))"
+            )
+        return (
+            f"CONVERT_TIMEZONE('{tz}', 'UTC', CAST({date_sql} AS TIMESTAMP_NTZ))"
+        )
+    return f"TIMESTAMP({date_sql}, '{tz}')"
 
 
 def bucket_out(expr: str = "fc_bucket") -> str:
@@ -299,10 +419,69 @@ _PERIOD_RE = re.compile(
     r"'(day|week|month|quarter|year)'\s*,\s*"
     r"'(monday|sunday)'\s*,\s*"
     r"(-?\d+)"
-    r"(?:\s*,\s*'([^']+)'(?:\s*,\s*'(utc|reporting)')?)?"
+    r"(?:\s*,\s*'([^']+)'(?:\s*,\s*'(utc|reporting|instant|unix_s|unix_ms|unix_us)')?)?"
     r"\s*\)",
     re.IGNORECASE,
 )
+
+
+def _replace_func_calls(
+    sql: str, name: str, rewrite: Callable[[str], str]
+) -> str:
+    """Replace ``name(args)`` with balanced parentheses, innermost first."""
+    token = name + "("
+    while True:
+        start = sql.find(token)
+        if start < 0:
+            return sql
+        depth = 1
+        i = start + len(token)
+        while i < len(sql) and depth:
+            ch = sql[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            i += 1
+        if depth:
+            return sql
+        inner = sql[start + len(token) : i - 1]
+        sql = sql[:start] + rewrite(inner) + sql[i:]
+
+
+def _split_top_args(inner: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    in_str = False
+    quote = ""
+    for ch in inner:
+        if in_str:
+            buf.append(ch)
+            if ch == quote:
+                in_str = False
+            continue
+        if ch in {'"', "'"}:
+            in_str = True
+            quote = ch
+            buf.append(ch)
+            continue
+        if ch == "(":
+            depth += 1
+            buf.append(ch)
+            continue
+        if ch == ")":
+            depth -= 1
+            buf.append(ch)
+            continue
+        if ch == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    if buf:
+        parts.append("".join(buf).strip())
+    return parts
 
 
 def splice_placeholders(sql: str, dialect: str) -> str:
@@ -319,5 +498,17 @@ def splice_placeholders(sql: str, dialect: str) -> str:
             time_kind=match.group(6) or "utc",
         )
 
-    sql = _AS_INSTANT_RE.sub(lambda m: as_instant(m.group(1), dialect), sql)
-    return _PERIOD_RE.sub(repl, sql)
+    sql = _AS_INSTANT_RE.sub(
+        lambda m: as_instant(m.group(1), dialect, m.group(2) or ""), sql
+    )
+    sql = _PERIOD_RE.sub(repl, sql)
+
+    def ts_at_date(inner: str) -> str:
+        parts = _split_top_args(inner)
+        if len(parts) != 3:
+            raise ValueError("factcat_ts_at_date expects date, timezone, kind")
+        tz = parts[1].strip().strip("'").strip('"')
+        kind = parts[2].strip().strip("'").strip('"')
+        return timestamp_at_date(parts[0], dialect, tz, kind)
+
+    return _replace_func_calls(sql, "factcat_ts_at_date", ts_at_date)

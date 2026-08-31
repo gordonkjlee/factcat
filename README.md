@@ -135,8 +135,8 @@ modelling decision, not something a vendor should have made for you.
 ## What it is not
 
 Factcat does not ship a tracking SDK, does not ingest, and never copies your data. There
-is no Factcat-hosted warehouse. You bring credentials to your own BigQuery (or, later,
-Snowflake). If you need event collection, keep using whatever you use.
+is no Factcat-hosted warehouse. You bring credentials to your own BigQuery or
+Snowflake. If you need event collection, keep using whatever you use.
 
 ## Recommended warehouse shape
 
@@ -145,8 +145,9 @@ is a valid source. You do not have to have an events table.
 
 The Events app expects **one wide events table** today (typed columns; unused
 values null). JSON property bags and one table per event type are not
-supported yet. Setup shows the BigQuery guide from
-[`setup-bigquery.md`](packages/engine/factcat_app/guides/setup-bigquery.md).
+supported yet. Setup shows the matching guide
+([`setup-bigquery.md`](packages/engine/factcat_app/guides/setup-bigquery.md) or
+[`setup-snowflake.md`](packages/engine/factcat_app/guides/setup-snowflake.md)).
 Reporting timezone and whether the timestamp is a UTC instant or civil
 DATETIME are set on Setup.
 
@@ -178,11 +179,11 @@ integers for the period grid - and it lives in
 [`dialects.py`](packages/engine/factcat/dialects.py).
 
 **Execute adapters** push that SQL into the caller's warehouse through its official
-client. Factcat has no warehouse of its own. BigQuery ships today. The contract is
-`dialect` plus `run(sql)` - identity, auth, and cost knobs stay on the concrete class so
-Snowflake does not inherit `project` / `location` / `maximum_bytes_billed`. A later
-warehouse is a module and one line in the registry; see the docstring on
-`factcat.warehouses`.
+client. Factcat has no warehouse of its own. BigQuery and Snowflake ship today. The
+contract is `dialect` plus `run(sql)` — identity, auth, and cost knobs stay on the
+concrete class so Snowflake does not inherit `project` / `location` /
+`maximum_bytes_billed`. A later warehouse is a module and one line in the registry; see
+the docstring on `factcat.warehouses`.
 
 ```python
 from factcat import RetentionSpec, retention_sql
@@ -205,12 +206,14 @@ One project: [factcat](https://pypi.org/project/factcat/).
 ```bash
 pip install factcat              # SQL generation + the local chart
 pip install factcat[bigquery]    # run queries in BigQuery
+pip install factcat[snowflake]   # run queries in Snowflake
+pip install factcat[all]         # every execute adapter we ship
 ```
 
-`pip install factcat[bigquery]` is one command (it installs factcat plus the
-driver). The default has **no** warehouse SDK. Later warehouses are extras
-named the same way (`factcat[snowflake]`). `factcat[all]` is every execute
-adapter we ship.
+Each extra is named after `connect(kind=)` and installs that warehouse's
+official driver. The default has **no** warehouse SDK. Do not install a
+second PyPI project per warehouse. Setup guides ship in the app
+(`setup-bigquery.md`, `setup-snowflake.md`).
 
 To hack on the library:
 
@@ -221,12 +224,13 @@ pip install -e "packages/engine[dev,all]"
 ## Run the app
 
 The app is a local web page. It does not ingest your data. It generates SQL and runs it
-in **your** BigQuery. No Docker. Start it from **your warehouse repo** (or any project
-directory); that is where `.factcat.json` is written.
+in **your** warehouse (BigQuery or Snowflake). No Docker. Start it from **your warehouse
+repo** (or any project directory); that is where `.factcat.json` is written.
 
-**You need:** Python 3.10+ and the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install).
-A GCP project with the BigQuery API enabled, and a table you can query (BigQuery Job User
-on the project, Data Viewer on the dataset).
+**You need:** Python 3.10+. For BigQuery, the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install),
+a GCP project with the BigQuery API enabled, and a table you can query (BigQuery Job User
+on the project, Data Viewer on the dataset). For Snowflake, an account, a user with a
+key-pair, a compute warehouse, and a table you can query.
 
 ```bash
 python -m venv .venv
@@ -234,7 +238,8 @@ python -m venv .venv
 # macOS/Linux:
 source .venv/bin/activate
 
-pip install factcat[bigquery]
+pip install factcat[bigquery]    # or factcat[snowflake], or factcat[all]
+# BigQuery only:
 gcloud auth application-default login
 gcloud config set project YOUR_GCP_PROJECT
 
@@ -242,15 +247,17 @@ cd /path/to/your/warehouse   # mapping is saved here
 factcat-app
 ```
 
-Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): billing
-project from ADC, then dataset → table → entity id and timestamp. Catalog
-lists load when you open a dropdown, not when you visit the page. Location
-is taken from the dataset (do not guess `US`). **Save** writes
+Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): pick **BigQuery** or
+**Snowflake**, then that warehouse's connection and catalog, then entity id and timestamp.
+Catalog lists load when you open a dropdown, not when you visit the page. **Save** writes
 `.factcat.json` and, if an event-name column is mapped, runs DISTINCT on
 the last 90 days and caches the names. It stays on Setup and shows
 **Saved**. Setup is a separate control at the bottom of the left rail, not
 an analysis.
-Advanced is only if you use a key file instead of ADC.
+
+**BigQuery.** Billing project from ADC, then dataset → table. Location
+is taken from the dataset (do not guess `US`). Advanced is only if you use a key file
+instead of ADC.
 
 Map the event-name column on **Setup** (STRING). Event names are cached
 on **Save** (DISTINCT, last 90 days of the timestamp). On Events, **Event**
@@ -268,8 +275,12 @@ for chart and table numbers. Catalog dropdowns are alphabetical.
 Entity lists string and integer columns; timestamp lists TIMESTAMP /
 DATETIME.
 
-If the table lives in another GCP project (billing in `dev`, data in `prod`), set
+If the BigQuery table lives in another GCP project (billing in `dev`, data in `prod`), set
 **Project that holds the table** before loading datasets.
+
+**Snowflake.** Account identifier, user, compute warehouse, path to a private key
+(`rsa_key.p8`), then database → schema → table. An encrypted key's passphrase is
+`SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` in the environment, not in `.factcat.json`.
 
 There is no `user_id` default. **Entity name** on Setup is a display label
 (default User; Other is free text). It does not pick the id column.
@@ -290,9 +301,10 @@ series never hits it; a slice by a high-cardinality property might. If it
 does, a warning offers **Load more**, which doubles the cap for that run
 rather than removing LIMIT. There is no hard max. Sort is among loaded
 rows and does not re-query. **Job scan
-cap** is set in Setup (default 10 GB on the BigQuery job). If an estimate
-exceeds it, the report can override the cap for that run. The filter pane
-sits beside Chart, Table, and SQL result panes.
+cap** is set in Setup for BigQuery (default 10 GB on the job). Snowflake has no
+byte estimate; that chrome is hidden. If a BigQuery estimate exceeds the cap, the
+report can override it for that run. The filter pane sits beside Chart, Table, and
+SQL result panes.
 
 Click **Run**. The mapping is written to `.factcat.json` in the directory where you started
 `factcat-app`, so the next start is already filled in. Add `.factcat.json` to that repo’s
@@ -300,7 +312,7 @@ Click **Run**. The mapping is written to `.factcat.json` in the directory where 
 start the app.
 
 Stop the server with Ctrl+C. To use a key file instead of ADC, paste the JSON path in the
-form. The app never copies your events off BigQuery.
+form. The app never copies your events out of your warehouse.
 
 ## Tests
 

@@ -32,7 +32,8 @@ dev = ["duckdb>=1.0.0", "pytest>=8.0.0", "httpx>=0.27.0"]
 # Execute adapters. Named after connect(kind=). Default install has none.
 # Extra `all` is every shipped driver — not a privileged first warehouse.
 bigquery = ["google-cloud-bigquery>=3.0.0"]
-all = ["factcat[bigquery]"]
+snowflake = ["snowflake-connector-python[secure-local-storage]>=3.12.0"]
+all = ["factcat[bigquery,snowflake]"]
 
 [project.scripts]
 factcat-app = "factcat_app.__main__:main"
