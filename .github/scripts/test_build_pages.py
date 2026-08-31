@@ -42,7 +42,8 @@ def test_builds_site_from_readme(tmp_path: Path):
 
     index = (site / "index.html").read_text(encoding="utf-8")
     assert "<title>Factcat</title>" in index
-    assert "Open-source, warehouse-first product analytics." in index
+    assert "An open-source alternative to Amplitude and Mixpanel" in index
+    assert "no SDK, no ingestion, nothing hosted." in index
     assert "pip install factcat" in index
     assert "https://github.com/gordonkjlee/factcat" in index
     assert "https://pypi.org/project/factcat/" in index

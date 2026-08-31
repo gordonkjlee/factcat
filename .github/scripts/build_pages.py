@@ -26,7 +26,11 @@ DOMAIN = "factcat.dev"
 SITE_ORIGIN = f"https://{DOMAIN}"
 GITHUB = "https://github.com/gordonkjlee/factcat"
 PYPI = "https://pypi.org/project/factcat/"
-PITCH = "Open-source, warehouse-first product analytics."
+PITCH = (
+    "An open-source alternative to Amplitude and Mixpanel that runs in your own "
+    "data warehouse. Factcat generates SQL and runs it in your BigQuery or "
+    "Snowflake — no SDK, no ingestion, nothing hosted."
+)
 MARKDOWN_EXTENSIONS = ("fenced_code", "tables")
 
 # Repo-relative source → published path. Anything else that exists in the

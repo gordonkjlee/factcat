@@ -1,4 +1,4 @@
-"""Factcat — open-source, warehouse-first product analytics.
+"""Factcat — open-source alternative to Amplitude and Mixpanel, in your own warehouse.
 
     from factcat import EventsSpec, events_sql, RetentionSpec, retention_sql
 
