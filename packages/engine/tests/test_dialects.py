@@ -416,10 +416,13 @@ def test_duckdb_approx_breakdown_uses_approx_top_k():
     assert "LIMIT" in sql_exact.upper()
 
 
-def test_databricks_approx_breakdown_uses_approx_top_k():
-    sql = events_sql(EVENTS_BREAKDOWN_APPROX, dialect="databricks")
-    assert "approx_top_k" in sql.lower()
-    assert "explode" in sql.lower()
+def test_databricks_approx_breakdown_nests_explode_outside_aggregate():
+    for dialect in ("databricks", "spark"):
+        sql = events_sql(EVENTS_BREAKDOWN_APPROX, dialect=dialect)
+        compact = sql.lower().replace(" ", "")
+        assert "approx_top_k" in compact
+        assert "explode(fc_tops)" in compact
+        assert "explode(approx_top_k" not in compact
 
 
 def test_clickhouse_approx_breakdown_uses_topk():

@@ -199,7 +199,9 @@ def top_labels_select(
     if dialect in ("databricks", "spark"):
         return (
             f"SELECT rec.item AS {col} "
-            f"FROM (SELECT explode(approx_top_k({col}, {n})) AS rec FROM {filtered}) _fc_expl"
+            f"FROM (SELECT explode(fc_tops) AS rec FROM "
+            f"(SELECT approx_top_k({col}, {n}) AS fc_tops FROM {filtered}) _fc_tops"
+            f") _fc_expl"
         )
     if dialect == "clickhouse":
         return (
