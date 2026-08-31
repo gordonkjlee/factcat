@@ -130,8 +130,11 @@ def split_readme(text: str) -> tuple[str, str]:
         i += 1
     pitch = PITCH
     if i < len(lines) and not lines[i].startswith("#"):
-        pitch = lines[i].strip()
-        i += 1
+        lede: list[str] = []
+        while i < len(lines) and lines[i].strip() and not lines[i].startswith("#"):
+            lede.append(lines[i].strip())
+            i += 1
+        pitch = " ".join(lede)
     kept.append("")
     kept.extend(lines[i:])
     return pitch, "\n".join(kept).strip() + "\n"

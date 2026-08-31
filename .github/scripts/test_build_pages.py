@@ -69,9 +69,23 @@ def test_builds_site_from_readme(tmp_path: Path):
 
 def test_split_readme_uses_lede_and_keeps_image():
     pitch, rest = build_pages.split_readme((ROOT / "README.md").read_text(encoding="utf-8"))
-    assert pitch == "Open-source, warehouse-first product analytics."
+    assert pitch == build_pages.PITCH  # README lede and fallback must not drift
     assert rest.startswith("<img ")
     assert "# Factcat" not in rest.splitlines()[0]
+    assert "## The problem" in rest
+
+
+def test_split_readme_joins_multiline_lede():
+    text = (
+        "# Factcat\n\n"
+        '<img src="x.png">\n\n'
+        "First line of the pitch\n"
+        "continues on a second line.\n\n"
+        "## The problem\n\nBody.\n"
+    )
+    pitch, rest = build_pages.split_readme(text)
+    assert pitch == "First line of the pitch continues on a second line."
+    assert "continues on a second line." not in rest
     assert "## The problem" in rest
 
 
