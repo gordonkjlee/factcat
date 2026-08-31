@@ -1,4 +1,4 @@
-"""FastAPI UI: one Events chart on the caller's BigQuery."""
+"""FastAPI UI: one Events chart on the caller's warehouse."""
 
 from __future__ import annotations
 
@@ -11,27 +11,32 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from factcat.warehouses import AdapterError, BytesCapError, connect
+from factcat.dialects import supports_json_value
+from factcat.warehouses import (
+    ADAPTERS,
+    CAP_DRY_RUN,
+    AdapterError,
+    BytesCapError,
+    capabilities,
+    connect,
+)
 
 from .catalog import (
-    DISTINCT_OF_TYPES,
-    ENTITY_TYPES,
-    EVENT_NAME_TYPES,
-    JSON_TYPES,
-    PROPERTY_OF_TYPES,
-    TIME_TYPES,
     bootstrap_project,
     columns_from_form,
     datasets_from_form,
+    schemas_from_form,
     tables_from_form,
+    type_sets,
 )
-from .config import load, mapping_ready, save
+from .config import load, mapping_ready, save, warehouse_kind
 from .query import (
     REPORTING_TIMEZONES,
     annotate_incomplete,
     connection_from_form,
     event_values_sql,
     events_sql_from_form,
+    form_kind,
     job_bytes_cap,
     query_row_limit,
 )
@@ -41,6 +46,7 @@ STATIC_DIR = APP_DIR / "static"
 DOCS_DIR = APP_DIR / "guides"
 SETUP_DOCS = {
     "bigquery": DOCS_DIR / "setup-bigquery.md",
+    "snowflake": DOCS_DIR / "setup-snowflake.md",
 }
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 
@@ -60,18 +66,26 @@ def favicon() -> FileResponse:
 
 
 def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLResponse:
+    kind = warehouse_kind(cfg)
+    types = type_sets(kind)
     return templates.TemplateResponse(
         request,
         template,
         {
             "config": cfg,
             "screen": screen,
-            "entity_types": sorted(ENTITY_TYPES),
-            "time_types": sorted(TIME_TYPES),
-            "event_name_types": sorted(EVENT_NAME_TYPES),
-            "property_of_types": sorted(PROPERTY_OF_TYPES),
-            "distinct_of_types": sorted(DISTINCT_OF_TYPES),
-            "json_types": sorted(JSON_TYPES),
+            "entity_types": sorted(types["entity"]),
+            "time_types": sorted(types["event_time"]),
+            "event_name_types": sorted(types["event_column"]),
+            "property_of_types": sorted(types["of"] - types["json"]),
+            "distinct_of_types": sorted(types["of_distinct"] - types["json"]),
+            "json_types": sorted(types["json"]),
+            "capabilities": sorted(capabilities(kind)),
+            "supports_json_value": supports_json_value(kind),
+            "type_sets": {
+                name: {role: sorted(vals) for role, vals in type_sets(name).items()}
+                for name in ADAPTERS
+            },
         },
     )
 
@@ -87,19 +101,29 @@ def index(request: Request):
 @app.get("/setup", response_class=HTMLResponse)
 def setup(request: Request) -> HTMLResponse:
     cfg = load()
-    if not cfg.get("project"):
+    kind = warehouse_kind(cfg)
+    if kind == "bigquery" and not cfg.get("project"):
         cfg["project"] = bootstrap_project()
+    types = type_sets(kind)
     return templates.TemplateResponse(
         request,
         "setup.html",
         {
             "config": cfg,
             "screen": "setup",
-            "entity_types": sorted(ENTITY_TYPES),
-            "time_types": sorted(TIME_TYPES),
-            "event_name_types": sorted(EVENT_NAME_TYPES),
-            "setup_docs": setup_docs_html("bigquery"),
+            "entity_types": sorted(types["entity"]),
+            "time_types": sorted(types["event_time"]),
+            "event_name_types": sorted(types["event_column"]),
+            "setup_docs": setup_docs_html(kind),
+            "setup_docs_by_kind": {
+                name: setup_docs_html(name) for name in ADAPTERS
+            },
             "reporting_timezones": REPORTING_TIMEZONES,
+            "capabilities": sorted(capabilities(kind)),
+            "type_sets": {
+                name: {role: sorted(vals) for role, vals in type_sets(name).items()}
+                for name in ADAPTERS
+            },
         },
     )
 
@@ -116,6 +140,16 @@ async def api_datasets(request: Request) -> JSONResponse:
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc)
     return JSONResponse({"ok": True, "datasets": datasets})
+
+
+@app.post("/api/schemas")
+async def api_schemas(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        schemas = schemas_from_form(form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc)
+    return JSONResponse({"ok": True, "schemas": schemas})
 
 
 @app.post("/api/tables")
@@ -153,7 +187,7 @@ async def api_event_values(request: Request) -> JSONResponse:
     try:
         sql = event_values_sql(form)
         conn = connection_from_form(form)
-        warehouse = connect("bigquery", **conn)
+        warehouse = connect(form_kind(form), **conn)
         result = warehouse.run(sql)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc)
@@ -257,9 +291,21 @@ async def api_estimate(request: Request) -> JSONResponse:
     form = await request.json()
     sql = None
     try:
+        kind = form_kind(form)
+        caps = capabilities(kind)
+        if CAP_DRY_RUN not in caps:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "bytes": None,
+                    "cap": None,
+                    "over_cap": False,
+                    "supported": False,
+                }
+            )
         conn = connection_from_form(form)
         sql = events_sql_from_form(form)
-        warehouse = connect("bigquery", **conn)
+        warehouse = connect(kind, **conn)
         result = warehouse.run(sql, dry_run=True)
     except BytesCapError as exc:
         return JSONResponse(
@@ -286,7 +332,7 @@ async def api_run(request: Request) -> JSONResponse:
         sql = events_sql_from_form(form)
         conn = connection_from_form(form)
         save(form)
-        warehouse = connect("bigquery", **conn)
+        warehouse = connect(form_kind(form), **conn)
         result = warehouse.run(sql)
     except BytesCapError as exc:
         return _fail(exc, sql)

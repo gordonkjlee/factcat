@@ -9,9 +9,12 @@ from datetime import date, datetime, timedelta, timezone
 
 from factcat import EVENT_MEASURES, PROPERTY_MEASURES, EventsSpec, events_sql
 from factcat.spec import BREAKDOWN_AT
+from factcat.warehouses import CAP_SCAN_CAP, capabilities
 from factcat.warehouses.bigquery import DEFAULT_MAXIMUM_BYTES_BILLED
+from factcat.warehouses.snowflake import passphrase_from_env
 from factcat._emit import transpile
-from factcat.dialects import splice_placeholders
+from factcat.dialects import json_value_sql, splice_placeholders
+from factcat_app.config import WAREHOUSE_KINDS
 
 _TABLE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_]+)+$")
 _COLUMN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -40,7 +43,8 @@ def _ident_table(value: str, label: str) -> str:
     value = (value or "").strip()
     if not _TABLE.match(value):
         raise ValueError(
-            f"{label} must be dataset.table or project.dataset.table"
+            f"{label} must be dataset.table, project.dataset.table, "
+            "or database.schema.table"
         )
     # DuckDB-quoted so sqlglot can parse hyphenated GCP project ids, then
     # emit BigQuery backticks. Unquoted my-proj.ds.t is subtraction.
@@ -111,10 +115,31 @@ def _reporting_timezone(form: dict[str, Any]) -> str:
     return raw
 
 
+_EPOCH = {
+    "seconds": "unix_s",
+    "s": "unix_s",
+    "unix_s": "unix_s",
+    "milliseconds": "unix_ms",
+    "ms": "unix_ms",
+    "unix_ms": "unix_ms",
+    "microseconds": "unix_us",
+    "us": "unix_us",
+    "unix_us": "unix_us",
+}
+
+
 def _event_time_kind(form: dict[str, Any]) -> str:
+    epoch = str(form.get("event_time_epoch") or "").strip().lower()
+    if epoch:
+        mapped = _EPOCH.get(epoch)
+        if mapped is None:
+            raise ValueError(
+                "event_time_epoch must be seconds, milliseconds, or microseconds"
+            )
+        return mapped
     raw = str(form.get("event_time_tz") or "utc").strip().lower()
-    if raw not in {"utc", "reporting"}:
-        raise ValueError("event_time_tz must be utc or reporting")
+    if raw not in {"utc", "reporting", "instant"}:
+        raise ValueError("event_time_tz must be utc, reporting, or instant")
     return raw
 
 
@@ -209,16 +234,22 @@ def _parse_bucket(value: Any) -> date | None:
     return date.fromisoformat(match.group(0))
 
 
+def form_kind(form: dict[str, Any]) -> str:
+    raw = str(form.get("kind") or "bigquery").strip().lower() or "bigquery"
+    if raw not in WAREHOUSE_KINDS:
+        raise ValueError("kind must be " + ", ".join(WAREHOUSE_KINDS))
+    return raw
+
+
 def _today_sql(form: dict[str, Any]) -> str:
-    return f"CURRENT_DATE({_sql_string(_reporting_timezone(form))})"
+    return _ps("current_date", "day", form, 0)
 
 
 def _as_event_time(date_sql: str, form: dict[str, Any]) -> str:
     """Bound an event_time column with a DATE expression in the column's type."""
     tz = _reporting_timezone(form)
-    if _event_time_kind(form) == "reporting":
-        return f"CAST({date_sql} AS DATETIME)"
-    return f"TIMESTAMP({date_sql}, {_sql_string(tz)})"
+    kind = _event_time_kind(form)
+    return f"factcat_ts_at_date({date_sql}, {_sql_string(tz)}, '{kind}')"
 
 
 def _event_time_lhs(event_time: str, form: dict[str, Any]) -> str:
@@ -228,8 +259,11 @@ def _event_time_lhs(event_time: str, form: dict[str, Any]) -> str:
     first/last attribution. sqlglot rewrites a raw CAST to DATETIME;
     ``factcat_as_instant`` is spliced after transpile.
     """
-    if _event_time_kind(form) == "reporting":
+    kind = _event_time_kind(form)
+    if kind == "reporting":
         return event_time
+    if kind.startswith("unix_"):
+        return f"factcat_as_instant({event_time}, '{kind}')"
     return f"factcat_as_instant({event_time})"
 
 
@@ -291,11 +325,11 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
                 raise ValueError("relative from must be at least as far back as to")
             if unit == "day":
                 clauses = [
-                    f"{lhs} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {start_n} DAY)', form)}"
+                    f"{lhs} >= {_as_event_time(_ps('current_date', 'day', form, -start_n), form)}"
                 ]
                 if end_n > 0:
                     clauses.append(
-                        f"{lhs} < {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {end_n - 1} DAY)', form)}"
+                        f"{lhs} < {_as_event_time(_ps('current_date', 'day', form, -(end_n - 1)), form)}"
                     )
                 return clauses
             clauses = [
@@ -332,7 +366,7 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
         ]
     if unit == "day":
         clauses = [
-            f"{lhs} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {n} DAY)', form)}"
+            f"{lhs} >= {_as_event_time(_ps('current_date', 'day', form, -n), form)}"
         ]
         if _exclude_current(form):
             clauses.append(
@@ -412,13 +446,12 @@ def _json_path(key: str, label: str) -> str:
     return "$." + raw
 
 
-def _json_value_sql(column: str, key: str, label: str, *, numeric: bool) -> str:
+def _json_value_sql(
+    column: str, key: str, label: str, *, numeric: bool, dialect: str
+) -> str:
     col = _ident_column(column, label)
     path = _json_path(key, label)
-    expr = f"JSON_VALUE({col}, '{path}')"
-    if numeric:
-        return f"SAFE_CAST({expr} AS FLOAT64)"
-    return expr
+    return json_value_sql(col, path, dialect, numeric=numeric)
 
 
 def _json_label(key: str) -> str:
@@ -447,7 +480,9 @@ def _breakdown_from_form(form: dict[str, Any]) -> tuple[tuple[str, ...], tuple[s
         return (), None
     json_key = (form.get("breakdown_json_key") or "").strip()
     if json_key:
-        extracted = _json_value_sql(column, json_key, "breakdown", numeric=False)
+        extracted = _json_value_sql(
+            column, json_key, "breakdown", numeric=False, dialect=form_kind(form)
+        )
         label = _json_label(json_key)
         if not _COLUMN.match(label):
             label = "json_key"
@@ -467,7 +502,9 @@ def _of_from_form(form: dict[str, Any], *, measure: str) -> str:
     json_key = (form.get("of_json_key") or "").strip()
     if json_key:
         numeric = measure in {"sum", "average", "median"}
-        return _json_value_sql(column, json_key, "of", numeric=numeric)
+        return _json_value_sql(
+            column, json_key, "of", numeric=numeric, dialect=form_kind(form)
+        )
     return _ident_column(column, "of")
 
 
@@ -556,7 +593,7 @@ def _indent_sql(sql: str, n: int = 4) -> str:
 
 def events_sql_from_form(form: dict[str, Any]) -> str:
     """Events SQL with a result-row crash fuse (most recent rows)."""
-    sql = events_sql(spec_from_form(form), dialect="bigquery").rstrip()
+    sql = events_sql(spec_from_form(form), dialect=form_kind(form)).rstrip()
     n = query_row_limit(form)
     inner = _indent_sql(sql, 4)
     return (
@@ -595,7 +632,7 @@ def event_values_sql(form: dict[str, Any]) -> str:
     if catalog:
         where = (
             f"{event_column} IS NOT NULL "
-            f"AND {_event_time_lhs(event_time, form)} >= {_as_event_time(f'DATE_SUB({_today_sql(form)}, INTERVAL {CATALOG_LOOKBACK_DAYS} DAY)', form)}"
+            f"AND {_event_time_lhs(event_time, form)} >= {_as_event_time(_ps('current_date', 'day', form, -CATALOG_LOOKBACK_DAYS), form)}"
         )
     else:
         where = " AND ".join(
@@ -608,21 +645,42 @@ def event_values_sql(form: dict[str, Any]) -> str:
         f"ORDER BY 1 "
         f"LIMIT {EVENT_VALUE_LIMIT}"
     )
-    return splice_placeholders(transpile(sql, "bigquery"), "bigquery")
+    dialect = form_kind(form)
+    return splice_placeholders(transpile(sql, dialect), dialect)
 
 
 def connection_from_form(form: dict[str, Any]) -> dict[str, Any]:
+    kind = form_kind(form)
+    if kind == "snowflake":
+        out: dict[str, Any] = {
+            "account": (form.get("account") or "").strip(),
+            "user": (form.get("user") or "").strip(),
+            "warehouse": (form.get("warehouse") or "").strip(),
+            "database": (form.get("database") or "").strip(),
+            "schema": (form.get("schema") or "").strip(),
+            "private_key_path": (form.get("private_key_path") or "").strip(),
+            "authenticator": (form.get("snowflake_auth") or "key_pair").strip()
+            or "key_pair",
+        }
+        role = (form.get("role") or "").strip()
+        if role:
+            out["role"] = role
+        passphrase = passphrase_from_env()
+        if passphrase:
+            out["private_key_passphrase"] = passphrase
+        return out
     project = (form.get("project") or "").strip()
     location = (form.get("location") or "").strip()
     if not project:
         raise ValueError("project is required")
     if not location:
         raise ValueError("location is required")
-    out: dict[str, Any] = {
+    out = {
         "project": project,
         "location": location,
-        "maximum_bytes_billed": job_bytes_cap(form),
     }
+    if CAP_SCAN_CAP in capabilities(kind):
+        out["maximum_bytes_billed"] = job_bytes_cap(form)
     credentials = (form.get("credentials") or "").strip()
     if credentials:
         out["credentials"] = credentials

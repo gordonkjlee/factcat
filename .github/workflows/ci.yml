@@ -42,6 +42,7 @@ jobs:
           names = zipfile.ZipFile(whls[0]).namelist()
           for needle in (
               "factcat_app/guides/setup-bigquery.md",
+              "factcat_app/guides/setup-snowflake.md",
               "factcat_app/static/logo.png",
               "factcat_app/static/catalog.js",
           ):

@@ -22,7 +22,7 @@ from factcat import (
     retention_sql,
 )
 from factcat._emit import GRID_RELATION, transpile_with_grid
-from factcat.dialects import period_start_shifted, splice_placeholders
+from factcat.dialects import as_instant, period_start_shifted, splice_placeholders
 
 RETENTION = RetentionSpec(
     table="payments",
@@ -272,6 +272,54 @@ def test_bigquery_current_date_is_zoned():
         "DATE_SUB(DATE_TRUNC(CURRENT_DATE('Europe/Berlin'), WEEK(MONDAY)), "
         "INTERVAL 1 WEEK)"
     )
+
+
+def test_unix_seconds_is_timestamp_seconds_on_bigquery():
+    sql = period_start_shifted(
+        "occurred_at", "day", "monday", 0, "bigquery", "Europe/Berlin", "unix_s"
+    )
+    assert sql == "DATE(TIMESTAMP_SECONDS(occurred_at), 'Europe/Berlin')"
+    assert as_instant("occurred_at", "bigquery", "unix_s") == "TIMESTAMP_SECONDS(occurred_at)"
+
+
+def test_unix_millis_is_to_timestamp_on_snowflake():
+    sql = period_start_shifted(
+        "occurred_at", "day", "monday", 0, "snowflake", "UTC", "unix_ms"
+    )
+    assert "TO_TIMESTAMP_TZ(occurred_at, 3)" in sql
+    assert "CONVERT_TIMEZONE('UTC'" in sql
+
+
+def test_snowflake_ntz_utc_uses_three_arg_convert():
+    sql = period_start_shifted(
+        "occurred_at", "day", "monday", 0, "snowflake", "Europe/Berlin", "utc"
+    )
+    assert sql == "CAST(CONVERT_TIMEZONE('UTC', 'Europe/Berlin', occurred_at) AS DATE)"
+
+
+def test_snowflake_instant_uses_two_arg_convert():
+    sql = period_start_shifted(
+        "occurred_at", "day", "monday", 0, "snowflake", "Europe/Berlin", "instant"
+    )
+    assert sql == "CAST(CONVERT_TIMEZONE('Europe/Berlin', occurred_at) AS DATE)"
+    assert "CONVERT_TIMEZONE('UTC', 'Europe/Berlin'" not in sql
+
+
+def test_snowflake_ntz_reporting_is_plain_date():
+    sql = period_start_shifted(
+        "occurred_at", "day", "monday", 0, "snowflake", "Europe/Berlin", "reporting"
+    )
+    assert sql == "CAST(occurred_at AS DATE)"
+
+
+def test_snowflake_week_start_is_explicit_not_session():
+    sql = events_sql(EVENTS_TZ, dialect="snowflake")
+    compact = sql.upper().replace(" ", "")
+    assert "CONVERT_TIMEZONE('EUROPE/BERLIN'" in compact
+    assert "DAYOFWEEKISO" in compact
+    assert "WEEK_START" not in compact
+    assert "FACTCAT_PERIOD_START_SHIFTED" not in compact
+    assert "ASDATE" in compact
 
 
 def test_timezone_rejects_quotes():

@@ -12,7 +12,14 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from . import AdapterError, BytesCapError, QueryResult
+from . import (
+    CAP_BYTES_PROCESSED,
+    CAP_DRY_RUN,
+    CAP_SCAN_CAP,
+    AdapterError,
+    BytesCapError,
+    QueryResult,
+)
 
 DEFAULT_MAXIMUM_BYTES_BILLED = 10 * 1024**3  # 10 GiB
 DEFAULT_TIMEOUT = 600.0
@@ -105,6 +112,9 @@ class BigQueryAdapter:
     maximum_bytes_billed: int | None = DEFAULT_MAXIMUM_BYTES_BILLED
     timeout: float = DEFAULT_TIMEOUT
     dialect: ClassVar[str] = "bigquery"
+    capabilities: ClassVar[frozenset[str]] = frozenset(
+        {CAP_DRY_RUN, CAP_BYTES_PROCESSED, CAP_SCAN_CAP}
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.project, str) or not self.project.strip():

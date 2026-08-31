@@ -56,26 +56,63 @@
 <div class="setup-page">
 <form id="f" class="setup-form">
   <h1>Project setup</h1>
-  <p class="lede">Map a table in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code> in this directory. Uses application-default credentials unless you open Advanced.</p>
+  <p class="lede" id="setup-lede">{% if config.kind == "snowflake" %}Map a table in <em>your</em> Snowflake. Mapping is saved to <code>.factcat.json</code> in this directory. Sign-in is a key-pair file.{% else %}Map a table in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code> in this directory. Uses application-default credentials unless you open Advanced.{% endif %}</p>
 
   <h2>Warehouse</h2>
-  <label for="project">GCP project that runs the query (billing)</label>
-  <input id="project" name="project" required autocomplete="off" value="{{ config.project }}">
-  <label for="data_project">Project that holds the table (blank = same as billing)</label>
-  <input id="data_project" name="data_project" autocomplete="off" value="{{ config.data_project }}">
-  <input type="hidden" name="location" id="location" value="{{ config.location }}">
+  <label for="kind">Warehouse</label>
+  <select id="kind" name="kind">
+    <option value="bigquery" {% if (config.kind or "bigquery") != "snowflake" %}selected{% endif %}>BigQuery</option>
+    <option value="snowflake" {% if config.kind == "snowflake" %}selected{% endif %}>Snowflake</option>
+  </select>
+
+  <div id="bq-conn">
+    <label for="project">GCP project that runs the query (billing)</label>
+    <input id="project" name="project" autocomplete="off" value="{{ config.project }}">
+    <label for="data_project">Project that holds the table (blank = same as billing)</label>
+    <input id="data_project" name="data_project" autocomplete="off" value="{{ config.data_project }}">
+    <input type="hidden" name="location" id="location" value="{{ config.location }}">
+  </div>
+  <div id="sf-conn" hidden>
+    <label for="account">Account identifier</label>
+    <input id="account" name="account" autocomplete="off" value="{{ config.account }}" placeholder="xy12345">
+    <span class="hint">The account locator from your Snowflake URL, for example <code>xy12345</code> or <code>xy12345.us-east-1</code>.</span>
+    <label for="user">User</label>
+    <input id="user" name="user" autocomplete="off" value="{{ config.user }}">
+    <label for="warehouse">Compute warehouse</label>
+    <input id="warehouse" name="warehouse" autocomplete="off" value="{{ config.warehouse }}">
+    <label for="role">Role (optional)</label>
+    <input id="role" name="role" autocomplete="off" value="{{ config.role }}">
+    <label for="snowflake_auth">Sign-in</label>
+    <select id="snowflake_auth" name="snowflake_auth">
+      <option value="key_pair" {% if config.snowflake_auth != "externalbrowser" %}selected{% endif %}>Key-pair file</option>
+      <option value="externalbrowser" {% if config.snowflake_auth == "externalbrowser" %}selected{% endif %}>Browser SSO</option>
+    </select>
+    <span class="hint" id="sf-auth-hint">Key-pair JWT. Encrypted keys use env <code>SNOWFLAKE_PRIVATE_KEY_PASSPHRASE</code>. The passphrase is not saved in <code>.factcat.json</code>.</span>
+    <div id="sf-key-wrap">
+      <label for="private_key_path">Private key file</label>
+      <input id="private_key_path" name="private_key_path" autocomplete="off" value="{{ config.private_key_path }}" placeholder="rsa_key.p8">
+    </div>
+  </div>
   <input type="hidden" name="table" id="table" value="{{ config.table }}">
 
   <h2>Table</h2>
-  <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
-  <select id="dataset" name="dataset" hidden></select>
+  <div id="bq-table">
+    <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <select id="dataset" name="dataset" hidden></select>
+  </div>
+  <div id="sf-table" hidden>
+    <label for="database">Database <span id="database-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <select id="database" name="database" hidden></select>
+    <label for="schema">Schema <span id="schema-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <select id="schema" name="schema" hidden></select>
+  </div>
   <label for="table_name">Table <span id="table_name-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="table_name" name="table_name" hidden></select>
 
   <h2>Grain</h2>
   <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="entity" name="entity" required hidden></select>
-  <span class="hint">Stable id for this grain. Null means the event is not about that grain (dropped from uniques). INT64 preferred; STRING is fine. Not unique on the events table.</span>
+  <span class="hint">Stable id for this grain. Null means the event is not about that grain (dropped from uniques). Integer preferred; string is fine. Not unique on the events table.</span>
   <label for="entity_label_choice">Entity name (singular)</label>
   <select id="entity_label_choice">
     <option value="User">User</option>
@@ -94,10 +131,20 @@
   <span class="hint">Display only (Unique Users, Average per User). Does not choose the id column.</span>
   <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="event_time" name="event_time" required hidden></select>
-  <span class="hint">TIMESTAMP (UTC instant) or DATETIME (civil time). Not DATE.</span>
+  <span class="hint" id="event-time-hint">TIMESTAMP (UTC instant), DATETIME (civil time), or an integer Unix epoch. Not DATE.</span>
+  <div id="event-time-epoch-wrap" hidden>
+    <label for="event_time_epoch">Unix epoch unit</label>
+    <select id="event_time_epoch" name="event_time_epoch">
+      <option value="" {% if not config.event_time_epoch %}selected{% endif %}></option>
+      <option value="seconds" {% if config.event_time_epoch == "seconds" %}selected{% endif %}>Seconds</option>
+      <option value="milliseconds" {% if config.event_time_epoch == "milliseconds" %}selected{% endif %}>Milliseconds</option>
+      <option value="microseconds" {% if config.event_time_epoch == "microseconds" %}selected{% endif %}>Microseconds</option>
+    </select>
+    <span class="hint">Integer seconds (or ms / µs) since 1970-01-01 UTC. Always an instant; reporting timezone is whose midnight is a day.</span>
+  </div>
   <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
   <select id="event_column" name="event_column" hidden></select>
-  <span class="hint">STRING column of event names. Save runs DISTINCT on the last 90 days and caches the list for Events.</span>
+  <span class="hint">String column of event names. Save runs DISTINCT on the last 90 days and caches the list for Events.</span>
   <h2>Time</h2>
   <label for="week_start">Week starts on</label>
   <select id="week_start" name="week_start">
@@ -112,12 +159,15 @@
     {% endfor %}
   </select>
   <span class="hint">Whose midnight is a day, and whose Monday is a week. Not the warehouse default.</span>
-  <label for="event_time_tz">Timestamp stored as</label>
-  <select id="event_time_tz" name="event_time_tz">
-    <option value="utc" {% if config.event_time_tz != "reporting" %}selected{% endif %}>UTC instant (TIMESTAMP)</option>
-    <option value="reporting" {% if config.event_time_tz == "reporting" %}selected{% endif %}>Civil time in the reporting timezone (DATETIME)</option>
-  </select>
-  <span class="hint">TIMESTAMP is a UTC instant. DATETIME has no zone: treat it as already in the reporting timezone.</span>
+  <div id="event-time-tz-wrap">
+    <label for="event_time_tz">Timestamp stored as</label>
+    <select id="event_time_tz" name="event_time_tz">
+      <option value="instant" {% if config.event_time_tz == "instant" %}selected{% endif %}>Instant (has a timezone)</option>
+      <option value="utc" {% if config.event_time_tz == "utc" or not config.event_time_tz %}selected{% endif %}>Wall-clock UTC (no zone on the column)</option>
+      <option value="reporting" {% if config.event_time_tz == "reporting" %}selected{% endif %}>Wall-clock in the reporting timezone</option>
+    </select>
+    <span class="hint" id="event-time-tz-hint">TIMESTAMP_TZ and TIMESTAMP_LTZ are instants (offset or UTC storage). TIMESTAMP_NTZ / DATETIME are wall-clock numbers — say whether those numbers are UTC or already in the reporting timezone.</span>
+  </div>
   <h2>Formatting</h2>
   <label for="thousand_sep">Thousand separator</label>
   <select id="thousand_sep" name="thousand_sep">
@@ -132,9 +182,11 @@
     <option value="comma" {% if config.decimal_sep == "comma" %}selected{% endif %}>Comma (1,23)</option>
   </select>
   <span class="hint" id="num-example">Example: 1,234.56</span>
-  <label for="bytes_cap_gb">Job scan cap (GB)</label>
-  <input id="bytes_cap_gb" name="bytes_cap_gb" type="number" min="0" step="1" value="{{ config.bytes_cap_gb if config.bytes_cap_gb is not none else 10 }}">
-  <span class="hint">Factcat sets this on the BigQuery job (<code>maximum_bytes_billed</code>). 0 is unlimited. A report can override it for one run.</span>
+  <div id="scan-cap-wrap">
+    <label for="bytes_cap_gb">Job scan cap (GB)</label>
+    <input id="bytes_cap_gb" name="bytes_cap_gb" type="number" min="0" step="1" value="{{ config.bytes_cap_gb if config.bytes_cap_gb is not none else 10 }}">
+    <span class="hint">Factcat sets this on the BigQuery job (<code>maximum_bytes_billed</code>). 0 is unlimited. A report can override it for one run.</span>
+  </div>
   <label for="query_row_limit">Result row limit</label>
   <input id="query_row_limit" name="query_row_limit" type="number" min="1" step="1" value="{{ config.query_row_limit or 1000000 }}">
   <span class="hint">Crash fuse in SQL after aggregation (most recent rows). A normal chart never hits this; grouping by a high-cardinality property might. It does not reduce bytes scanned. A report can raise it if results are truncated.</span>
@@ -143,30 +195,34 @@
   <p id="status"></p>
   <p id="error"></p>
 
-  <details>
+  <details id="bq-advanced">
     <summary>Advanced: service-account JSON instead of ADC</summary>
     <label for="credentials">Path to key file (leave blank to keep ADC)</label>
     <input id="credentials" name="credentials" autocomplete="off" value="{{ config.credentials }}">
   </details>
 </form>
-<aside class="setup-docs" aria-label="Setup guide">
+<aside class="setup-docs" aria-label="Setup guide" id="setup-docs-pane">
   {{ setup_docs | safe }}
 </aside>
 </div>
 <script>
 const saved = {
+  kind: {{ (config.kind or "bigquery")|tojson }},
   dataset: {{ config.dataset|tojson }},
+  database: {{ config.database|tojson }},
+  schema: {{ config.schema|tojson }},
   table_name: {{ config.table_name|tojson }},
   entity: {{ config.entity|tojson }},
   event_time: {{ config.event_time|tojson }},
   event_column: {{ config.event_column|tojson }},
 };
 const form = document.getElementById("f");
-// HTMLElement.dataset is data-* attributes. Access the BigQuery dataset
-// select by id, not as a property of the form.
+const kindEl = document.getElementById("kind");
 const projectEl = document.getElementById("project");
 const dataProjectEl = document.getElementById("data_project");
 const datasetEl = document.getElementById("dataset");
+const databaseEl = document.getElementById("database");
+const schemaEl = document.getElementById("schema");
 const tableNameEl = document.getElementById("table_name");
 const tableEl = document.getElementById("table");
 const locationEl = document.getElementById("location");
@@ -174,13 +230,21 @@ const entityEl = document.getElementById("entity");
 const eventTimeEl = document.getElementById("event_time");
 const eventColumnEl = document.getElementById("event_column");
 const credentialsEl = document.getElementById("credentials");
-const ENTITY_TYPES = new Set({{ entity_types|tojson }});
-const TIME_TYPES = new Set({{ time_types|tojson }});
-const EVENT_NAME_TYPES = new Set({{ event_name_types|tojson }});
+const TYPE_SETS = {{ type_sets|tojson }};
+const SETUP_DOCS = {{ setup_docs_by_kind|tojson }};
+function currentKind() {
+  return kindEl.value === "snowflake" ? "snowflake" : "bigquery";
+}
+function typeSet(role) {
+  const pack = TYPE_SETS[currentKind()] || TYPE_SETS.bigquery;
+  return new Set(pack[role] || []);
+}
 let dsGen = 0;
+let schGen = 0;
 let tblGen = 0;
 let colGen = 0;
 let datasetsFetched = false;
+let schemasFetched = false;
 let tablesFetched = false;
 let columnsFetched = false;
 let suppressChange = false;
@@ -260,17 +324,38 @@ function catalogProject() {
   return dataProjectEl.value.trim() || projectEl.value.trim();
 }
 function authBody() {
+  const kind = currentKind();
+  if (kind === "snowflake") {
+    return {
+      kind,
+      account: document.getElementById("account").value.trim(),
+      user: document.getElementById("user").value.trim(),
+      warehouse: document.getElementById("warehouse").value.trim(),
+      role: document.getElementById("role").value.trim(),
+      private_key_path: document.getElementById("private_key_path").value.trim(),
+      snowflake_auth: document.getElementById("snowflake_auth").value,
+      database: databaseEl.value.trim(),
+      schema: schemaEl.value.trim(),
+    };
+  }
   return {
+    kind,
     project: projectEl.value.trim(),
     data_project: dataProjectEl.value.trim(),
     credentials: credentialsEl.value.trim(),
   };
 }
 function combinedTable() {
+  const tableName = tableNameEl.value.trim();
+  if (currentKind() === "snowflake") {
+    const database = databaseEl.value.trim();
+    const schema = schemaEl.value.trim();
+    if (!database || !schema || !tableName) return "";
+    return database + "." + schema + "." + tableName;
+  }
   const billing = projectEl.value.trim();
   const data = dataProjectEl.value.trim() || billing;
   const dataset = datasetEl.value.trim();
-  const tableName = tableNameEl.value.trim();
   if (!dataset || !tableName) return "";
   if (data && data !== billing) return data + "." + dataset + "." + tableName;
   return dataset + "." + tableName;
@@ -280,6 +365,46 @@ function clearColumns() {
   hideSelect(eventTimeEl);
   hideSelect(eventColumnEl);
   tableEl.value = "";
+}
+function syncKindUi(clearIdentity) {
+  const snow = currentKind() === "snowflake";
+  document.getElementById("bq-conn").hidden = snow;
+  document.getElementById("sf-conn").hidden = !snow;
+  document.getElementById("bq-table").hidden = snow;
+  document.getElementById("sf-table").hidden = !snow;
+  document.getElementById("bq-advanced").hidden = snow;
+  document.getElementById("scan-cap-wrap").hidden = snow;
+  document.getElementById("setup-lede").innerHTML = snow
+    ? "Map a table in <em>your</em> Snowflake. Mapping is saved to <code>.factcat.json</code> in this directory. Sign-in is a key-pair file."
+    : "Map a table in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code> in this directory. Uses application-default credentials unless you open Advanced.";
+  document.getElementById("event-time-hint").textContent = snow
+    ? "TIMESTAMP_TZ and TIMESTAMP_LTZ are instants. TIMESTAMP_NTZ / DATETIME are wall-clock (no zone). Integers are Unix epoch. Not DATE or TIME."
+    : "TIMESTAMP (UTC instant), DATETIME (civil time), or an integer Unix epoch. Not DATE.";
+  syncSnowflakeAuthUi();
+  syncEventTimeKind();
+  const pane = document.getElementById("setup-docs-pane");
+  if (pane && SETUP_DOCS[currentKind()]) pane.innerHTML = SETUP_DOCS[currentKind()];
+  if (clearIdentity) {
+    if (snow) {
+      projectEl.value = "";
+      dataProjectEl.value = "";
+      locationEl.value = "";
+      credentialsEl.value = "";
+      seedSelect(datasetEl, "");
+    } else {
+      ["account", "user", "warehouse", "role", "private_key_path"].forEach((id) => {
+        document.getElementById(id).value = "";
+      });
+      seedSelect(databaseEl, "");
+      seedSelect(schemaEl, "");
+    }
+    seedSelect(tableNameEl, "");
+    clearColumns();
+    datasetsFetched = false;
+    schemasFetched = false;
+    tablesFetched = false;
+    columnsFetched = false;
+  }
 }
 async function post(url, body) {
   const res = await fetch(url, {
@@ -292,23 +417,45 @@ async function post(url, body) {
 async function loadDatasets() {
   const gen = ++dsGen;
   setError("");
-  if (!catalogProject()) return;
-  setLoading(datasetEl, true);
+  const snow = currentKind() === "snowflake";
+  if (!snow && !catalogProject()) return;
+  const sel = snow ? databaseEl : datasetEl;
+  setLoading(sel, true);
   const data = await post("/api/datasets", authBody());
   if (gen !== dsGen) return;
-  setLoading(datasetEl, false);
+  setLoading(sel, false);
   if (!data.ok) {
-    setError(data.error || "Could not list datasets");
+    setError(data.error || (snow ? "Could not list databases" : "Could not list datasets"));
     return;
   }
-  fillSelect(datasetEl, (data.datasets || []).map((d) => d.id), datasetEl.value || saved.dataset);
+  const ids = (data.datasets || []).map((d) => d.id);
+  fillSelect(sel, ids, sel.value || (snow ? saved.database : saved.dataset));
+}
+async function loadSchemas() {
+  const gen = ++schGen;
+  setError("");
+  if (currentKind() !== "snowflake" || !databaseEl.value) return;
+  setLoading(schemaEl, true);
+  const data = await post("/api/schemas", {...authBody(), database: databaseEl.value});
+  if (gen !== schGen) return;
+  setLoading(schemaEl, false);
+  if (!data.ok) {
+    setError(data.error || "Could not list schemas");
+    return;
+  }
+  fillSelect(schemaEl, data.schemas || [], schemaEl.value || saved.schema);
 }
 async function loadTables() {
   const gen = ++tblGen;
   setError("");
-  if (!datasetEl.value) return;
+  const snow = currentKind() === "snowflake";
+  if (snow && (!databaseEl.value || !schemaEl.value)) return;
+  if (!snow && !datasetEl.value) return;
   setLoading(tableNameEl, true);
-  const data = await post("/api/tables", {...authBody(), dataset: datasetEl.value});
+  const payload = snow
+    ? {...authBody(), database: databaseEl.value, schema: schemaEl.value}
+    : {...authBody(), dataset: datasetEl.value};
+  const data = await post("/api/tables", payload);
   if (gen !== tblGen) return;
   setLoading(tableNameEl, false);
   if (!data.ok) {
@@ -321,15 +468,17 @@ async function loadTables() {
 async function loadColumns() {
   const gen = ++colGen;
   setError("");
-  if (!datasetEl.value || !tableNameEl.value) return;
+  const snow = currentKind() === "snowflake";
+  if (!tableNameEl.value) return;
+  if (snow && (!databaseEl.value || !schemaEl.value)) return;
+  if (!snow && !datasetEl.value) return;
   setLoading(entityEl, true);
   setLoading(eventTimeEl, true);
   setLoading(eventColumnEl, true);
-  const data = await post("/api/columns", {
-    ...authBody(),
-    dataset: datasetEl.value,
-    table_name: tableNameEl.value,
-  });
+  const payload = snow
+    ? {...authBody(), database: databaseEl.value, schema: schemaEl.value, table_name: tableNameEl.value}
+    : {...authBody(), dataset: datasetEl.value, table_name: tableNameEl.value};
+  const data = await post("/api/columns", payload);
   if (gen !== colGen) return;
   setLoading(entityEl, false);
   setLoading(eventTimeEl, false);
@@ -340,9 +489,9 @@ async function loadColumns() {
   }
   if (data.location) locationEl.value = data.location;
   const cols = data.columns || [];
-  fillSelect(entityEl, typedOptions(cols, ENTITY_TYPES), entityEl.value || saved.entity);
-  fillSelect(eventTimeEl, typedOptions(cols, TIME_TYPES), eventTimeEl.value || saved.event_time);
-  fillSelect(eventColumnEl, typedOptions(cols, EVENT_NAME_TYPES), eventColumnEl.value || saved.event_column);
+  fillSelect(entityEl, typedOptions(cols, typeSet("entity")), entityEl.value || saved.entity);
+  fillSelect(eventTimeEl, typedOptions(cols, typeSet("event_time")), eventTimeEl.value || saved.event_time);
+  fillSelect(eventColumnEl, typedOptions(cols, typeSet("event_column")), eventColumnEl.value || saved.event_column);
   tableEl.value = combinedTable();
 }
 
@@ -350,6 +499,16 @@ datasetEl.addEventListener("mousedown", () => {
   if (datasetsFetched) return;
   datasetsFetched = true;
   loadDatasets();
+});
+databaseEl.addEventListener("mousedown", () => {
+  if (datasetsFetched) return;
+  datasetsFetched = true;
+  loadDatasets();
+});
+schemaEl.addEventListener("mousedown", () => {
+  if (schemasFetched) return;
+  schemasFetched = true;
+  loadSchemas();
 });
 tableNameEl.addEventListener("mousedown", () => {
   if (tablesFetched) return;
@@ -364,13 +523,49 @@ function fetchColumnsOnce() {
 entityEl.addEventListener("mousedown", fetchColumnsOnce);
 eventTimeEl.addEventListener("mousedown", fetchColumnsOnce);
 eventColumnEl.addEventListener("mousedown", fetchColumnsOnce);
+function syncSnowflakeAuthUi() {
+  const browser = document.getElementById("snowflake_auth").value === "externalbrowser";
+  document.getElementById("sf-key-wrap").hidden = browser;
+  document.getElementById("sf-auth-hint").innerHTML = browser
+    ? "Opens a browser on first connect. The connector caches the SSO token in the OS keyring (about four hours if the account allows it). Nothing is stored in <code>.factcat.json</code>."
+    : "Key-pair JWT. Encrypted keys use env <code>SNOWFLAKE_PRIVATE_KEY_PASSPHRASE</code>. The passphrase is not saved in <code>.factcat.json</code>.";
+}
+function syncEventTimeKind() {
+  const typ = ((eventTimeEl.selectedOptions[0] && eventTimeEl.selectedOptions[0].dataset.type) || "").toUpperCase();
+  const tzEl = document.getElementById("event_time_tz");
+  const wrap = document.getElementById("event-time-tz-wrap");
+  const hint = document.getElementById("event-time-tz-hint");
+  const epochWrap = document.getElementById("event-time-epoch-wrap");
+  const epochEl = document.getElementById("event_time_epoch");
+  const instant = typeSet("event_time_instant").has(typ);
+  const wall = typeSet("event_time_wallclock").has(typ);
+  const unix = typeSet("event_time_unix").has(typ);
+  if (unix) {
+    wrap.hidden = true;
+    epochWrap.hidden = false;
+    if (!epochEl.value) epochEl.value = "seconds";
+    tzEl.value = "utc";
+    return;
+  }
+  epochWrap.hidden = true;
+  epochEl.value = "";
+  if (instant) {
+    tzEl.value = "instant";
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  if (wall && tzEl.value === "instant") tzEl.value = "reporting";
+  if (!tzEl.value) tzEl.value = wall ? "reporting" : "utc";
+  hint.textContent = currentKind() === "snowflake"
+    ? "TIMESTAMP_NTZ / DATETIME have no zone. Say whether the stored numbers are UTC or already in the reporting timezone. TIMESTAMP_TZ / LTZ are instants and do not need this."
+    : "TIMESTAMP is a UTC instant. DATETIME has no zone: treat it as already in the reporting timezone.";
+}
 eventTimeEl.addEventListener("change", () => {
   if (suppressChange) return;
-  const typ = (eventTimeEl.selectedOptions[0] && eventTimeEl.selectedOptions[0].dataset.type) || "";
-  const tzEl = document.getElementById("event_time_tz");
-  if (typ === "DATETIME") tzEl.value = "reporting";
-  else if (typ === "TIMESTAMP") tzEl.value = "utc";
+  syncEventTimeKind();
 });
+document.getElementById("snowflake_auth").addEventListener("change", syncSnowflakeAuthUi);
 datasetEl.addEventListener("change", () => {
   if (suppressChange) return;
   tablesFetched = false;
@@ -379,25 +574,56 @@ datasetEl.addEventListener("change", () => {
   clearColumns();
   tableEl.value = "";
 });
+databaseEl.addEventListener("change", () => {
+  if (suppressChange) return;
+  schemasFetched = false;
+  tablesFetched = false;
+  columnsFetched = false;
+  seedSelect(schemaEl, "");
+  seedSelect(tableNameEl, "");
+  clearColumns();
+});
+schemaEl.addEventListener("change", () => {
+  if (suppressChange) return;
+  tablesFetched = false;
+  columnsFetched = false;
+  seedSelect(tableNameEl, "");
+  clearColumns();
+});
 tableNameEl.addEventListener("change", () => {
   if (suppressChange) return;
   columnsFetched = false;
   clearColumns();
   tableEl.value = combinedTable();
 });
-[projectEl, dataProjectEl, credentialsEl].forEach((el) => {
+[projectEl, dataProjectEl, credentialsEl,
+  document.getElementById("account"),
+  document.getElementById("user"),
+  document.getElementById("warehouse"),
+  document.getElementById("private_key_path"),
+].forEach((el) => {
   el.addEventListener("input", () => {
     datasetsFetched = false;
+    schemasFetched = false;
     tablesFetched = false;
     columnsFetched = false;
   });
 });
-seedSelect(datasetEl, saved.dataset);
+kindEl.addEventListener("change", () => syncKindUi(true));
+syncKindUi(false);
+if (currentKind() === "snowflake") {
+  seedSelect(databaseEl, saved.database);
+  seedSelect(schemaEl, saved.schema);
+} else {
+  seedSelect(datasetEl, saved.dataset);
+}
 seedSelect(tableNameEl, saved.table_name);
 seedSelect(entityEl, saved.entity);
 seedSelect(eventTimeEl, saved.event_time);
 seedSelect(eventColumnEl, saved.event_column);
 tableEl.value = combinedTable();
+syncSnowflakeAuthUi();
+syncEventTimeKind();
 
 const ENTITY_NAME_PRESETS = {
   User: "Users",
@@ -473,7 +699,20 @@ form.addEventListener("submit", async (e) => {
   }
   tableEl.value = combinedTable();
   const body = Object.fromEntries(new FormData(form).entries());
-  if (!body.table || !body.entity || !body.event_time || !body.project || !body.location) {
+  body.kind = currentKind();
+  if (body.kind === "snowflake") {
+    const needKey = body.snowflake_auth !== "externalbrowser";
+    if (!body.account || !body.user || !body.warehouse
+        || (needKey && !body.private_key_path)
+        || !body.database || !body.schema || !body.table || !body.entity || !body.event_time) {
+      setError(needKey
+        ? "Pick account, user, warehouse, key file, table, entity id, and timestamp."
+        : "Pick account, user, warehouse, table, entity id, and timestamp.");
+      return;
+    }
+    body.event_names = body.event_column ? body.event_names : [];
+    body.columns = body.columns || [];
+  } else if (!body.table || !body.entity || !body.event_time || !body.project || !body.location) {
     setError("Pick a table, entity id, and timestamp. Location comes from the dataset.");
     return;
   }
@@ -501,6 +740,7 @@ form.addEventListener("submit", async (e) => {
         catalog: true,
         reporting_timezone: body.reporting_timezone,
         event_time_tz: body.event_time_tz,
+        week_start: body.week_start,
       });
       if (!ev.ok) {
         setStatus("Saved");

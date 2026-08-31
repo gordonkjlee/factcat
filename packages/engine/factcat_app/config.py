@@ -7,13 +7,24 @@ import os
 from pathlib import Path
 from typing import Any
 
+from factcat.warehouses import ADAPTERS
+
 CONFIG_ENV = "FACTCAT_CONFIG"
 
 DEFAULTS: dict[str, Any] = {
+    "kind": "bigquery",
     "project": "",
     "data_project": "",
     "location": "",
     "credentials": "",
+    "account": "",
+    "user": "",
+    "warehouse": "",
+    "database": "",
+    "schema": "",
+    "role": "",
+    "private_key_path": "",
+    "snowflake_auth": "key_pair",
     "dataset": "",
     "table_name": "",
     "table": "",
@@ -40,6 +51,7 @@ DEFAULTS: dict[str, Any] = {
     "week_start": "monday",
     "reporting_timezone": "UTC",
     "event_time_tz": "utc",
+    "event_time_epoch": "",
     "thousand_sep": "comma",
     "decimal_sep": "period",
     "start_date": "",
@@ -66,6 +78,16 @@ DEFAULTS: dict[str, Any] = {
     "top_n": 8,
     "include_other": True,
 }
+
+WAREHOUSE_KINDS = tuple(ADAPTERS)
+
+
+def warehouse_kind(data: dict[str, Any] | None = None) -> str:
+    raw = str((data or {}).get("kind") or "bigquery").strip().lower() or "bigquery"
+    if raw not in ADAPTERS:
+        raise ValueError("kind must be " + ", ".join(ADAPTERS))
+    return raw
+
 
 _ENTITY_PLURALS = {
     "User": "Users",
@@ -114,10 +136,21 @@ def load() -> dict[str, Any]:
 
 def mapping_ready(cfg: dict[str, Any] | None = None) -> bool:
     data = cfg if cfg is not None else load()
-    return all(
-        str(data.get(key) or "").strip()
-        for key in ("project", "location", "table", "entity", "event_time")
-    )
+    kind = warehouse_kind(data)
+    shared = ("table", "entity", "event_time")
+    if kind == "snowflake":
+        keys = (
+            "account",
+            "user",
+            "warehouse",
+            "database",
+            "schema",
+        ) + shared
+        if str(data.get("snowflake_auth") or "key_pair").strip() != "externalbrowser":
+            keys = keys + ("private_key_path",)
+    else:
+        keys = ("project", "location") + shared
+    return all(str(data.get(key) or "").strip() for key in keys)
 
 
 def save(data: dict[str, Any]) -> None:
