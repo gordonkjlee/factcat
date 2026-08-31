@@ -50,6 +50,11 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "Reporting timezone" in res.text
     assert "Timestamp stored as" in res.text
     assert "Entity id" in res.text
+    assert 'id="kind"' in res.text
+    assert ">Snowflake<" in res.text
+    assert 'id="private_key_path"' in res.text
+    assert 'id="database"' in res.text
+    assert "/api/schemas" in res.text
     assert "This grain is called" not in res.text
     assert "Entity name (singular)" in res.text
     assert "Plural" in res.text
@@ -151,6 +156,7 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "fillSelect(eventValueEl, cachedEventNames" not in html
     assert 'id="reporting_timezone"' in html
     assert 'id="event_time_tz"' in html
+    assert 'id="event_time_epoch"' in html
     assert "syncChartTitle" not in html
     assert "Exact unique counts" in res.text
     assert 'v === "uniques" || v === "average"' in res.text
@@ -754,6 +760,7 @@ def test_template_ships_with_package():
     assert not (static / "favicon.ico").exists()
     assert (static / "waiting.jpg").is_file()
     assert (Path(APP_DIR) / "guides" / "setup-bigquery.md").is_file()
+    assert (Path(APP_DIR) / "guides" / "setup-snowflake.md").is_file()
 
 
 def test_favicon_and_mark_are_served(monkeypatch, tmp_path):
@@ -798,6 +805,8 @@ def test_readme_keeps_slogan_and_points_at_the_mark():
     assert "packages/engine/factcat_app/static/waiting.jpg" in text
     assert "one wide events table" in text
     assert "setup-bigquery.md" in text
+    assert "setup-snowflake.md" in text
+    assert "factcat[snowflake]" in text
 
 
 def test_mapping_ready_requires_table_entity_and_time():
@@ -813,6 +822,71 @@ def test_mapping_ready_requires_table_entity_and_time():
         missing = dict(base)
         missing[key] = ""
         assert not mapping_ready(missing)
+
+
+def test_mapping_ready_snowflake_does_not_need_gcp_project():
+    base = {
+        "kind": "snowflake",
+        "account": "xy12345",
+        "user": "ANALYST",
+        "warehouse": "COMPUTE_WH",
+        "database": "ANALYTICS",
+        "schema": "MARTS",
+        "private_key_path": "rsa_key.p8",
+        "table": "ANALYTICS.MARTS.EVENTS",
+        "entity": "account_id",
+        "event_time": "occurred_at",
+    }
+    assert mapping_ready(base)
+    assert not mapping_ready({**base, "project": "", "location": "", "account": ""})
+    browser = dict(base)
+    browser["snowflake_auth"] = "externalbrowser"
+    browser["private_key_path"] = ""
+    assert mapping_ready(browser)
+
+
+def test_estimate_snowflake_does_not_execute(monkeypatch, tmp_path):
+    _map_cfg(
+        tmp_path,
+        monkeypatch,
+        kind="snowflake",
+        account="xy12345",
+        user="ANALYST",
+        warehouse="COMPUTE_WH",
+        database="ANALYTICS",
+        schema="MARTS",
+        private_key_path="rsa_key.p8",
+        table="ANALYTICS.MARTS.EVENTS",
+    )
+    ran = {"n": 0}
+
+    def boom(*_a, **_k):
+        ran["n"] += 1
+        raise AssertionError("must not connect")
+
+    monkeypatch.setattr("factcat_app.main.connect", boom)
+    client = TestClient(app)
+    res = client.post(
+        "/api/estimate",
+        json={
+            "kind": "snowflake",
+            "table": "ANALYTICS.MARTS.EVENTS",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "account": "xy12345",
+            "user": "ANALYST",
+            "warehouse": "COMPUTE_WH",
+            "database": "ANALYTICS",
+            "schema": "MARTS",
+            "private_key_path": "rsa_key.p8",
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["supported"] is False
+    assert body["bytes"] is None
+    assert ran["n"] == 0
 
 
 def test_save_overlays_without_resetting_lookback(monkeypatch, tmp_path):
@@ -1034,7 +1108,8 @@ def test_event_time_column_types_are_temporal():
     assert not column_fits("DATE", "event_time")
     assert not column_fits("STRING", "event_time")
     assert not column_fits("TIME", "event_time")
-    assert not column_fits("INT64", "event_time")
+    assert column_fits("INT64", "event_time")
+    assert column_fits("NUMBER", "event_time", kind="snowflake")
 
 
 def test_property_of_types_allow_float_not_string():

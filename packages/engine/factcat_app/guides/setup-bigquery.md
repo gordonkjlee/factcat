@@ -55,8 +55,10 @@ Must be an **instant**, not a calendar DATE and not a wall-clock TIME.
 |---|---|---|
 | `TIMESTAMP` | UTC instant (BigQuery) | UTC instant |
 | `DATETIME` | Civil date-time, no zone | Reporting timezone |
+| `INT64` / `INTEGER` | Unix epoch | Seconds, milliseconds, or microseconds since 1970-01-01 UTC |
 
-STRING timestamps are not accepted. DATE is a day, not an event time.
+STRING timestamps are not accepted. DATE is a day, not an event time. FLOAT
+epochs are not accepted.
 
 **Reporting timezone** is whose midnight is a “day”, and whose Monday is
 a “week”. `CURRENT_DATE` and day buckets follow that zone. Week start

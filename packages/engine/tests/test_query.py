@@ -39,6 +39,10 @@ def _shifted(expr, unit, n=0, week_start="monday", tz="UTC", kind="utc"):
     )
 
 
+def _ts(date_sql, tz="UTC", kind="utc"):
+    return f"factcat_ts_at_date({date_sql}, '{tz}', '{kind}')"
+
+
 def test_empty_entity_is_rejected():
     with pytest.raises(ValueError, match="entity is required"):
         spec_from_form(_form(entity=""))
@@ -68,7 +72,7 @@ def test_week_bucket_uses_explicit_week_start():
 def test_range_preset_7_is_last_n_days():
     spec = spec_from_form(_form(range_preset="7"))
     assert (
-        "factcat_as_instant(occurred_at) >= TIMESTAMP(DATE_SUB(CURRENT_DATE('UTC'), INTERVAL 7 DAY), 'UTC')"
+        f"factcat_as_instant(occurred_at) >= {_ts(_shifted('current_date', 'day', -7))}"
         in spec.where
     )
 
@@ -123,7 +127,7 @@ def test_last_eight_weeks_are_complete_by_default():
 
 def test_last_days_include_today_by_default():
     spec = spec_from_form(_form(grain="day", range_mode="last", range_n=30, range_unit="day"))
-    assert "INTERVAL 30 DAY" in spec.where.replace("'", "")
+    assert _shifted("current_date", "day", -30) in spec.where
     assert f"{spec.event_time} < " not in spec.where
 
 
@@ -137,8 +141,8 @@ def test_last_days_can_exclude_today():
             include_current=False,
         )
     )
-    assert "INTERVAL 30 DAY" in spec.where.replace("'", "")
-    assert "CURRENT_DATE('UTC')" in spec.where
+    assert _shifted("current_date", "day", -30) in spec.where
+    assert _shifted("current_date", "day", 0) in spec.where
     assert "<" in spec.where
 
 
@@ -316,7 +320,7 @@ def test_event_filter_is_and_lookback():
     )
     assert "event_name = 'paid'" in spec.where
     assert (
-        "factcat_as_instant(occurred_at) >= TIMESTAMP(DATE_SUB(CURRENT_DATE('UTC'), INTERVAL 30 DAY), 'UTC')"
+        f"factcat_as_instant(occurred_at) >= {_ts(_shifted('current_date', 'day', -30))}"
         in spec.where
     )
 
@@ -344,7 +348,7 @@ def test_lookback_and_hyphen_table_transpile_to_bigquery():
     assert "`my-gcp`.`analytics`.`events`" in sql
     assert "DATE_SUB" in sql.upper()
     assert "CURRENT_DATE('UTC')" in sql
-    assert "INTERVAL '7' DAY" in sql.upper().replace('"', "'")
+    assert "INTERVAL 7 DAY" in sql.upper()
     assert "APPROX_COUNT_DISTINCT" in sql.upper()
 
 
@@ -411,7 +415,7 @@ def test_event_values_sql_is_distinct_ordered_lookback():
     assert f"LIMIT {EVENT_VALUE_LIMIT}" in upper
     assert "DATE_SUB" in upper
     assert "CURRENT_DATE('UTC')" in sql
-    assert "INTERVAL '7' DAY" in upper.replace('"', "'")
+    assert "INTERVAL 7 DAY" in upper
     assert "`my-gcp`" in sql or "`MY-GCP`" in sql.upper()
     assert "fc_value" in sql.lower()
     assert "event_name" in sql
@@ -538,6 +542,31 @@ def test_json_of_distinct_is_untyped_json_value():
     assert "SAFE_CAST" not in spec.of
 
 
+def test_json_key_rejected_for_snowflake():
+    with pytest.raises(ValueError, match="JSON key extract"):
+        spec_from_form(
+            _form(
+                kind="snowflake",
+                table="ANALYTICS.MARTS.EVENTS",
+                breakdown_column="properties",
+                breakdown_json_key="plan",
+            )
+        )
+
+
+def test_snowflake_events_sql_uses_convert_timezone():
+    sql = events_sql_from_form(
+        _form(
+            kind="snowflake",
+            table="ANALYTICS.MARTS.EVENTS",
+            reporting_timezone="Europe/Berlin",
+        )
+    )
+    assert "CONVERT_TIMEZONE" in sql.upper()
+    assert "JSON_VALUE" not in sql.upper()
+    assert "MAXIMUMBYTESBILLED" not in sql.upper()
+
+
 def test_json_breakdown_extracts_key():
     spec = spec_from_form(
         _form(breakdown_column="properties", breakdown_json_key="plan")
@@ -586,7 +615,6 @@ def test_no_breakdown_when_column_blank():
 def test_berlin_timestamp_uses_date_in_that_zone():
     spec = spec_from_form(_form(reporting_timezone="Europe/Berlin"))
     assert _shifted("fc_event_ts", "day", tz="Europe/Berlin") in spec.bucket
-    assert "CURRENT_DATE('Europe/Berlin')" in spec.where
     sql = events_sql(spec, dialect="bigquery")
     assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'Europe/Berlin')" in sql.replace("`", "")
     assert "CURRENT_DATE('Europe/Berlin')" in sql
@@ -598,7 +626,7 @@ def test_civil_datetime_casts_instead_of_date_tz():
         _form(grain="week", event_time_tz="reporting", reporting_timezone="Europe/London")
     )
     assert _shifted("fc_event_ts", "week", tz="Europe/London", kind="reporting") in spec.bucket
-    assert "AS DATETIME" in spec.where
+    assert "factcat_ts_at_date" in spec.where
     sql = events_sql(spec, dialect="bigquery")
     assert "CAST(fc_event_ts AS DATE)" in sql.replace("`", "")
     assert "DATE(occurred_at," not in sql.replace("`", "")
@@ -624,6 +652,45 @@ def test_unknown_timezone_is_rejected():
         spec_from_form(_form(reporting_timezone="Not/A_Zone"))
     with pytest.raises(ValueError, match="event_time_tz"):
         spec_from_form(_form(event_time_tz="local"))
+
+
+def test_unix_epoch_seconds_uses_timestamp_seconds():
+    spec = spec_from_form(_form(event_time_epoch="seconds"))
+    assert spec.event_time == "factcat_as_instant(occurred_at, 'unix_s')"
+    sql = events_sql(spec, dialect="bigquery")
+    assert "TIMESTAMP_SECONDS(occurred_at)" in sql.replace(" ", "") or (
+        "TIMESTAMP_SECONDS(occurred_at)" in sql
+    )
+    assert "TIMESTAMP_MILLIS" not in sql.upper()
+
+
+def test_unix_epoch_millis_snowflake():
+    sql = events_sql_from_form(
+        _form(
+            kind="snowflake",
+            table="ANALYTICS.MARTS.EVENTS",
+            event_time_epoch="milliseconds",
+        )
+    )
+    assert "TO_TIMESTAMP_TZ(occurred_at, 3)" in sql.replace(" ", "") or (
+        "TO_TIMESTAMP_TZ(occurred_at, 3)" in sql
+    )
+
+
+def test_snowflake_instant_kind_emits_two_arg_convert():
+    sql = events_sql_from_form(
+        _form(
+            kind="snowflake",
+            table="ANALYTICS.MARTS.EVENTS",
+            reporting_timezone="Europe/Berlin",
+            event_time_tz="instant",
+        )
+    )
+    compact = sql.replace(" ", "")
+    assert "CONVERT_TIMEZONE('Europe/Berlin',fc_event_ts)" in compact or (
+        "CONVERT_TIMEZONE('Europe/Berlin', fc_event_ts)" in sql.replace("\n", "")
+    )
+    assert "CONVERT_TIMEZONE('UTC', 'Europe/Berlin'" not in sql
 
 
 def test_annotate_incomplete_uses_iana_today():

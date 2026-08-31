@@ -61,9 +61,8 @@ SQL generation supports DuckDB, Postgres, BigQuery, Snowflake, Databricks, Spark
 Presto, ClickHouse and Redshift. Execute adapters push that SQL into the caller's
 warehouse. Factcat has no warehouse of its own. ``pip install factcat`` is the
 product (SQL + chart) and includes no warehouse SDK. Run queries with
-``pip install factcat[bigquery]``. Later warehouses are extras of the same
-shape; ``factcat[all]`` is every shipped driver. The adapter contract is
-``dialect`` plus ``run(sql)``.
+``pip install factcat[bigquery]`` or ``factcat[snowflake]``. ``factcat[all]`` is
+every shipped driver. The adapter contract is ``dialect`` plus ``run(sql)``.
 
 ```python
 from factcat import RetentionSpec, retention_sql
@@ -74,9 +73,12 @@ bq = connect("bigquery", project="my-proj", location="EU")
 result = bq.run(sql)
 ```
 
+Snowflake is the same shape with that warehouse's fields (`account`, `user`,
+`warehouse`, `database`, `schema`, `private_key_path`). It has no scan-cap dry-run.
+
 Application-default credentials by default (`gcloud auth application-default login`), or
-pass a service-account JSON path as `credentials`. Queries are capped at 10 GiB scanned
-unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` and
+pass a service-account JSON path as `credentials`. BigQuery queries are capped at 10 GiB
+scanned unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` and
 `location` are required so an EU dataset is not sent to US.
 
 Full documentation: https://github.com/gordonkjlee/factcat

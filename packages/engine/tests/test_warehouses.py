@@ -11,10 +11,13 @@ from factcat import RetentionSpec, __file__ as factcat_init, retention_sql
 from factcat.dialects import SUPPORTED
 from factcat.warehouses import (
     ADAPTERS,
+    CAP_DRY_RUN,
+    CAP_SCAN_CAP,
     Adapter,
     AdapterError,
     DryRunNotSupported,
     QueryResult,
+    capabilities,
     connect,
 )
 from factcat.warehouses import __file__ as warehouses_init
@@ -24,6 +27,7 @@ class FakeAdapter:
     """Second adapter shape: no project, no location, no bytes cap."""
 
     dialect = "duckdb"
+    capabilities = frozenset()
 
     def __init__(self) -> None:
         self.executed: list[str] = []
@@ -77,17 +81,21 @@ def test_fake_dry_run_does_not_execute():
 
 
 def test_connect_unknown_sql_dialect():
-    with pytest.raises(LookupError, match="shipped: bigquery") as exc:
-        connect("snowflake")
+    with pytest.raises(LookupError, match="shipped:") as exc:
+        connect("databricks")
     assert "SQL generation supports" not in str(exc.value)
-    assert "snowflake" in SUPPORTED
+    assert "databricks" in SUPPORTED
+    assert "bigquery" in str(exc.value)
+    assert "snowflake" in str(exc.value)
 
 
 def test_connect_unknown_even_to_sql():
     with pytest.raises(LookupError, match="SQL generation supports") as exc:
         connect("not-a-warehouse")
     message = str(exc.value)
-    assert "shipped: bigquery" in message
+    assert "shipped:" in message
+    assert "bigquery" in message
+    assert "snowflake" in message
     assert "duckdb" in message
 
 
@@ -96,10 +104,46 @@ def test_connect_bigquery_constructs_without_google():
     assert adapter.dialect == "bigquery"
 
 
-def test_adapters_lists_bigquery_only():
+def test_connect_snowflake_constructs_without_connector():
+    adapter = connect(
+        "snowflake",
+        account="xy12345",
+        user="ANALYST",
+        warehouse="COMPUTE_WH",
+        database="ANALYTICS",
+        schema="MARTS",
+        private_key_path="rsa_key.p8",
+    )
+    assert adapter.dialect == "snowflake"
+    assert adapter.capabilities == frozenset()
+
+
+def test_snowflake_constructor_rejects_bigquery_project():
+    with pytest.raises(TypeError):
+        connect(
+            "snowflake",
+            account="xy12345",
+            user="ANALYST",
+            warehouse="COMPUTE_WH",
+            database="ANALYTICS",
+            schema="MARTS",
+            private_key_path="rsa_key.p8",
+            project="my-proj",
+        )
+
+
+def test_adapters_lists_shipped_kinds():
     assert dict(ADAPTERS) == {
-        "bigquery": "factcat.warehouses.bigquery:BigQueryAdapter"
+        "bigquery": "factcat.warehouses.bigquery:BigQueryAdapter",
+        "snowflake": "factcat.warehouses.snowflake:SnowflakeAdapter",
     }
+
+
+def test_capabilities_differ_by_kind():
+    assert CAP_DRY_RUN in capabilities("bigquery")
+    assert CAP_SCAN_CAP in capabilities("bigquery")
+    assert CAP_DRY_RUN not in capabilities("snowflake")
+    assert CAP_SCAN_CAP not in capabilities("snowflake")
 
 
 def test_warehouses_package_does_not_import_google():
@@ -107,6 +151,8 @@ def test_warehouses_package_does_not_import_google():
     assert "google.cloud" not in source
     assert "google.oauth2" not in source
     assert "from .bigquery" not in source
+    assert "from .snowflake" not in source
+    assert "snowflake.connector" not in source
     assert "importlib.import_module(module_name)" in source
 
 
@@ -122,7 +168,9 @@ def test_google_is_optional_extra_not_a_core_dependency():
     core, _, rest = text.partition("[project.optional-dependencies]")
     extras, _, _ = rest.partition("\n[")
     assert "google" not in core
+    assert "snowflake-connector" not in core
     assert "google-cloud-bigquery" in extras
+    assert "snowflake-connector-python" in extras
     # Product (the app) is default; warehouse SDKs are not.
     assert "fastapi" in core
     # Extra names minus dev/all match connect(kind=). Privileging the first
@@ -133,7 +181,9 @@ def test_google_is_optional_extra_not_a_core_dependency():
         if "=" in line and not line.lstrip().startswith("#")
     }
     assert extra_names == {"dev", "all", *ADAPTERS}
-    assert "factcat[bigquery]" in extras
+    assert "factcat[bigquery,snowflake]" in extras or (
+        "factcat[bigquery]" in extras and "factcat[snowflake]" in extras
+    )
 
 
 def test_adapter_error_hierarchy():

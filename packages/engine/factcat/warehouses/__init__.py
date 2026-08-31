@@ -6,12 +6,22 @@ that SQL where the caller already stores events, the same way Lightdash
 does. An adapter does not emit SQL, rewrite caller SQL, or know about
 ``RetentionSpec``.
 
-The app stores connection settings (type, project, location, credentials)
+The app stores connection settings (kind plus that warehouse's fields)
 and asks the adapter to run SQL on *their* warehouse::
 
     bq = connect("bigquery", project="my-proj", location="EU")
     sql = retention_sql(spec, dialect=bq.dialect)
     result = bq.run(sql)
+
+    sf = connect(
+        "snowflake",
+        account="xy12345",
+        user="ANALYST",
+        warehouse="COMPUTE_WH",
+        database="ANALYTICS",
+        schema="MARTS",
+        private_key_path="rsa_key.p8",
+    )
 
 Adding an adapter (Snowflake, Databricks, …)
 --------------------------------------------
@@ -30,6 +40,17 @@ Adding an adapter (Snowflake, Databricks, …)
 5. Mock the vendor client in tests. No live warehouse in CI.
 6. Do not add SQL generation here. If a construct cannot transpile, it belongs
    in ``dialects.py``.
+7. Declare ``capabilities`` on the class (the flags below). The app asks
+   ``capabilities(kind)``. Do not add a list of kinds next to each widget.
+
+Changing a feature that compiles SQL, runs a job, or shows warehouse chrome
+---------------------------------------------------------------------------
+
+Walk every key in ``ADAPTERS`` (and ``SUPPORTED`` if it is generation). For
+each kind: same behaviour, gated off via ``capabilities`` / a dialect helper,
+or an explicit branch with a test. A BigQuery-only edit on a path Snowflake
+also executes is a regression. Identity and cost knobs stay on the concrete
+class — do not copy ``project`` / ``maximum_bytes_billed`` onto Snowflake.
 
 No shared base class until a second real adapter shows duplicated code.
 """
@@ -46,9 +67,16 @@ from ..dialects import SUPPORTED
 # kind -> "module:Class". Edit this dict to ship a new adapter. Not a plugin hook.
 _ADAPTERS: dict[str, str] = {
     "bigquery": "factcat.warehouses.bigquery:BigQueryAdapter",
+    "snowflake": "factcat.warehouses.snowflake:SnowflakeAdapter",
 }
 
 ADAPTERS = MappingProxyType(_ADAPTERS)
+
+# Execute-chrome flags. One definition: each adapter's ``capabilities``.
+# The app asks ``capabilities(kind)``; it does not keep a list of kinds per widget.
+CAP_DRY_RUN = "dry_run"
+CAP_BYTES_PROCESSED = "bytes_processed"
+CAP_SCAN_CAP = "scan_cap"
 
 
 @dataclass(frozen=True)
@@ -70,9 +98,12 @@ class Adapter(Protocol):
 
     ``dialect`` is the sqlglot name, the same string ``retention_sql`` takes.
     Identity, auth, and cost knobs live on the concrete class, not here.
+    ``capabilities`` is which execute chrome the adapter supports (dry-run,
+    bytes, scan cap). Not connection fields.
     """
 
     dialect: str
+    capabilities: frozenset[str]
 
     def run(self, sql: str, *, dry_run: bool = False) -> QueryResult:
         """Execute ``sql`` in the caller's warehouse.
@@ -106,14 +137,7 @@ class BytesCapError(AdapterError):
         self.maximum_bytes_billed = maximum_bytes_billed
 
 
-def connect(kind: str, **kwargs: Any) -> Adapter:
-    """Connect to the caller's warehouse by sqlglot dialect name.
-
-    ``kind`` is the same string the caller already passes to
-    ``retention_sql(..., dialect=)``. Keyword arguments are that adapter's
-    constructor fields (their project, location, key file, …), not a shared
-    connection schema.
-    """
+def _adapter_class(kind: str) -> Any:
     target = _ADAPTERS.get(kind)
     if target is None:
         shipped = ", ".join(sorted(_ADAPTERS)) or "(none)"
@@ -123,16 +147,37 @@ def connect(kind: str, **kwargs: Any) -> Adapter:
         raise LookupError(message)
     module_name, _, class_name = target.partition(":")
     module = importlib.import_module(module_name)
-    cls = getattr(module, class_name)
+    return getattr(module, class_name)
+
+
+def capabilities(kind: str) -> frozenset[str]:
+    """Execute-chrome flags for ``kind``. Does not open a warehouse."""
+    cls = _adapter_class(kind)
+    return frozenset(getattr(cls, "capabilities", ()))
+
+
+def connect(kind: str, **kwargs: Any) -> Adapter:
+    """Connect to the caller's warehouse by sqlglot dialect name.
+
+    ``kind`` is the same string the caller already passes to
+    ``retention_sql(..., dialect=)``. Keyword arguments are that adapter's
+    constructor fields (their project, location, key file, …), not a shared
+    connection schema.
+    """
+    cls = _adapter_class(kind)
     return cls(**kwargs)
 
 
 __all__ = [
     "ADAPTERS",
+    "CAP_BYTES_PROCESSED",
+    "CAP_DRY_RUN",
+    "CAP_SCAN_CAP",
     "Adapter",
     "AdapterError",
     "BytesCapError",
     "DryRunNotSupported",
     "QueryResult",
+    "capabilities",
     "connect",
 ]
