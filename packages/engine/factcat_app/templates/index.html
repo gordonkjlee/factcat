@@ -155,6 +155,17 @@
     .band-head {
       display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem;
       font-size: 0.7rem; font-weight: 600; margin: 0 0 0.45rem;
+      flex-wrap: wrap;
+    }
+    .catalog-lookback {
+      display: flex; align-items: center; gap: 0.3rem;
+      font-weight: 500; margin: 0;
+    }
+    .catalog-lookback input {
+      width: 4.2rem; font-size: 0.75rem; font-weight: 400; margin: 0;
+    }
+    .band-head-actions {
+      display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
     }
     .event-card, .event-group {
       border: 1px solid var(--fc-line); background: var(--fc-paper);
@@ -300,12 +311,23 @@
     <input type="hidden" name="decimal_sep" id="decimal_sep" value="{{ prefs.decimal_sep or 'period' }}">
     <input type="hidden" name="bytes_cap_gb" id="bytes_cap_gb" value="{{ config.bytes_cap_gb if config.bytes_cap_gb is not none else 10 }}">
     <input type="hidden" name="query_row_limit" id="query_row_limit" value="{{ config.query_row_limit or 1000000 }}">
+    <input type="hidden" name="write_project" id="write_project" value="{{ config.write_project or '' }}">
+    <input type="hidden" name="write_dataset" id="write_dataset" value="{{ config.write_dataset or '' }}">
+    <input type="hidden" name="write_schema" id="write_schema" value="{{ config.write_schema or '' }}">
+    <input type="hidden" name="write_database" id="write_database" value="{{ config.write_database or '' }}">
 
     <div id="events-band">
       <div class="band-head">
         <span>Event series <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span></span>
         <span id="event_value" hidden></span>
+        <span class="band-head-actions">
+        <label class="catalog-lookback" for="catalog_lookback_days">Last
+          <input type="number" id="catalog_lookback_days" name="catalog_lookback_days" min="0" step="1" value="{{ config.catalog_lookback_days if config.catalog_lookback_days is not none else 90 }}">
+          days
+        </label>
+        <button type="button" id="look-further" class="linkish">Look further back</button>
         <button type="button" id="refresh-events" class="linkish">Refresh list</button>
+        </span>
       </div>
       <div id="event-cards"></div>
       <div class="card-actions">
@@ -2064,7 +2086,41 @@ async function post(url, body) {
   });
   return res.json();
 }
-bindCachedList({
+function writeDestReady() {
+  const kind = document.getElementById("kind").value || "bigquery";
+  if (kind === "snowflake") {
+    return !!(
+      document.getElementById("write_database").value.trim() &&
+      document.getElementById("write_schema").value.trim()
+    );
+  }
+  return !!(
+    document.getElementById("write_project").value.trim() &&
+    document.getElementById("write_dataset").value.trim()
+  );
+}
+function catalogLookbackDays() {
+  const raw = document.getElementById("catalog_lookback_days").value;
+  if (raw === "" || raw == null) return 90;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 90;
+}
+function nextCatalogLookback(n) {
+  if (!n || n <= 0) return 0;
+  if (n < 180) return 180;
+  if (n < 365) return 365;
+  return 0;
+}
+function syncLookFurther() {
+  const cached = writeDestReady();
+  const look = document.querySelector(".catalog-lookback");
+  if (look) look.hidden = cached;
+  const btn = document.getElementById("look-further");
+  const n = catalogLookbackDays();
+  btn.hidden = cached || n === 0;
+  btn.textContent = n < 180 ? "Look further back" : (n < 365 ? "Last year" : "All time");
+}
+const eventNameList = bindCachedList({
   items: cachedEventNames || [],
   paint: (items) => {
     eventNameCache = items || [];
@@ -2074,24 +2130,52 @@ bindCachedList({
   refreshButtons: [document.getElementById("refresh-events")],
   loadIfEmpty: false,
   async load() {
-    if (!eventColumnEl.value || !tableEl.value || !locationEl.value) return null;
+    if (!eventColumnEl.value || !tableEl.value) return null;
+    const kind = document.getElementById("kind").value || "bigquery";
+    if (kind !== "snowflake" && !locationEl.value) return null;
     const data = await post("/api/event_values", {
       ...authBody(),
+      kind,
       table: tableEl.value,
       location: locationEl.value,
       event_column: eventColumnEl.value,
       event_time: eventTimeEl.value,
       catalog: true,
+      catalog_lookback_days: catalogLookbackDays(),
+      write_project: document.getElementById("write_project").value,
+      write_dataset: document.getElementById("write_dataset").value,
+      write_schema: document.getElementById("write_schema").value,
+      write_database: document.getElementById("write_database").value,
+      account: document.getElementById("account").value,
+      user: document.getElementById("user").value,
+      warehouse: document.getElementById("warehouse").value,
+      database: document.getElementById("database").value,
+      schema: document.getElementById("schema").value,
+      role: document.getElementById("role").value,
+      private_key_path: document.getElementById("private_key_path").value,
+      snowflake_auth: document.getElementById("snowflake_auth").value,
       reporting_timezone: document.getElementById("reporting_timezone").value,
       event_time_tz: document.getElementById("event_time_tz").value,
+      event_time_epoch: document.getElementById("event_time_epoch").value,
     });
     if (!data.ok) {
       setError(data.error || "Could not refresh events");
       return null;
     }
+    document.getElementById("catalog_lookback_days").value = String(catalogLookbackDays());
+    syncLookFurther();
     return data.values || [];
   },
 });
+syncLookFurther();
+document.getElementById("look-further").addEventListener("click", () => {
+  document.getElementById("catalog_lookback_days").value = String(
+    nextCatalogLookback(catalogLookbackDays())
+  );
+  syncLookFurther();
+  eventNameList.refresh();
+});
+document.getElementById("catalog_lookback_days").addEventListener("change", syncLookFurther);
 bindCachedList({
   items: columnCache,
   paint: paintColumns,

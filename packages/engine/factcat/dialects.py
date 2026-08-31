@@ -23,7 +23,11 @@ window functions. These constructs do not survive cleanly:
 6. **UTC instant from TIMESTAMP or DATETIME.** sqlglot rewrites
    ``CAST(col AS TIMESTAMP) >= TIMESTAMP(...)`` to ``CAST AS DATETIME``,
    which BigQuery then rejects. ``factcat_as_instant`` is spliced after
-   transpile.
+   transpile for SELECT ``fc_event_ts``. Window filters isolate the
+   column and convert the bound (DATETIME / TIMESTAMP_NTZ for wall-clock
+   UTC) so partition pruning can fire.
+7. **Catalog cache DDL.** ``CREATE MATERIALIZED VIEW`` / ``CREATE TABLE``
+   as a wrapper around a GROUP BY select. Not transpile.
 
 Everything else is one emitter.
 """
@@ -445,16 +449,35 @@ def timestamp_at_date(
         if dialect == "snowflake":
             return f"CAST({date_sql} AS TIMESTAMP_NTZ)"
         return f"CAST({date_sql} AS DATETIME)"
-    if dialect == "snowflake":
-        if kind == "instant" or kind in UNIX_KINDS:
+    if kind == "utc":
+        # Wall-clock UTC (DATETIME / TIMESTAMP_NTZ). Bound in that type so
+        # WHERE can isolate the column. CAST on the column defeats BigQuery
+        # partition pruning and Snowflake micro-partition pruning.
+        if dialect == "snowflake":
             return (
-                f"CONVERT_TIMEZONE('{tz}', "
-                f"CAST({date_sql} AS TIMESTAMP_TZ))"
+                f"CONVERT_TIMEZONE('{tz}', 'UTC', CAST({date_sql} AS TIMESTAMP_NTZ))"
             )
+        return f"DATETIME(TIMESTAMP({date_sql}, '{tz}'))"
+    if dialect == "snowflake":
         return (
-            f"CONVERT_TIMEZONE('{tz}', 'UTC', CAST({date_sql} AS TIMESTAMP_NTZ))"
+            f"CONVERT_TIMEZONE('{tz}', "
+            f"CAST({date_sql} AS TIMESTAMP_TZ))"
         )
     return f"TIMESTAMP({date_sql}, '{tz}')"
+
+
+def create_or_replace_relation(
+    dest: str, select_sql: str, dialect: str, *, materialized: bool
+) -> str:
+    """CREATE OR REPLACE a cache relation whose body is ``select_sql``.
+
+    BigQuery and Snowflake share this spelling. ``materialized`` is a
+    materialized view the warehouse can refresh; otherwise a table.
+    ``dialect`` is accepted so a later warehouse can branch.
+    """
+    _ = dialect
+    kind = "MATERIALIZED VIEW" if materialized else "TABLE"
+    return f"CREATE OR REPLACE {kind} {dest} AS {select_sql}"
 
 
 def bucket_out(expr: str = "fc_bucket") -> str:
@@ -477,10 +500,16 @@ _PERIOD_RE = re.compile(
 def _replace_func_calls(
     sql: str, name: str, rewrite: Callable[[str], str]
 ) -> str:
-    """Replace ``name(args)`` with balanced parentheses, innermost first."""
+    """Replace ``name(args)`` with balanced parentheses, innermost first.
+
+    sqlglot Snowflake emits unquoted function names in uppercase, so the
+    match is case-insensitive. ASCII names only; length is unchanged.
+    """
     token = name + "("
+    haystack = sql.lower()
+    needle = token.lower()
     while True:
-        start = sql.find(token)
+        start = haystack.find(needle)
         if start < 0:
             return sql
         depth = 1
@@ -496,6 +525,7 @@ def _replace_func_calls(
             return sql
         inner = sql[start + len(token) : i - 1]
         sql = sql[:start] + rewrite(inner) + sql[i:]
+        haystack = sql.lower()
 
 
 def _split_top_args(inner: str) -> list[str]:

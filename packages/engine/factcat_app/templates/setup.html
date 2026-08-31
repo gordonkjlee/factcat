@@ -54,7 +54,26 @@
       overflow: auto;
       font-size: 0.8rem;
     }
-    #status { color: var(--fc-ok); font-size: 0.85rem; }
+    .save-toast {
+      position: fixed;
+      z-index: 30;
+      left: calc(4.5rem + 1.75rem);
+      bottom: 1.25rem;
+      padding: 0.5rem 0.9rem;
+      border-radius: 0.35rem;
+      background: var(--fc-ink);
+      color: var(--fc-snow);
+      font-size: 0.8rem;
+      font-weight: 600;
+      box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--fc-ink) 18%, transparent);
+      pointer-events: none;
+    }
+    .save-toast[hidden] { display: none !important; }
+    .save-toast.saving { background: var(--fc-slate-deep); font-weight: 500; }
+    .save-toast.fail { background: var(--fc-alert); }
+    @media (max-width: 56rem) {
+      .save-toast { left: 1.25rem; }
+    }
     #extra-card {
       display: flex;
       flex-wrap: wrap;
@@ -108,12 +127,6 @@
 <div class="setup-cols">
 <form id="f" class="setup-form">
   <h1>Project setup</h1>
-  {% if not mapping_ready %}
-  <div id="setup-needed" class="callout">
-    <p>{% if request.query_params.get("events") %}Events opens after this mapping is saved. {% endif %}Pick the events table and map entity id and timestamp, then Save. Catalog lists load when you open each dropdown. Warehouse sign-in does not fill those fields.</p>
-  </div>
-  {% endif %}
-  <p class="lede" id="setup-lede">{% if config.kind == "snowflake" %}Map a table in <em>your</em> Snowflake. Mapping is saved to <code>.factcat.json</code> in this directory. Sign-in is a key-pair file.{% else %}Map a table in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code> in this directory. Uses application-default credentials unless you open Advanced.{% endif %}</p>
 
   <h2>Warehouse</h2>
   <label for="kind">Warehouse</label>
@@ -229,7 +242,7 @@
     <option value=""></option>
     {% if config.event_column %}<option value="{{ config.event_column }}" selected>{{ config.event_column }}</option>{% endif %}
   </select>
-  <span class="hint">String column of event names. Save runs DISTINCT on the last 90 days and caches the list for Events.</span>
+  <span class="hint">String column of event names. Events <strong>Refresh list</strong> loads names from the lookback below.</span>
   <h2>Time</h2>
   <label for="week_start">Week starts on</label>
   <select id="week_start" name="week_start">
@@ -262,10 +275,37 @@
   <label for="query_row_limit">Result row limit</label>
   <input id="query_row_limit" name="query_row_limit" type="number" min="1" step="1" value="{{ config.query_row_limit or 1000000 }}">
   <span class="hint">Crash fuse in SQL after aggregation (most recent rows). A normal chart never hits this; grouping by a high-cardinality property might. It does not reduce bytes scanned. A report can raise it if results are truncated.</span>
+  <label for="catalog_lookback_days">Event name lookback (days)</label>
+  <input id="catalog_lookback_days" name="catalog_lookback_days" type="number" min="0" step="1" value="{{ config.catalog_lookback_days if config.catalog_lookback_days is not none else 90 }}">
+  <span class="hint">Window for Events Refresh list. 0 is all time. That job does not use the scan cap; raise the window on Events if a name is missing. Isolates the timestamp column so a date-partitioned table can prune.</span>
 
-  <button type="submit" id="save">Save</button>
-  <p id="status"></p>
+  <h2>Factcat-managed tables (optional)</h2>
+  <div id="write-bq-wrap">
+    <span class="hint">Allow Factcat to create and maintain tables in this project and dataset for better performance.</span>
+    <label for="write_project">Project</label>
+    <input id="write_project" name="write_project" autocomplete="off" value="{{ config.write_project }}" placeholder="GCP project id">
+    <label for="write_dataset">Dataset <span id="write_dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <select id="write_dataset" name="write_dataset" disabled>
+      <option value=""></option>
+      {% if config.write_dataset %}<option value="{{ config.write_dataset }}" selected>{{ config.write_dataset }}</option>{% endif %}
+    </select>
+  </div>
+  <div id="write-sf-wrap" hidden>
+    <span class="hint">Allow Factcat to create and maintain tables in this database and schema for better performance.</span>
+    <label for="write_database">Database <span id="write_database-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <select id="write_database" name="write_database" disabled>
+      <option value=""></option>
+      {% if config.write_database %}<option value="{{ config.write_database }}" selected>{{ config.write_database }}</option>{% endif %}
+    </select>
+    <label for="write_schema">Schema <span id="write_schema-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <select id="write_schema" name="write_schema" disabled>
+      <option value=""></option>
+      {% if config.write_schema %}<option value="{{ config.write_schema }}" selected>{{ config.write_schema }}</option>{% endif %}
+    </select>
+  </div>
+
   <p id="error"></p>
+  <div id="status" class="save-toast" role="status" aria-live="polite" hidden></div>
 
   <details id="bq-advanced">
     <summary>Advanced: service-account JSON instead of ADC</summary>
@@ -290,6 +330,10 @@ const saved = {
   event_column: {{ config.event_column|tojson }},
   role: {{ config.role|tojson }},
   warehouse: {{ config.warehouse|tojson }},
+  write_project: {{ config.write_project|tojson }},
+  write_dataset: {{ config.write_dataset|tojson }},
+  write_database: {{ config.write_database|tojson }},
+  write_schema: {{ config.write_schema|tojson }},
 };
 const form = document.getElementById("f");
 const kindEl = document.getElementById("kind");
@@ -323,11 +367,25 @@ const fetched = {};
 const gens = {};
 let suppressChange = false;
 
+let hideTimer = 0;
+function showToast(text, kind) {
+  clearTimeout(hideTimer);
+  const el = document.getElementById("status");
+  el.hidden = false;
+  el.textContent = text;
+  el.classList.toggle("saving", kind === "saving");
+  el.classList.toggle("fail", kind === "fail");
+  if (kind === "saved") {
+    hideTimer = setTimeout(() => { el.hidden = true; }, 2000);
+  }
+}
 function setError(text) {
   document.getElementById("error").textContent = text || "";
+  if (text) showToast(text, "fail");
 }
-function setStatus(text) {
-  document.getElementById("status").textContent = text || "";
+function setStatus(text, saving) {
+  if (saving) showToast(text || "Saving…", "saving");
+  else showToast(text || "Saved", "saved");
 }
 function setExtraStatus(text) {
   document.getElementById("extra-status").textContent = text || "";
@@ -453,6 +511,7 @@ function resetFollowing(changedId) {
   );
   if (idx < 0) return;
   for (const step of steps.slice(idx + 1)) {
+    if (step.optional) continue;
     fetched[step.id] = false;
     for (const id of stepTargets(step)) {
       const el = document.getElementById(id);
@@ -515,9 +574,8 @@ function syncKindUi(clearIdentity) {
   document.getElementById("sf-table").hidden = !snow;
   document.getElementById("bq-advanced").hidden = snow;
   document.getElementById("scan-cap-wrap").hidden = snow;
-  document.getElementById("setup-lede").innerHTML = snow
-    ? "Map a table in <em>your</em> Snowflake. Mapping is saved to <code>.factcat.json</code> in this directory. Sign-in is a key-pair file."
-    : "Map a table in <em>your</em> BigQuery. Mapping is saved to <code>.factcat.json</code> in this directory. Uses application-default credentials unless you open Advanced.";
+  document.getElementById("write-bq-wrap").hidden = snow;
+  document.getElementById("write-sf-wrap").hidden = !snow;
   document.getElementById("event-time-hint").textContent = snow
     ? "TIMESTAMP_TZ and TIMESTAMP_LTZ are instants. TIMESTAMP_NTZ / DATETIME are wall-clock (no zone). Integers are Unix epoch. Not DATE or TIME."
     : "TIMESTAMP (UTC instant), DATETIME (civil time), or an integer Unix epoch. Not DATE.";
@@ -569,13 +627,20 @@ async function loadStep(step) {
   const targets = stepTargets(step).map((id) => document.getElementById(id)).filter(Boolean);
   targets.forEach((el) => setLoading(el, true));
   setError("");
-  const data = await post("/api/" + step.endpoint, {
+  const payload = {
     ...authBody(),
     dataset: datasetEl.value.trim(),
     table_name: tableNameEl.value.trim(),
     database: databaseEl.value.trim(),
     schema: schemaEl.value.trim(),
-  });
+  };
+  if (step.id === "write_dataset") {
+    payload.data_project = (document.getElementById("write_project").value || "").trim();
+  }
+  if (step.id === "write_schema") {
+    payload.database = (document.getElementById("write_database").value || "").trim();
+  }
+  const data = await post("/api/" + step.endpoint, payload);
   if (gen !== gens[step.id]) return;
   targets.forEach((el) => setLoading(el, false));
   if (!data.ok) {
@@ -691,6 +756,16 @@ document.getElementById("snowflake_auth").addEventListener("change", () => {
 });
 kindEl.addEventListener("change", () => syncKindUi(true));
 bindCatalog();
+document.getElementById("write_project").addEventListener("input", () => {
+  fetched.write_dataset = false;
+  seedSelect(document.getElementById("write_dataset"), "");
+  syncCatalogEnabled();
+});
+document.getElementById("write_database").addEventListener("change", () => {
+  fetched.write_schema = false;
+  seedSelect(document.getElementById("write_schema"), "");
+  syncCatalogEnabled();
+});
 document.getElementById("extra-install").addEventListener("click", async () => {
   const btn = document.getElementById("extra-install");
   const kind = kindEl.value;
@@ -731,6 +806,9 @@ seedSelect(tableNameEl, saved.table_name);
 seedSelect(entityEl, saved.entity);
 seedSelect(eventTimeEl, saved.event_time);
 seedSelect(eventColumnEl, saved.event_column);
+seedSelect(document.getElementById("write_dataset"), saved.write_dataset);
+seedSelect(document.getElementById("write_database"), saved.write_database);
+seedSelect(document.getElementById("write_schema"), saved.write_schema);
 tableEl.value = combinedTable();
 syncSnowflakeAuthUi();
 syncEventTimeKind();
@@ -768,75 +846,59 @@ function seedEntityName() {
   }
   syncEntityName();
 }
-labelChoiceEl.addEventListener("change", syncEntityName);
-labelOtherEl.addEventListener("input", syncEntityName);
+labelChoiceEl.addEventListener("change", () => { syncEntityName(); scheduleSave(); });
+labelOtherEl.addEventListener("input", () => { syncEntityName(); scheduleSave(); });
 seedEntityName();
 
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  setError("");
-  setStatus("");
+let saveTimer = 0;
+let saveGen = 0;
+let savingSince = 0;
+const SAVE_PENDING_MS = 1000;
+async function saveMapping() {
   syncEntityName();
   tableEl.value = combinedTable();
   const body = Object.fromEntries(new FormData(form).entries());
   body.kind = currentKind();
-  if (body.kind === "snowflake") {
-    const needKey = body.snowflake_auth !== "externalbrowser";
-    if (!body.account || !body.user || !body.warehouse
-        || (needKey && !body.private_key_path)
-        || !body.database || !body.schema || !body.table || !body.entity || !body.event_time) {
-      setError(needKey
-        ? "Pick account, user, warehouse, key file, table, entity id, and timestamp."
-        : "Pick account, user, warehouse, table, entity id, and timestamp.");
-      return;
-    }
-    body.event_names = body.event_column ? body.event_names : [];
-    body.columns = body.columns || [];
-  } else if (!body.table || !body.entity || !body.event_time || !body.project || !body.location) {
-    setError("Pick a table, entity id, and timestamp. Location comes from the dataset.");
-    return;
+  if (Object.prototype.hasOwnProperty.call(body, "event_column") && !body.event_column) {
+    body.event_names = [];
   }
-  if (!body.entity_label) {
-    setError("Pick an entity name, or Other and type one.");
-    return;
-  }
-  const saveBtn = document.getElementById("save");
-  saveBtn.disabled = true;
-  saveBtn.textContent = "Saving…";
-  if (!body.event_column) body.event_names = [];
+  const gen = ++saveGen;
   try {
     const data = await post("/api/save", body);
+    if (gen !== saveGen) return;
     if (!data.ok) {
+      savingSince = 0;
       setError(data.error || "Could not save mapping");
       return;
     }
-    if (body.event_column) {
-      const ev = await post("/api/event_values", {
-        ...authBody(),
-        table: body.table,
-        location: body.location,
-        event_column: body.event_column,
-        event_time: body.event_time,
-        catalog: true,
-        reporting_timezone: body.reporting_timezone,
-        event_time_tz: body.event_time_tz,
-        week_start: body.week_start,
-      });
-      if (!ev.ok) {
-        noteMissingExtra(ev);
-        setStatus("Saved");
-        setError(ev.error || "Could not cache event names");
-        return;
-      }
-      const n = (ev.values || []).length;
-      setStatus("Saved. Cached " + n + " event name" + (n === 1 ? "" : "s") + ".");
-      return;
-    }
+    const wait = SAVE_PENDING_MS - (Date.now() - savingSince);
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    if (gen !== saveGen) return;
+    savingSince = 0;
+    setError("");
     setStatus("Saved");
-  } finally {
-    saveBtn.disabled = false;
-    saveBtn.textContent = "Save";
+  } catch (err) {
+    if (gen !== saveGen) return;
+    savingSince = 0;
+    setError(err && err.message ? err.message : "Could not save mapping");
   }
+}
+function scheduleSave() {
+  if (suppressChange) return;
+  clearTimeout(saveTimer);
+  if (!savingSince) savingSince = Date.now();
+  showToast("Saving…", "saving");
+  saveTimer = setTimeout(saveMapping, 350);
+}
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  clearTimeout(saveTimer);
+  saveMapping();
+});
+form.addEventListener("change", scheduleSave);
+form.addEventListener("input", (e) => {
+  const tag = (e.target && e.target.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA") scheduleSave();
 });
 </script>
 {% endblock %}

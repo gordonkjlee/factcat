@@ -1,7 +1,8 @@
 /** Cached warehouse lists: paint immediately, refresh on demand.
 
-Two catalogs share this: event names (DISTINCT query) and table columns
-(metadata). Dropdowns that read the same catalog share one refresh.
+Two catalogs share this: event names (lookback DISTINCT, or fc_event_names
+when a write dest is set) and table columns (metadata). Dropdowns that
+read the same catalog share one refresh.
 */
 function bindCachedList(options) {
   const loaders = [].concat(options.loadingFor || []).filter(Boolean);

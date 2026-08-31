@@ -13,7 +13,12 @@ from factcat.warehouses import CAP_SCAN_CAP, capabilities
 from factcat.warehouses.bigquery import DEFAULT_MAXIMUM_BYTES_BILLED
 from factcat.warehouses.snowflake import passphrase_from_env
 from factcat._emit import transpile
-from factcat.dialects import as_text, json_value_sql, splice_placeholders
+from factcat.dialects import (
+    as_text,
+    create_or_replace_relation,
+    json_value_sql,
+    splice_placeholders,
+)
 from factcat_app.config import WAREHOUSE_KINDS
 from .filters import (
     EXACT_STRING_OPS,
@@ -47,8 +52,10 @@ EVENT_VALUE_LIMIT = 1000
 # key is when you hit seven figures. No product max: a report can
 # double the LIMIT until the result fits or the process/tab dies.
 DEFAULT_QUERY_ROW_LIMIT = 1_000_000
-# Catalog DISTINCT is not all-time: unbounded scans blow the 10 GiB job cap.
+# Catalog DISTINCT default window. 0 in the form is all-time. The catalog
+# job does not use the report scan cap; lookback is the cost control.
 CATALOG_LOOKBACK_DAYS = 90
+EVENT_NAME_CACHE_TABLE = "fc_event_names"
 
 
 def _ident_table(value: str, label: str) -> str:
@@ -267,11 +274,12 @@ def _as_event_time(date_sql: str, form: dict[str, Any]) -> str:
 
 
 def _event_time_lhs(event_time: str, form: dict[str, Any]) -> str:
-    """Canonical instant. DATETIME stored as UTC CASTs to TIMESTAMP.
+    """Canonical instant for SELECT ``fc_event_ts`` and extract filters.
 
-    Used for the window compare, ``fc_event_ts`` in the SELECT list, and
-    first/last attribution. sqlglot rewrites a raw CAST to DATETIME;
-    ``factcat_as_instant`` is spliced after transpile.
+    DATETIME stored as UTC CASTs to TIMESTAMP here. Window compares use
+    ``_window_time_lhs`` so they do not wrap the column. sqlglot rewrites
+    a raw CAST to DATETIME; ``factcat_as_instant`` is spliced after
+    transpile.
     """
     kind = _event_time_kind(form)
     if kind == "reporting":
@@ -279,6 +287,21 @@ def _event_time_lhs(event_time: str, form: dict[str, Any]) -> str:
     if kind.startswith("unix_"):
         return f"factcat_as_instant({event_time}, '{kind}')"
     return f"factcat_as_instant({event_time})"
+
+
+def _window_time_lhs(event_time: str, form: dict[str, Any]) -> str:
+    """Time-window filter LHS. Isolate the column so the warehouse can prune.
+
+    Unix epochs are integers, so they still wrap. CAST on DATETIME or
+    TIMESTAMP is not required for the compare and defeats BigQuery
+    partition pruning and Snowflake micro-partition pruning. Unpartitioned
+    tables get the same SQL; pruning is a benefit when the column is the
+    partition (or clustering) key, not a requirement.
+    """
+    kind = _event_time_kind(form)
+    if kind.startswith("unix_"):
+        return f"factcat_as_instant({event_time}, '{kind}')"
+    return event_time
 
 
 def _ps(expr: str, unit: str, form: dict[str, Any], n: int) -> str:
@@ -329,7 +352,7 @@ def _normalize_range(
 def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
     """Sugar on event_time. Window unit follows the chart grain."""
     mode, unit, n = _normalize_range(form)
-    lhs = _event_time_lhs(event_time, form)
+    lhs = _window_time_lhs(event_time, form)
     if mode == "custom":
         kind = str(form.get("custom_kind") or "absolute").strip().lower()
         if kind == "relative":
@@ -1472,23 +1495,110 @@ def job_bytes_cap(form: dict[str, Any]) -> int | None:
     return int(gb * (1024**3))
 
 
+def catalog_lookback_days(form: dict[str, Any]) -> int | None:
+    """Days of event_time for catalog DISTINCT. None is all-time."""
+    raw = form.get("catalog_lookback_days", CATALOG_LOOKBACK_DAYS)
+    if raw in (None, ""):
+        return CATALOG_LOOKBACK_DAYS
+    try:
+        n = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("catalog lookback must be a number of days") from exc
+    if n < 0:
+        raise ValueError("catalog lookback must be >= 0")
+    if n == 0:
+        return None
+    return n
+
+
+def write_cache_table(form: dict[str, Any]) -> str | None:
+    """Qualified ``fc_event_names`` ident, or None when write-back is off.
+
+    Destination is caller-supplied (project + dataset, or database + schema).
+    Do not fall back to the billing project or the events table's dataset.
+    """
+    kind = form_kind(form)
+    if kind == "snowflake":
+        database = (form.get("write_database") or "").strip()
+        schema = (form.get("write_schema") or "").strip()
+        if not database or not schema:
+            return None
+        return _ident_table(
+            f"{database}.{schema}.{EVENT_NAME_CACHE_TABLE}", "write_schema"
+        )
+    project = (form.get("write_project") or "").strip()
+    dataset = (form.get("write_dataset") or "").strip()
+    if not project or not dataset:
+        return None
+    if "." in dataset:
+        raise ValueError("write dataset must be a dataset id, not project.dataset")
+    return _ident_table(
+        f"{project}.{dataset}.{EVENT_NAME_CACHE_TABLE}", "write_dataset"
+    )
+
+
+def _emit_relation(ident: str, dialect: str) -> str:
+    sql = splice_placeholders(transpile(f"SELECT 1 FROM {ident}", dialect), dialect)
+    match = re.search(r"(?i)\bFROM\s+", sql)
+    if not match:
+        raise RuntimeError("could not emit relation name")
+    return sql[match.end() :].strip()
+
+
+def event_name_cache_rebuild_sql(form: dict[str, Any], *, materialized: bool) -> str:
+    """CREATE OR REPLACE the event-name cache (view or table)."""
+    dest = write_cache_table(form)
+    if dest is None:
+        raise ValueError("write destination is required")
+    table = _ident_table(str(form.get("table") or ""), "table")
+    event_column = _ident_column(str(form.get("event_column") or ""), "event_column")
+    dialect = form_kind(form)
+    select = splice_placeholders(
+        transpile(
+            f"SELECT {event_column} AS fc_value FROM {table} "
+            f"WHERE {event_column} IS NOT NULL GROUP BY 1",
+            dialect,
+        ),
+        dialect,
+    )
+    return create_or_replace_relation(
+        _emit_relation(dest, dialect), select, dialect, materialized=materialized
+    )
+
+
+def event_name_cache_read_sql(form: dict[str, Any]) -> str:
+    dest = write_cache_table(form)
+    if dest is None:
+        raise ValueError("write destination is required")
+    dialect = form_kind(form)
+    sql = (
+        f"SELECT fc_value FROM {dest} "
+        f"WHERE fc_value IS NOT NULL "
+        f"ORDER BY 1 "
+        f"LIMIT {EVENT_VALUE_LIMIT}"
+    )
+    return splice_placeholders(transpile(sql, dialect), dialect)
+
+
 def event_values_sql(form: dict[str, Any]) -> str:
-    """DISTINCT event names. Catalog mode is last 90 days on event_time so
-    a partitioned events table can prune; it is not an all-time scan.
+    """DISTINCT event names. Catalog mode filters event_time so a
+    partitioned table can prune. Lookback comes from Setup (0 = all-time).
     """
     table = _ident_table(str(form.get("table") or ""), "table")
     event_column = _ident_column(str(form.get("event_column") or ""), "event_column")
     event_time = _ident_column(str(form.get("event_time") or ""), "event_time")
     catalog = form.get("catalog") in (True, "true", "on", "1", 1)
+    parts = [f"{event_column} IS NOT NULL"]
     if catalog:
-        where = (
-            f"{event_column} IS NOT NULL "
-            f"AND {_event_time_lhs(event_time, form)} >= {_as_event_time(_ps('current_date', 'day', form, -CATALOG_LOOKBACK_DAYS), form)}"
-        )
+        days = catalog_lookback_days(form)
+        if days is not None:
+            parts.append(
+                f"{_window_time_lhs(event_time, form)} >= "
+                f"{_as_event_time(_ps('current_date', 'day', form, -days), form)}"
+            )
     else:
-        where = " AND ".join(
-            [f"{event_column} IS NOT NULL"] + _time_clauses(form, event_time)
-        )
+        parts.extend(_time_clauses(form, event_time))
+    where = " AND ".join(parts)
     sql = (
         f"SELECT DISTINCT {event_column} AS fc_value "
         f"FROM {table} "
@@ -1500,7 +1610,9 @@ def event_values_sql(form: dict[str, Any]) -> str:
     return splice_placeholders(transpile(sql, dialect), dialect)
 
 
-def connection_from_form(form: dict[str, Any]) -> dict[str, Any]:
+def connection_from_form(
+    form: dict[str, Any], *, apply_scan_cap: bool = True
+) -> dict[str, Any]:
     kind = form_kind(form)
     if kind == "snowflake":
         out: dict[str, Any] = {
@@ -1530,7 +1642,7 @@ def connection_from_form(form: dict[str, Any]) -> dict[str, Any]:
         "project": project,
         "location": location,
     }
-    if CAP_SCAN_CAP in capabilities(kind):
+    if apply_scan_cap and CAP_SCAN_CAP in capabilities(kind):
         out["maximum_bytes_billed"] = job_bytes_cap(form)
     credentials = (form.get("credentials") or "").strip()
     if credentials:

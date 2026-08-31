@@ -22,7 +22,13 @@ from factcat import (
     retention_sql,
 )
 from factcat._emit import GRID_RELATION, transpile_with_grid
-from factcat.dialects import as_instant, period_start_shifted, splice_placeholders
+from factcat.dialects import (
+    as_instant,
+    create_or_replace_relation,
+    period_start_shifted,
+    splice_placeholders,
+    timestamp_at_date,
+)
 
 RETENTION = RetentionSpec(
     table="payments",
@@ -291,6 +297,36 @@ def test_as_instant_survives_transpile():
         "bigquery",
     )
     assert sql == "CAST(occurred_at AS TIMESTAMP) >= TIMESTAMP('2026-01-01')"
+
+
+def test_utc_bound_is_datetime_so_column_stays_bare():
+    sql = splice_placeholders(
+        "occurred_at >= factcat_ts_at_date(DATE '2026-01-01', 'UTC', 'utc')",
+        "bigquery",
+    )
+    assert sql == "occurred_at >= DATETIME(TIMESTAMP(DATE '2026-01-01', 'UTC'))"
+    assert timestamp_at_date("DATE '2026-01-01'", "bigquery", "UTC", "utc") == (
+        "DATETIME(TIMESTAMP(DATE '2026-01-01', 'UTC'))"
+    )
+    sf = timestamp_at_date("DATE '2026-01-01'", "snowflake", "UTC", "utc")
+    assert "TIMESTAMP_NTZ" in sf
+    instant = timestamp_at_date("DATE '2026-01-01'", "bigquery", "UTC", "instant")
+    assert instant.startswith("TIMESTAMP(")
+    sf_spliced = splice_placeholders(
+        "occurred_at >= FACTCAT_TS_AT_DATE(DATE '2026-01-01', 'UTC', 'utc')",
+        "snowflake",
+    )
+    assert "FACTCAT_" not in sf_spliced.upper()
+    assert "TIMESTAMP_NTZ" in sf_spliced.upper()
+
+
+def test_create_or_replace_relation_spelling():
+    select = "SELECT event_name AS fc_value FROM t GROUP BY 1"
+    mv = create_or_replace_relation("d.fc_event_names", select, "bigquery", materialized=True)
+    table = create_or_replace_relation("d.fc_event_names", select, "snowflake", materialized=False)
+    assert mv.startswith("CREATE OR REPLACE MATERIALIZED VIEW")
+    assert table.startswith("CREATE OR REPLACE TABLE")
+    assert "GROUP BY 1" in mv and "GROUP BY 1" in table
 
 
 def test_bigquery_civil_datetime_casts_to_date():

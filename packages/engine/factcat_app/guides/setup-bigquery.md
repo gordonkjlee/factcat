@@ -76,5 +76,11 @@ zone. Do not store local time in a TIMESTAMP and label it UTC.
 
 ## Event name
 
-Optional STRING column. Save caches DISTINCT names from the last 90 days
-of the timestamp. Events then filters `event_name = '…'`.
+Optional STRING column. Mapping persists as you pick fields; it does not query.
+Events **Refresh list** loads names for the event-name lookback on Setup
+(90 days by default; 0 is all time). That job does not use the scan cap.
+The filter isolates the timestamp column so a table partitioned on it can
+prune. Optional: allow Factcat to create and maintain tables in a
+project and dataset for better performance. First Refresh creates
+`fc_event_names` if it is missing; later Refresh reads that cache (lookback
+does not apply). Events then filters `event_name = '…'`.

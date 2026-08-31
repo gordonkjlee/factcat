@@ -272,16 +272,15 @@ Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): pick **BigQuer
 **Snowflake**. If that warehouse extra is not installed, Setup shows the
 command and **Install** (into this environment; it does not pip on its
 own). Then that warehouse's connection and catalog, then entity id and
-timestamp. Catalog lists load when you open a dropdown, not when you
-visit the page. **Save** writes `.factcat.json` and, if an event-name
-column is mapped, runs DISTINCT on the last 90 days and caches the names.
-It stays on Setup and shows **Saved**. Setup is a separate control at the
-bottom of the left rail, not an analysis. **Events** stays reachable; until
-you Save a mapping it shows a prompt, Run is disabled, and Setup has a
-marker. Warehouse sign-in does not fill dataset, table, or grain.
-**Preferences** sits above Setup (wording, thousand/decimal separators,
-weekday/month display). Those follow the person in
-`~/.factcat/preferences.json`, not the project file.
+timestamp. Fields persist as you pick them (no Save button). Event names
+load on Events **Refresh list**. Optional: allow Factcat to create and
+maintain tables in your warehouse for better performance (BigQuery:
+project and dataset; Snowflake: database and schema). Setup is a separate
+control at the bottom of the left rail, not an analysis. **Events** stays
+reachable; until a mapping is ready it shows a prompt, Run is disabled,
+and Setup has a marker. **Preferences** sits above Setup (wording,
+thousand/decimal separators, weekday/month display). Those follow the
+person in `~/.factcat/preferences.json`, not the project file.
 
 **BigQuery.** After the extra is present: `gcloud auth application-default login`
 and `gcloud config set project YOUR_GCP_PROJECT`. Billing project from ADC,
@@ -290,8 +289,16 @@ table (lists; greyed until the previous step is set). Location is
 taken from the dataset (do not guess `US`). Advanced is only if you use a key
 file instead of ADC.
 
-Map the event-name column on **Setup** (STRING). Event names are cached
-on **Save** (DISTINCT, last 90 days of the timestamp). On Events, each **event series** is a card: event name, **measure** (and Of
+Map the event-name column on **Setup** (STRING). Names are not fetched
+while mapping. **Refresh list** on Events runs DISTINCT for **Event name
+lookback** (Setup; 90 days; 0 is all time) and does not use the job scan
+cap; raise the lookback if a name is missing. The time filter isolates
+the timestamp column so a date-partitioned table can prune.
+Optional **Factcat-managed tables**: allow Factcat to create and maintain
+tables in your warehouse for better performance. BigQuery is project and
+dataset; Snowflake is database and schema. First Refresh creates
+`fc_event_names` if missing; later Refresh reads it and lookback is hidden.
+On Events, each **event series** is a card: event name, **measure** (and Of
 when the measure is a property), and filters. Filter operators follow the
 column type (boolean, number, date, time, timestamp, string). String rows
 can contain / start with / end with several patterns (each value a pill), with a case-sensitive
@@ -303,7 +310,8 @@ chart date range). **Combine** nests another event
 into that series (OR); **Split** undoes it. Ungrouped series overlay as
 separate lines. **Break down by** is chart-wide unless **Break down each
 series** is on, in which case each series has its own split. **Refresh list** reloads
-the same DISTINCT and rewrites the cache. **Time grain**
+event names for the current lookback (or from `fc_event_names` if you
+gave Factcat a write project and dataset). **Time grain**
 (day / week / month) comes first; **date range** is then in that grain
 (Last 30 days, Last 8 weeks, Last 6 months). Day grain also offers This
 week / Last week / This month as *windows of days*. Week and month last-N
@@ -311,7 +319,10 @@ default to complete periods so the first bar is a full week or month.
 Include this week/month is opt-in and the current bar is marked incomplete.
 Custom is specific dates (snapped to the grain) or relative (12 weeks ago
 to 3 weeks ago; 0 = this grain). Sugar on `event_time`, not a period enum.
-**Refresh list** always writes the event-name cache. Week start and reporting
+If a write destination is set, **Refresh list** reads `fc_event_names`
+(created on first miss as a materialized view, or a table if the source
+cannot back a view). Lookback does not apply while that cache is in use.
+Week start and reporting
 timezone stay on Setup (they change SQL). Thousand/decimal separators, wording
 (business user / SQL analyst), and weekday/month display are **Preferences**; number filters
 use those separators, and the SQL pane stays warehouse SQL (period decimal, no

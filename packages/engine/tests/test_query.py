@@ -11,11 +11,14 @@ from factcat_app.filters import FILTER_FAMILY_OPS, FILTER_OP_META
 from factcat_app.query import (
     EVENT_VALUE_LIMIT,
     annotate_incomplete,
+    catalog_lookback_days,
+    event_name_cache_rebuild_sql,
     event_values_sql,
     events_sql_from_form,
     job_bytes_cap,
     query_row_limit,
     spec_from_form,
+    write_cache_table,
 )
 
 
@@ -73,7 +76,7 @@ def test_week_bucket_uses_explicit_week_start():
 def test_range_preset_7_is_last_n_days():
     spec = spec_from_form(_form(range_preset="7"))
     assert (
-        f"factcat_as_instant(occurred_at) >= {_ts(_shifted('current_date', 'day', -7))}"
+        f"occurred_at >= {_ts(_shifted('current_date', 'day', -7))}"
         in spec.where
     )
 
@@ -294,6 +297,127 @@ def test_catalog_event_values_uses_recent_window():
     assert "DATE_SUB" in compact
     assert "90" in compact
     assert "OCCURRED_AT" in compact
+    assert "CAST(OCCURRED_AT" not in compact
+    assert "DATETIME(TIMESTAMP(" in sql.replace(" ", "").replace("`", "")
+
+
+def test_catalog_lookback_zero_is_all_time():
+    sql = event_values_sql(
+        _form(event_column="event_name", catalog=True, catalog_lookback_days=0)
+    )
+    upper = sql.upper()
+    assert "DATE_SUB" not in upper
+    assert "OCCURRED_AT" not in upper
+    assert catalog_lookback_days(_form(catalog_lookback_days=0)) is None
+
+
+def test_catalog_lookback_override():
+    sql = event_values_sql(
+        _form(event_column="event_name", catalog=True, catalog_lookback_days=365)
+    )
+    assert "365" in sql
+    assert catalog_lookback_days(_form(catalog_lookback_days=365)) == 365
+
+
+def test_snowflake_window_isolates_ntz_column():
+    sql = events_sql_from_form(
+        _form(
+            kind="snowflake",
+            table="ANALYTICS.MARTS.EVENTS",
+            event_time_tz="utc",
+        )
+    )
+    compact = sql.replace(" ", "").upper()
+    assert "CAST(OCCURRED_AT ASTIMESTAMP)>=" not in compact
+    assert "OCCURRED_AT>=" in compact
+    assert "FACTCAT_" not in compact
+    assert "TIMESTAMP_NTZ" in compact or "CONVERT_TIMEZONE" in compact
+
+
+def test_write_cache_table_none_when_unset():
+    assert write_cache_table(_form()) is None
+    assert write_cache_table(_form(write_dataset="analytics")) is None
+    assert write_cache_table(_form(write_project="p")) is None
+    assert write_cache_table(_form(kind="snowflake", table="ANALYTICS.MARTS.EVENTS")) is None
+    assert write_cache_table(
+        _form(kind="snowflake", table="ANALYTICS.MARTS.EVENTS", write_schema="MARTS")
+    ) is None
+
+
+def test_write_cache_table_does_not_use_billing_project():
+    assert write_cache_table(_form(project="billing", write_dataset="analytics")) is None
+
+
+def test_write_cache_table_bigquery_and_snowflake():
+    bq = write_cache_table(
+        _form(project="billing", write_project="dest-proj", write_dataset="analytics")
+    )
+    assert "fc_event_names" in bq
+    assert "analytics" in bq
+    assert "dest-proj" in bq
+    assert "billing" not in bq
+    sf = write_cache_table(
+        _form(
+            kind="snowflake",
+            table="ANALYTICS.MARTS.EVENTS",
+            database="EVENTS_DB",
+            write_database="ANALYTICS",
+            write_schema="MARTS",
+        )
+    )
+    assert "fc_event_names" in sf
+    assert "ANALYTICS" in sf or "analytics" in sf.lower()
+    assert "MARTS" in sf or "marts" in sf.lower()
+
+
+def test_event_name_cache_rebuild_is_group_by():
+    sql = event_name_cache_rebuild_sql(
+        _form(
+            project="p",
+            write_project="dest-proj",
+            write_dataset="analytics",
+            event_column="event_name",
+        ),
+        materialized=True,
+    )
+    upper = sql.upper()
+    assert "CREATE OR REPLACE MATERIALIZED VIEW" in upper
+    assert "GROUP BY" in upper
+    assert "DISTINCT" not in upper
+    assert "DATE_SUB" not in upper
+    assert "FACTCAT_" not in upper
+    hyphen = event_name_cache_rebuild_sql(
+        _form(
+            project="p",
+            write_project="my-gcp-proj",
+            write_dataset="analytics",
+            event_column="event_name",
+        ),
+        materialized=False,
+    )
+    assert "`my-gcp-proj`" in hyphen or '"my-gcp-proj"' in hyphen
+    table_sql = event_name_cache_rebuild_sql(
+        _form(
+            project="p",
+            write_project="dest-proj",
+            write_dataset="analytics",
+            event_column="event_name",
+        ),
+        materialized=False,
+    )
+    assert "CREATE OR REPLACE TABLE" in table_sql.upper()
+    assert "MATERIALIZED VIEW" not in table_sql.upper()
+    sf = event_name_cache_rebuild_sql(
+        _form(
+            kind="snowflake",
+            table="ANALYTICS.MARTS.EVENTS",
+            write_database="ANALYTICS",
+            write_schema="MARTS",
+            event_column="event_name",
+        ),
+        materialized=True,
+    )
+    assert "CREATE OR REPLACE MATERIALIZED VIEW" in sf.upper()
 
 
 def test_custom_range_is_inclusive_dates():
@@ -321,7 +445,7 @@ def test_event_filter_is_and_lookback():
     )
     assert "event_name = 'paid'" in spec.where
     assert (
-        f"factcat_as_instant(occurred_at) >= {_ts(_shifted('current_date', 'day', -30))}"
+        f"occurred_at >= {_ts(_shifted('current_date', 'day', -30))}"
         in spec.where
     )
 
@@ -1701,16 +1825,17 @@ def test_civil_datetime_casts_instead_of_date_tz():
     assert "CURRENT_DATE('Europe/London')" in sql
 
 
-def test_utc_kind_casts_datetime_column_to_timestamp():
+def test_utc_kind_isolates_column_in_window():
     spec = spec_from_form(_form())
     assert spec.event_time == "factcat_as_instant(occurred_at)"
-    assert "factcat_as_instant(occurred_at) >=" in spec.where
+    assert "occurred_at >=" in spec.where
+    assert "factcat_as_instant(occurred_at) >=" not in spec.where
     sql = events_sql(spec, dialect="bigquery").replace("`", "")
     assert "factcat_as_instant" not in sql
     assert "CAST(occurred_at AS TIMESTAMP) AS fc_event_ts" in sql
     assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'UTC')" in sql
-    assert "CAST(occurred_at AS TIMESTAMP) >=" in sql
-    assert "CAST(occurred_at AS DATETIME) >=" not in sql
+    assert "CAST(occurred_at AS TIMESTAMP) >=" not in sql
+    assert "DATETIME(TIMESTAMP(" in sql
     assert "CAST(fc_bucket AS DATE) AS bucket" in sql
 
 

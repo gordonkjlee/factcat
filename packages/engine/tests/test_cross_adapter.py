@@ -14,7 +14,11 @@ import pytest
 from factcat.warehouses import ADAPTERS, capabilities, extra_installed, extra_requirement
 from factcat_app.catalog import catalog_steps, catalog_steps_by_kind, type_sets
 from factcat_app.main import SETUP_DOCS
-from factcat_app.query import event_values_sql, events_sql_from_form
+from factcat_app.query import (
+    event_name_cache_rebuild_sql,
+    event_values_sql,
+    events_sql_from_form,
+)
 
 
 class _Capture(logging.Handler):
@@ -83,6 +87,39 @@ def test_event_values_sql_emits_without_warnings(kind, sqlglot_warnings):
 
 
 @pytest.mark.parametrize("kind", list(ADAPTERS))
+def test_event_values_window_does_not_cast_time_column(kind):
+    sql = event_values_sql(_form(kind, catalog=True)).upper().replace(" ", "")
+    assert "CAST(OCCURRED_AT" not in sql
+    assert "OCCURRED_AT>=" in sql
+    assert "FACTCAT_" not in sql
+    events = events_sql_from_form(_form(kind)).upper().replace(" ", "")
+    assert "CAST(OCCURRED_AT ASTIMESTAMP)>=" not in events
+    assert "CAST(OCCURRED_AT ASDATETIME)>=" not in events
+    assert "OCCURRED_AT>=" in events
+    assert "FACTCAT_" not in events
+    if kind == "snowflake":
+        assert "TIMESTAMP_NTZ" in sql or "CONVERT_TIMEZONE" in sql
+        assert "TIMESTAMP_NTZ" in events or "CONVERT_TIMEZONE" in events
+    if kind == "bigquery":
+        assert "DATETIME(TIMESTAMP(" in sql.replace("`", "")
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
+def test_event_name_cache_rebuild_walks_adapters(kind, sqlglot_warnings):
+    extra = {"event_column": "event_name"}
+    if kind == "snowflake":
+        extra.update(write_database="ANALYTICS", write_schema="MARTS")
+    else:
+        extra.update(write_project="dest-proj", write_dataset="analytics")
+    sql = event_name_cache_rebuild_sql(_form(kind, **extra), materialized=True)
+    assert "CREATE OR REPLACE MATERIALIZED VIEW" in sql.upper()
+    assert "GROUP BY" in sql.upper()
+    assert sqlglot_warnings.messages == [], (
+        f"sqlglot warned for {kind}: {sqlglot_warnings.messages}"
+    )
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
 def test_capabilities_declared(kind):
     caps = capabilities(kind)
     assert isinstance(caps, frozenset)
@@ -124,6 +161,13 @@ def test_catalog_steps_cover_every_adapter():
                 [fill["id"] for fill in step["fill"]] if step.get("fill") else [step["id"]]
             )
         assert "table_name" in ids, f"{kind} catalog must pick a table"
+        if kind == "bigquery":
+            assert "write_dataset" in ids
+            write_ds = next(s for s in steps if s["id"] == "write_dataset")
+            assert "write_project" in write_ds["needs"]
+        if kind == "snowflake":
+            assert "write_database" in ids
+            assert "write_schema" in ids
 
 
 def test_setup_docs_cover_every_adapter():
