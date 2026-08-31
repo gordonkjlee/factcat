@@ -55,8 +55,6 @@ DEFAULTS: dict[str, Any] = {
     "reporting_timezone": "UTC",
     "event_time_tz": "utc",
     "event_time_epoch": "",
-    "thousand_sep": "comma",
-    "decimal_sep": "period",
     "start_date": "",
     "end_date": "",
     "custom_kind": "absolute",
@@ -162,5 +160,7 @@ def save(data: dict[str, Any]) -> None:
     for key in DEFAULTS:
         if key in data and data[key] is not None:
             merged[key] = data[key]
+    for key in ("thousand_sep", "decimal_sep"):
+        merged.pop(key, None)
     path = config_path()
     path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")

@@ -10,6 +10,11 @@ from __future__ import annotations
 import duckdb
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def isolate_user_prefs(tmp_path, monkeypatch):
+    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "preferences.json"))
+
 # subscription_id, user_id, sub_start, paid_at, status
 PAYMENTS = [
     # S1 pays on time in every period.

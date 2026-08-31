@@ -686,9 +686,18 @@ def _trunc_sql(date_expr: str, unit: str, form: dict[str, Any] | None) -> str:
 
 def _canon_name(token: str, names: tuple[str, ...], label: str) -> str:
     raw = (token or "").strip()
+    if not raw:
+        raise ValueError(f"filter value must be a {label}")
+    lowered = raw.lower()
     for name in names:
-        if name.lower() == raw.lower():
+        if name.lower() == lowered:
             return name
+    abbrev = [name for name in names if name[:3].lower() == lowered]
+    if len(abbrev) == 1:
+        return abbrev[0]
+    prefix = [name for name in names if name.lower().startswith(lowered)]
+    if len(prefix) == 1:
+        return prefix[0]
     raise ValueError(f"filter value must be a {label}")
 
 
@@ -926,11 +935,24 @@ def _ts_bound(
     return _plain_stamp(iso_date, time_raw, _stamp_typ(row, form))
 
 
+def _canonical_number(token: str) -> str:
+    from .prefs import canonical_number
+
+    return canonical_number(token)
+
+
 def _numeric_lit(
     token: str, *, integer: bool = False, lo: int | None = None, hi: int | None = None
 ) -> str:
-    raw = token.strip()
+    raw = (token or "").strip()
     if integer:
+        if not _INT.match(raw):
+            try:
+                raw = _canonical_number(raw)
+            except ValueError:
+                pass
+            if raw.endswith(".0") and _INT.match(raw[:-2]):
+                raw = raw[:-2]
         if not _INT.match(raw):
             raise ValueError("filter value must be a whole number")
         n = int(raw)
@@ -938,7 +960,12 @@ def _numeric_lit(
             raise ValueError(f"filter value must be at least {lo}")
         if hi is not None and n > hi:
             raise ValueError(f"filter value must be at most {hi}")
-        return raw
+        return str(n)
+    if not _NUMBER.match(raw):
+        try:
+            raw = _canonical_number(raw)
+        except ValueError:
+            pass
     if not _NUMBER.match(raw):
         raise ValueError("filter value must be a number")
     return raw

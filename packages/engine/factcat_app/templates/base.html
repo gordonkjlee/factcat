@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ prefs.theme|default('light') }}">
 <head>
   <meta charset="utf-8">
   <title>{% block title %}Factcat{% endblock %}</title>
@@ -19,8 +19,25 @@
       --fc-line: #E6DCCF;
       --fc-alert: #B42318;
       --fc-ok: #3F6B4B;
+      --fc-ochre-wash: #FBF3E4;
       font-family: ui-sans-serif, system-ui, sans-serif;
       color: var(--fc-ink);
+      color-scheme: light;
+    }
+    html[data-theme="dark"] {
+      --fc-ink: #F4EFE6;
+      --fc-ink-soft: #C9C1B4;
+      --fc-paper: #1A1816;
+      --fc-snow: #24211E;
+      --fc-slate: #9AA6AD;
+      --fc-slate-deep: #121110;
+      --fc-ochre: #D69A2E;
+      --fc-ochre-deep: #E0B35C;
+      --fc-line: #3A342E;
+      --fc-alert: #E85D4C;
+      --fc-ok: #7CB88A;
+      --fc-ochre-wash: #2E2618;
+      color-scheme: dark;
     }
     html, body { height: 100%; margin: 0; }
     body {
@@ -30,6 +47,7 @@
     }
     body.events { overflow: hidden; }
     body.setup { overflow: hidden; }
+    body.preferences { overflow: hidden; }
     .rail {
       width: 4.5rem;
       flex-shrink: 0;
@@ -58,21 +76,24 @@
       text-decoration: none;
       border-radius: 0.3rem;
     }
-    .rail-item:hover { color: var(--fc-snow); background: rgba(255, 252, 247, 0.08); }
-    .rail-item.active {
-      background: rgba(196, 132, 29, 0.22);
+    .rail-item:hover {
       color: var(--fc-snow);
+      background: color-mix(in srgb, var(--fc-ochre) 28%, transparent);
+    }
+    .rail-item.active {
+      background: var(--fc-ochre);
+      color: #1C1917;
       font-weight: 600;
     }
-    .rail-setup { margin-top: auto; }
-    .rail-setup .cog {
+    .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 0.15rem; }
+    .rail-item .cog {
       width: 1.2rem;
       height: 1.2rem;
       display: block;
       margin: 0 auto 0.15rem;
     }
     .app { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-    body.setup .app { overflow: auto; }
+    body.setup .app, body.preferences .app { overflow: auto; }
     h1 { font-size: 1.1rem; margin: 0 0 0.35rem; }
     h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fc-slate); margin: 1.1rem 0 0.4rem; }
     .lede { font-size: 0.8rem; color: var(--fc-ink-soft); margin: 0 0 0.75rem; }
@@ -124,13 +145,29 @@
   <nav class="rail-reports" aria-label="Reports">
     <a href="/" class="rail-item{% if screen == 'events' %} active{% endif %}">Events</a>
   </nav>
-  <a href="/setup" class="rail-item rail-setup{% if screen == 'setup' %} active{% endif %}" title="Project setup">
-    <svg class="cog" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-      <circle cx="12" cy="12" r="3"/>
-    </svg>
-    Setup
-  </a>
+  <nav class="rail-foot" aria-label="Settings">
+    <a href="/preferences" class="rail-item{% if screen == 'preferences' %} active{% endif %}" title="User preferences">
+      <svg class="cog" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="4" y1="21" x2="4" y2="14"/>
+        <line x1="4" y1="10" x2="4" y2="3"/>
+        <line x1="12" y1="21" x2="12" y2="12"/>
+        <line x1="12" y1="8" x2="12" y2="3"/>
+        <line x1="20" y1="21" x2="20" y2="16"/>
+        <line x1="20" y1="12" x2="20" y2="3"/>
+        <line x1="1" y1="14" x2="7" y2="14"/>
+        <line x1="9" y1="8" x2="15" y2="8"/>
+        <line x1="17" y1="16" x2="23" y2="16"/>
+      </svg>
+      Preferences
+    </a>
+    <a href="/setup" class="rail-item rail-setup{% if screen == 'setup' %} active{% endif %}" title="Project setup">
+      <svg class="cog" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+      Setup
+    </a>
+  </nav>
 </aside>
 <div class="app">
 {% block body %}{% endblock %}

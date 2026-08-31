@@ -37,6 +37,7 @@ from .catalog import (
 from .extras import extra_commands, install_command, run_install
 from .config import load, mapping_ready, save, warehouse_kind
 from .filters import filter_ui
+from . import prefs as prefs_mod
 from .query import (
     REPORTING_TIMEZONES,
     annotate_incomplete,
@@ -72,11 +73,13 @@ def favicon() -> FileResponse:
 def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLResponse:
     kind = warehouse_kind(cfg)
     types = type_sets(kind)
+    user = prefs_mod.load()
     return templates.TemplateResponse(
         request,
         template,
         {
             "config": cfg,
+            "prefs": user,
             "screen": screen,
             "entity_types": sorted(types["entity"]),
             "time_types": sorted(types["event_time"]),
@@ -90,7 +93,7 @@ def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLRespon
                 name: {role: sorted(vals) for role, vals in type_sets(name).items()}
                 for name in ADAPTERS
             },
-            "filter_ui": filter_ui(),
+            "filter_ui": filter_ui(user),
         },
     )
 
@@ -99,7 +102,7 @@ def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLRespon
 def index(request: Request):
     cfg = load()
     if not mapping_ready(cfg):
-        return RedirectResponse("/setup", status_code=303)
+        return RedirectResponse("/setup?events=1", status_code=303)
     return _page(request, "index.html", "events", cfg)
 
 
@@ -115,6 +118,7 @@ def setup(request: Request) -> HTMLResponse:
         "setup.html",
         {
             "config": cfg,
+            "prefs": prefs_mod.load(),
             "screen": "setup",
             "entity_types": sorted(types["entity"]),
             "time_types": sorted(types["event_time"]),
@@ -236,11 +240,39 @@ async def api_event_values(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "sql": sql, "values": values})
 
 
+@app.get("/preferences", response_class=HTMLResponse)
+def preferences(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "preferences.html",
+        {
+            "config": load(),
+            "prefs": prefs_mod.load(),
+            "screen": "preferences",
+        },
+    )
+
+
 @app.post("/api/save")
 async def api_save(request: Request) -> JSONResponse:
     form = await request.json()
     save(form)
     return JSONResponse({"ok": True})
+
+
+@app.post("/api/preferences")
+async def api_preferences(request: Request) -> JSONResponse:
+    form = await request.json()
+    if not isinstance(form, dict):
+        return JSONResponse(
+            {"ok": False, "error": "preferences must be a JSON object"},
+            status_code=400,
+        )
+    try:
+        prefs_mod.save(form)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "prefs": prefs_mod.load()})
 
 
 @app.post("/api/install_extra")

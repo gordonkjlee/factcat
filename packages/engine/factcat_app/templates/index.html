@@ -286,8 +286,8 @@
     <input type="hidden" name="reporting_timezone" id="reporting_timezone" value="{{ config.reporting_timezone or 'UTC' }}">
     <input type="hidden" name="event_time_tz" id="event_time_tz" value="{{ config.event_time_tz or 'utc' }}">
     <input type="hidden" name="event_time_epoch" id="event_time_epoch" value="{{ config.event_time_epoch or '' }}">
-    <input type="hidden" name="thousand_sep" id="thousand_sep" value="{{ config.thousand_sep or 'comma' }}">
-    <input type="hidden" name="decimal_sep" id="decimal_sep" value="{{ config.decimal_sep or 'period' }}">
+    <input type="hidden" name="thousand_sep" id="thousand_sep" value="{{ prefs.thousand_sep or 'comma' }}">
+    <input type="hidden" name="decimal_sep" id="decimal_sep" value="{{ prefs.decimal_sep or 'period' }}">
     <input type="hidden" name="bytes_cap_gb" id="bytes_cap_gb" value="{{ config.bytes_cap_gb if config.bytes_cap_gb is not none else 10 }}">
     <input type="hidden" name="query_row_limit" id="query_row_limit" value="{{ config.query_row_limit or 1000000 }}">
 
@@ -307,9 +307,9 @@
     <label for="measure">Measure</label>
     <select name="measure" id="measure">
       <optgroup label="Event">
-        <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>Volume</option>
-        <option value="uniques" title="Count distinct of the mapped entity id" {% if (config.on != "property") and (config.measure == "uniques" or not config.measure) %}selected{% endif %}>Unique {{ config.entity_label_plural or "Users" }}</option>
-        <option value="average" title="Volume divided by unique entities" {% if config.on != "property" and config.measure == "average" %}selected{% endif %}>Average per {{ config.entity_label or "User" }}</option>
+        <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>{{ filter_ui.chrome.volume }}</option>
+        <option value="uniques" title="Count distinct of the mapped entity id" {% if (config.on != "property") and (config.measure == "uniques" or not config.measure) %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.unique }}{% else %}{{ filter_ui.chrome.unique.replace("{plural}", config.entity_label_plural or "Users") }}{% endif %}</option>
+        <option value="average" title="Volume divided by unique entities" {% if config.on != "property" and config.measure == "average" %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.average_per }}{% else %}{{ filter_ui.chrome.average_per.replace("{singular}", config.entity_label or "User") }}{% endif %}</option>
       </optgroup>
       <optgroup label="Property">
         <option value="sum" title="Sum of a numeric column" {% if config.measure == "sum" %}selected{% endif %}>Sum</option>
@@ -320,7 +320,7 @@
     </select>
     <input type="hidden" name="on" id="on" value="{{ config.on or 'events' }}">
     <div id="of-wrap" {% if config.on != "property" %}hidden{% endif %}>
-      <label for="of_column">Of <span id="of_column-loading" class="loading" hidden aria-label="Loading"></span>
+      <label for="of_column">{{ filter_ui.chrome.of }} <span id="of_column-loading" class="loading" hidden aria-label="Loading"></span>
         <button type="button" id="refresh-of" class="linkish">Refresh list</button>
       </label>
       <select name="of_column" id="of_column"></select>
@@ -330,7 +330,7 @@
         <span class="hint">Dotted path in this JSON column (plan or user.plan).</span>
       </div>
       <div id="of-expr-wrap" hidden>
-        <label for="of_expr">SQL expression</label>
+        <label for="of_expr">{{ filter_ui.chrome.sql_expr }}</label>
         <input id="of_expr" name="of_expr" autocomplete="off" value="{{ config.of_expr }}" placeholder="revenue">
         <span class="hint">Fills of=. Sum / Average / Median need a number. Distinct also allows STRING.</span>
       </div>
@@ -397,10 +397,10 @@
     <div id="breakdown-band">
     <div class="row">
       <input name="breakdown_by_series" type="checkbox" id="breakdown_by_series" {% if config.breakdown_by_series %}checked{% endif %} style="width:auto">
-      <label for="breakdown_by_series" style="margin:0">Break down each series</label>
+      <label for="breakdown_by_series" style="margin:0">{{ filter_ui.chrome.breakdown_each }}</label>
     </div>
     <div id="breakdown-chart">
-    <label for="breakdown_column">Break down by <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span>
+    <label for="breakdown_column">{{ filter_ui.chrome.breakdown }} <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span>
       <button type="button" id="refresh-columns" class="linkish">Refresh list</button>
     </label>
     <select name="breakdown_column" id="breakdown_column"></select>
@@ -410,7 +410,7 @@
       <span class="hint">Dotted path in this JSON column (plan or user.plan).</span>
     </div>
     <div id="breakdown-expr-wrap" hidden>
-      <label for="breakdown_expr">SQL expression</label>
+      <label for="breakdown_expr">{{ filter_ui.chrome.sql_expr }}</label>
       <input id="breakdown_expr" name="breakdown_expr" autocomplete="off" value="{{ config.breakdown_expr }}" placeholder="country">
       <span class="hint">Fills the spec expression. Does not replace it with a property store.</span>
     </div>
@@ -523,7 +523,7 @@
           <thead>
             <tr>
               <th data-key="bucket">Day <span class="grip" data-col="0"></span></th>
-              <th data-key="series" id="th-series" hidden>Break down <span class="grip" data-col="1"></span></th>
+              <th data-key="series" id="th-series" hidden>{{ filter_ui.chrome.breakdown_th }} <span class="grip" data-col="1"></span></th>
               <th data-key="value">Volume <span class="grip" data-col="2"></span></th>
             </tr>
           </thead>
@@ -826,7 +826,7 @@ function paintOfSelect(sel, current, measure) {
   fillSelect(sel, cols, cur === CUSTOM_OF ? "" : cur, "(none)");
   const custom = document.createElement("option");
   custom.value = CUSTOM_OF;
-  custom.textContent = "SQL expression…";
+  custom.textContent = t("sql_expr_ellipsis");
   sel.appendChild(custom);
   if (cur && cur !== CUSTOM_OF) ensureOption(sel, cur);
   if (cur === CUSTOM_OF) sel.value = CUSTOM_OF;
@@ -856,7 +856,7 @@ function paintBreakdownSelect(sel, current) {
   fillSelect(sel, cols, cur === CUSTOM_BREAKDOWN ? "" : cur, "(none)");
   const custom = document.createElement("option");
   custom.value = CUSTOM_BREAKDOWN;
-  custom.textContent = "SQL expression…";
+  custom.textContent = t("sql_expr_ellipsis");
   sel.appendChild(custom);
   if (cur && cur !== CUSTOM_BREAKDOWN) ensureOption(sel, cur);
   if (cur === CUSTOM_BREAKDOWN) sel.value = CUSTOM_BREAKDOWN;
@@ -882,6 +882,37 @@ function paintColumns(columns) {
 }
 const CUSTOM_FILTER = "__expr__";
 const FILTER_UI = {{ filter_ui|tojson }};
+function t(key) {
+  const chrome = FILTER_UI.chrome || {};
+  return chrome[key] || key;
+}
+function thousandChar() {
+  const v = FILTER_UI.thousand_sep || "comma";
+  if (v === "none") return "";
+  if (v === "space") return " ";
+  if (v === "period") return ".";
+  return ",";
+}
+function decimalChar() {
+  return (FILTER_UI.decimal_sep || "period") === "comma" ? "," : ".";
+}
+function canonNumber(token) {
+  let raw = String(token || "").trim();
+  if (!raw) return raw;
+  if (/^-?[0-9]+(?:\.[0-9]+)?$/.test(raw)) return raw;
+  const thou = thousandChar();
+  const dec = decimalChar();
+  if (thou) raw = raw.split(thou).join("");
+  if (dec !== ".") raw = raw.split(dec).join(".");
+  return raw;
+}
+function displayNumberToken(token) {
+  const raw = String(token || "").trim();
+  if (!raw) return raw;
+  const canon = /^-?[0-9]+(?:\.[0-9]+)?$/.test(raw) ? raw : canonNumber(raw);
+  if (!/^-?[0-9]+(?:\.[0-9]+)?$/.test(canon)) return raw;
+  return applySeps(canon);
+}
 let filterListSeq = 0;
 function filterFamilyOf(type, json) {
   if (json) return "string";
@@ -931,8 +962,18 @@ function fillDateParts(sel, family, current) {
   sel.value = keep;
   return keep;
 }
+function matchDisplayName(names, current) {
+  const raw = String(current || "").trim();
+  if (!raw) return names[0] || "";
+  const exact = names.find((n) => n.toLowerCase() === raw.toLowerCase());
+  if (exact) return exact;
+  const pre = names.find((n) =>
+    n.toLowerCase().startsWith(raw.toLowerCase()) || raw.toLowerCase().startsWith(n.toLowerCase())
+  );
+  return pre || names[0] || "";
+}
 function fillEnumSelect(sel, names, current) {
-  const keep = names.indexOf(current) !== -1 ? current : (names[0] || "");
+  const keep = matchDisplayName(names, current);
   sel.innerHTML = "";
   names.forEach((name) => {
     const opt = document.createElement("option");
@@ -1080,20 +1121,23 @@ function pillValues(row) {
   return out;
 }
 function addFilterPill(row, token) {
-  const t = String(token || "").trim();
-  if (!t) return;
+  const raw = String(token || "").trim();
+  if (!raw) return;
+  const numeric = row.dataset.family === "numeric";
+  const stored = numeric ? canonNumber(raw) : raw;
+  const shown = numeric ? displayNumberToken(stored) : raw;
   const host = row.querySelector(".filter-pills");
   const input = row.querySelector(".filter-pills-input");
-  if ([...host.querySelectorAll(".filter-pill")].some((el) => el.dataset.value === t)) return;
+  if ([...host.querySelectorAll(".filter-pill")].some((el) => el.dataset.value === stored)) return;
   const pill = document.createElement("span");
   pill.className = "filter-pill";
-  pill.dataset.value = t;
+  pill.dataset.value = stored;
   const label = document.createElement("span");
-  label.textContent = t;
-  label.title = t;
+  label.textContent = shown;
+  label.title = shown;
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.setAttribute("aria-label", "Remove " + t);
+  btn.setAttribute("aria-label", "Remove " + shown);
   btn.textContent = "×";
   btn.addEventListener("click", () => {
     pill.remove();
@@ -1167,7 +1211,7 @@ function syncFilterLine(row) {
   if (![...colSel.options].some((o) => o.value === CUSTOM_FILTER)) {
     const custom = document.createElement("option");
     custom.value = CUSTOM_FILTER;
-    custom.textContent = "SQL expression…";
+    custom.textContent = t("sql_expr_ellipsis");
     colSel.appendChild(custom);
   }
   if (cur && cur !== CUSTOM_FILTER) ensureOption(colSel, cur);
@@ -1213,6 +1257,7 @@ function syncFilterLine(row) {
   const showEnum = !expr && !none && kind === "one" && enumNames.length;
   const caseful = !expr && !none && family === "string"
     && op !== "is_empty" && op !== "is_not_empty";
+  row.dataset.family = family;
   row.querySelector(".filter-json").hidden = !json;
   row.querySelector(".filter-expr").hidden = !expr;
   row.querySelector(".filter-op").hidden = expr;
@@ -1240,11 +1285,17 @@ function syncFilterLine(row) {
     ? (FILTER_UI.date_parts || []).find((p) => p.id === partSel.value)
     : null;
   function bindNumberInput(el, placeholder) {
-    el.type = "number";
+    const commaDec = (FILTER_UI.decimal_sep || "period") === "comma";
+    el.type = commaDec ? "text" : "number";
+    el.dataset.numeric = "1";
     const extract = !!(partMeta && partMeta.extract);
     const integerCol = (FILTER_UI.integer_types || []).indexOf(type) !== -1;
     const integer = extract || integerCol;
-    el.step = integer ? "1" : "any";
+    if (commaDec) {
+      el.removeAttribute("step");
+    } else {
+      el.step = integer ? "1" : "any";
+    }
     if (partMeta && partMeta.min != null) el.min = String(partMeta.min);
     else el.removeAttribute("min");
     if (partMeta && partMeta.max != null) el.max = String(partMeta.max);
@@ -1254,11 +1305,11 @@ function syncFilterLine(row) {
   if (!val.hidden) {
     if (numFam) bindNumberInput(val, partMeta && partMeta.extract === "YEAR" ? "2026" : "Value");
     else if (dateFam) {
-      val.type = "date"; val.removeAttribute("min"); val.removeAttribute("max"); val.removeAttribute("step"); val.placeholder = "";
+      val.type = "date"; val.removeAttribute("min"); val.removeAttribute("max"); val.removeAttribute("step"); val.removeAttribute("data-numeric"); val.placeholder = "";
     } else if (timeFam) {
-      val.type = "time"; val.step = "1"; val.removeAttribute("min"); val.removeAttribute("max"); val.placeholder = "";
+      val.type = "time"; val.step = "1"; val.removeAttribute("min"); val.removeAttribute("max"); val.removeAttribute("data-numeric"); val.placeholder = "";
     } else {
-      val.type = "text"; val.removeAttribute("min"); val.removeAttribute("max"); val.removeAttribute("step"); val.placeholder = "Value";
+      val.type = "text"; val.removeAttribute("min"); val.removeAttribute("max"); val.removeAttribute("step"); val.removeAttribute("data-numeric"); val.placeholder = "Value";
     }
   }
   row.querySelector(".filter-value-time").hidden = !ts;
@@ -1273,7 +1324,7 @@ function syncFilterLine(row) {
     if (numFam) bindNumberInput(valTo, "And");
     else if (dateFam) { valTo.type = "date"; valTo.placeholder = ""; }
     else if (timeFam) { valTo.type = "time"; valTo.step = "1"; valTo.placeholder = ""; }
-    else { valTo.type = "text"; valTo.placeholder = "And"; }
+    else { valTo.type = "text"; valTo.removeAttribute("data-numeric"); valTo.placeholder = "And"; }
   }
   row.querySelector(".filter-value-to-time").hidden = !(ts && two);
   row.querySelector(".filter-case").hidden = !caseful;
@@ -1284,6 +1335,15 @@ function readFilterLine(row) {
   const opt = row.querySelector(".filter-column").selectedOptions[0];
   const caseWrap = row.querySelector(".filter-case");
   const caseBox = row.querySelector(".filter-case-sensitive");
+  const numeric = row.dataset.family === "numeric";
+  function maybeCanon(raw) {
+    return numeric ? canonNumber(raw) : raw;
+  }
+  const list = filterOpKind(row.querySelector(".filter-op").value || "is") === "list";
+  const pills = list ? pillValues(row).map(maybeCanon) : [];
+  const one = !row.querySelector(".filter-enum").hidden
+    ? (row.querySelector(".filter-enum").value || "")
+    : (periodValueIso(row, false) || maybeCanon(row.querySelector(".filter-value").value || ""));
   return {
     column: exprOn ? "" : col,
     json_key: exprOn || row.querySelector(".filter-json").hidden
@@ -1293,15 +1353,9 @@ function readFilterLine(row) {
     date_part: row.querySelector(".filter-part").hidden
       ? ""
       : (row.querySelector(".filter-part").value || ""),
-    value: filterOpKind(row.querySelector(".filter-op").value || "is") === "list"
-      ? pillValues(row).join("\n")
-      : (!row.querySelector(".filter-enum").hidden
-        ? (row.querySelector(".filter-enum").value || "")
-        : (periodValueIso(row, false) || row.querySelector(".filter-value").value || "")),
-    values: filterOpKind(row.querySelector(".filter-op").value || "is") === "list"
-      ? pillValues(row)
-      : [],
-    value_to: periodValueIso(row, true) || row.querySelector(".filter-value-to").value || "",
+    value: list ? pills.join("\n") : one,
+    values: pills,
+    value_to: periodValueIso(row, true) || maybeCanon(row.querySelector(".filter-value-to").value || ""),
     value_time: row.querySelector(".filter-value-time").value || "",
     value_to_time: row.querySelector(".filter-value-to-time").value || "",
     expr: exprOn ? (row.querySelector(".filter-expr").value || "").trim() : "",
@@ -1314,10 +1368,10 @@ function addFilterLine(host, init) {
   const row = document.createElement("div");
   row.className = "filter-line";
   row.innerHTML = (
-    '<select class="filter-column" aria-label="Filter column"></select>'
+    '<select class="filter-column" aria-label="' + t("filter_column") + '"></select>'
     + '<input class="filter-json" placeholder="JSON key" autocomplete="off" aria-label="JSON key">'
     + '<select class="filter-part" aria-label="Date part" hidden></select>'
-    + '<select class="filter-op" aria-label="Filter operator"></select>'
+    + '<select class="filter-op" aria-label="' + t("filter_op") + '"></select>'
     + '<select class="filter-enum" aria-label="Filter value" hidden></select>'
     + '<input class="filter-value" placeholder="Value" autocomplete="off" aria-label="Filter value">'
     + '<div class="filter-pills" hidden><input class="filter-pills-input" placeholder="Add a value" autocomplete="off" aria-label="Add filter value"></div>'
@@ -1344,7 +1398,7 @@ function addFilterLine(host, init) {
     + "</div>"
     + '<input class="filter-value-to-time" type="time" step="3600" aria-label="End time">'
     + '<label class="filter-case"><input type="checkbox" class="filter-case-sensitive"> Case sensitive</label>'
-    + '<input class="filter-expr" placeholder="SQL boolean" autocomplete="off" aria-label="Filter SQL">'
+    + '<input class="filter-expr" placeholder="SQL boolean" autocomplete="off" aria-label="' + t("filter_sql") + '">'
     + '<button type="button" class="linkish filter-remove">Remove</button>'
   );
   const opSel = row.querySelector(".filter-op");
@@ -1368,11 +1422,15 @@ function addFilterLine(host, init) {
   const enumSel = row.querySelector(".filter-enum");
   const want = data.expr ? CUSTOM_FILTER : (data.column || "");
   function applyValues() {
-    row.querySelector(".filter-value").value = data.value || "";
-    row.querySelector(".filter-value-to").value = data.value_to || "";
+    const numeric = row.dataset.family === "numeric";
+    const show = (v) => (numeric ? displayNumberToken(v || "") : (v || ""));
+    row.querySelector(".filter-value").value = show(data.value);
+    row.querySelector(".filter-value-to").value = show(data.value_to);
     row.querySelector(".filter-value-time").value = data.value_time || "";
     row.querySelector(".filter-value-to-time").value = data.value_to_time || "";
-    if (data.value) enumSel.value = data.value;
+    if (data.value && enumSel.options.length) {
+      enumSel.value = matchDisplayName([...enumSel.options].map((o) => o.value), data.value);
+    }
     seedPeriodInputs(row, data.value || "", data.value_to || "");
   }
   syncFilterLine(row);
@@ -1450,10 +1508,17 @@ function readSeriesBd(host) {
 function applyMeasureLabels(sel) {
   const w = (document.getElementById("entity_label").value || "").trim() || "User";
   const p = (document.getElementById("entity_label_plural").value || "").trim() || (w + "s");
+  const sql = FILTER_UI.vocab === "sql";
   for (const o of sel.options) {
-    if (o.value === "total") { o.textContent = "Volume"; o.title = "Count of event rows in the bucket"; }
-    else if (o.value === "uniques") { o.textContent = "Unique " + p; o.title = "Count distinct of the mapped entity id (" + p + ")"; }
-    else if (o.value === "average") { o.textContent = "Average per " + w; o.title = "Volume divided by unique " + p.toLowerCase(); }
+    if (o.value === "total") { o.textContent = t("volume"); o.title = "Count of event rows in the bucket"; }
+    else if (o.value === "uniques") {
+      o.textContent = sql ? t("unique") : t("unique").replace("{plural}", p);
+      o.title = "Count distinct of the mapped entity id (" + p + ")";
+    }
+    else if (o.value === "average") {
+      o.textContent = sql ? t("average_per") : t("average_per").replace("{singular}", w);
+      o.title = "Volume divided by unique " + p.toLowerCase();
+    }
     else if (o.value === "sum") { o.textContent = "Sum"; o.title = "Sum of a numeric column"; }
     else if (o.value === "property_average") { o.textContent = "Average"; o.title = "Average of a numeric column"; }
     else if (o.value === "median") { o.textContent = "Median"; o.title = "Median of a numeric column"; }
@@ -1530,10 +1595,10 @@ function attachSeriesMeasure(host, data) {
   const ofWrap = document.createElement("div");
   ofWrap.className = "series-of";
   ofWrap.innerHTML = (
-    "<label>Of</label>"
-    + '<select class="series-of-column" aria-label="Of"></select>'
+    "<label>" + t("of") + "</label>"
+    + '<select class="series-of-column" aria-label="' + t("of") + '"></select>'
     + '<input class="series-of-json" placeholder="JSON key" autocomplete="off" aria-label="Of JSON key">'
-    + '<input class="series-of-expr" placeholder="SQL expression" autocomplete="off" aria-label="Of SQL">'
+    + '<input class="series-of-expr" placeholder="' + t("sql_expr") + '" autocomplete="off" aria-label="Of SQL">'
   );
   const head = host.querySelector(".event-card-head, .event-group-head");
   const before = head.querySelector(".event-card-remove, .event-group-split");
@@ -1558,10 +1623,10 @@ function attachSeriesBd(host, init) {
   const wrap = document.createElement("div");
   wrap.className = "series-bd";
   wrap.innerHTML = (
-    "<label>Break down by</label>"
-    + '<select class="series-bd-column" aria-label="Break down by"></select>'
+    "<label>" + t("breakdown") + "</label>"
+    + '<select class="series-bd-column" aria-label="' + t("breakdown") + '"></select>'
     + '<input class="series-bd-json" placeholder="JSON key" autocomplete="off" aria-label="JSON key">'
-    + '<input class="series-bd-expr" placeholder="SQL expression" autocomplete="off" aria-label="Breakdown SQL">'
+    + '<input class="series-bd-expr" placeholder="' + t("sql_expr") + '" autocomplete="off" aria-label="Breakdown SQL">'
   );
   host.appendChild(wrap);
   const sel = wrap.querySelector(".series-bd-column");
@@ -1629,8 +1694,8 @@ function addEventCard(init, parent, before) {
     + "</div>"
     + '<div class="event-card-filters"></div>'
     + '<div class="card-actions">'
-    + '<button type="button" class="linkish add-card-filter">Add filter</button>'
-    + (nested ? "" : '<button type="button" class="linkish event-card-combine">Combine</button>')
+    + '<button type="button" class="linkish add-card-filter">' + t("add_filter") + "</button>"
+    + (nested ? "" : '<button type="button" class="linkish event-card-combine">' + t("combine") + "</button>")
     + "</div>"
   );
   const host = parent || eventCardsEl;
@@ -2112,7 +2177,7 @@ function measureTitle() {
   const label = (sel.selectedOptions[0] && sel.selectedOptions[0].textContent) || "Events";
   const of = ofTitlePart();
   if (!of) return label;
-  if (sel.value === "distinct") {
+  if (sel.value === "distinct" && FILTER_UI.vocab !== "sql") {
     return label.replace(/^Distinct per /, "Distinct " + of + " per ");
   }
   return label + " " + of;
@@ -2349,7 +2414,7 @@ function draftValueHeader() {
 }
 function draftSeriesHeader() {
   const col = (form.breakdown_column && form.breakdown_column.value) || "";
-  if (!col || col === CUSTOM_BREAKDOWN) return "Break down";
+  if (!col || col === CUSTOM_BREAKDOWN) return t("breakdown_th");
   const key = (document.getElementById("breakdown_json_key").value || "").trim();
   return key ? col + "." + key : col;
 }
@@ -2569,17 +2634,6 @@ document.getElementById("copy-sql").addEventListener("click", async () => {
   await navigator.clipboard.writeText(text);
   flashCopied(document.getElementById("copy-sql"));
 });
-function thousandChar() {
-  const v = (document.getElementById("thousand_sep") && document.getElementById("thousand_sep").value) || "comma";
-  if (v === "none") return "";
-  if (v === "space") return " ";
-  if (v === "period") return ".";
-  return ",";
-}
-function decimalChar() {
-  const v = (document.getElementById("decimal_sep") && document.getElementById("decimal_sep").value) || "period";
-  return v === "comma" ? "," : ".";
-}
 function applySeps(raw) {
   const text = String(raw);
   const m = text.match(/^([+-]?)(\d+)(?:\.(\d+))?(.*)$/);
