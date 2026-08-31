@@ -222,8 +222,7 @@ def test_duckdb_approx_top_k_executes(pages):
     sql = events_sql(spec, dialect="duckdb")
     assert "approx_top_k" in sql.lower()
     got = {path: value for _, path, value in _rows(pages, spec)}
-    assert OTHER_LABEL in got
-    assert set(got) <= {"/a", "/b", "/c", "/d", "/e", "/f", OTHER_LABEL}
+    assert got == {"/a": 6.0, "/b": 5.0, "/c": 4.0, OTHER_LABEL: 6.0}
     assert sum(got.values()) == 21.0
 
 
