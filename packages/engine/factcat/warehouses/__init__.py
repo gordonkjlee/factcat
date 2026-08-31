@@ -42,6 +42,8 @@ Adding an adapter (Snowflake, Databricks, …)
    in ``dialects.py``.
 7. Declare ``capabilities`` on the class (the flags below). The app asks
    ``capabilities(kind)``. Do not add a list of kinds next to each widget.
+8. ``driver_available()`` on the class: True when the official driver
+   imports. The app asks ``extra_installed(kind)``. Do not pip from here.
 
 Changing a feature that compiles SQL, runs a job, or shows warehouse chrome
 ---------------------------------------------------------------------------
@@ -99,7 +101,8 @@ class Adapter(Protocol):
     ``dialect`` is the sqlglot name, the same string ``retention_sql`` takes.
     Identity, auth, and cost knobs live on the concrete class, not here.
     ``capabilities`` is which execute chrome the adapter supports (dry-run,
-    bytes, scan cap). Not connection fields.
+    bytes, scan cap). Not connection fields. ``driver_available`` is whether
+    the extra's official driver imports — not a connection attempt.
     """
 
     dialect: str
@@ -156,6 +159,26 @@ def capabilities(kind: str) -> frozenset[str]:
     return frozenset(getattr(cls, "capabilities", ()))
 
 
+def extra_requirement(kind: str) -> str:
+    """PyPI extra named after ``connect(kind=)``. Does not install it."""
+    _adapter_class(kind)
+    return f"factcat[{kind}]"
+
+
+def extra_installed(kind: str) -> bool:
+    """True when this kind's official driver imports. Does not connect."""
+    cls = _adapter_class(kind)
+    probe = getattr(cls, "driver_available", None)
+    if probe is None:
+        return False
+    return bool(probe())
+
+
+def extras_status() -> dict[str, bool]:
+    """``kind -> extra_installed`` for every shipped adapter."""
+    return {kind: extra_installed(kind) for kind in _ADAPTERS}
+
+
 def connect(kind: str, **kwargs: Any) -> Adapter:
     """Connect to the caller's warehouse by sqlglot dialect name.
 
@@ -180,4 +203,7 @@ __all__ = [
     "QueryResult",
     "capabilities",
     "connect",
+    "extra_installed",
+    "extra_requirement",
+    "extras_status",
 ]

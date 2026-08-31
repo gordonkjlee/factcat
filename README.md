@@ -238,26 +238,26 @@ python -m venv .venv
 # macOS/Linux:
 source .venv/bin/activate
 
-pip install factcat[bigquery]    # or factcat[snowflake], or factcat[all]
-# BigQuery only:
-gcloud auth application-default login
-gcloud config set project YOUR_GCP_PROJECT
+pip install factcat
 
 cd /path/to/your/warehouse   # mapping is saved here
 factcat-app
 ```
 
 Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): pick **BigQuery** or
-**Snowflake**, then that warehouse's connection and catalog, then entity id and timestamp.
-Catalog lists load when you open a dropdown, not when you visit the page. **Save** writes
-`.factcat.json` and, if an event-name column is mapped, runs DISTINCT on
-the last 90 days and caches the names. It stays on Setup and shows
-**Saved**. Setup is a separate control at the bottom of the left rail, not
-an analysis.
+**Snowflake**. If that warehouse extra is not installed, Setup shows the
+command and **Install** (into this environment; it does not pip on its
+own). Then that warehouse's connection and catalog, then entity id and
+timestamp. Catalog lists load when you open a dropdown, not when you
+visit the page. **Save** writes `.factcat.json` and, if an event-name
+column is mapped, runs DISTINCT on the last 90 days and caches the names.
+It stays on Setup and shows **Saved**. Setup is a separate control at the
+bottom of the left rail, not an analysis.
 
-**BigQuery.** Billing project from ADC, then dataset → table. Location
-is taken from the dataset (do not guess `US`). Advanced is only if you use a key file
-instead of ADC.
+**BigQuery.** After the extra is present: `gcloud auth application-default login`
+and `gcloud config set project YOUR_GCP_PROJECT`. Billing project from ADC, then
+dataset → table. Location is taken from the dataset (do not guess `US`).
+Advanced is only if you use a key file instead of ADC.
 
 Map the event-name column on **Setup** (STRING). Event names are cached
 on **Save** (DISTINCT, last 90 days of the timestamp). On Events, **Event**

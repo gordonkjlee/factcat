@@ -154,6 +154,7 @@ def test_warehouses_package_does_not_import_google():
     assert "from .snowflake" not in source
     assert "snowflake.connector" not in source
     assert "importlib.import_module(module_name)" in source
+    assert "subprocess" not in source
 
 
 def test_core_init_does_not_import_execute_layer():

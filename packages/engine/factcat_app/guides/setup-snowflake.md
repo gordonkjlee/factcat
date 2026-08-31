@@ -28,10 +28,6 @@ If caching is off, every new connection opens a browser again.
 You also need an **account identifier**, **user**, **compute warehouse**,
 **database**, and **schema**. Role is optional.
 
-```bash
-pip install factcat[snowflake]
-```
-
 ## Table shape
 
 One table. One **row per event**. Properties are **real columns**. Event
