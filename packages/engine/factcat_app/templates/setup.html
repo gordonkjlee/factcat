@@ -7,16 +7,25 @@
       width: 100%;
       box-sizing: border-box;
       padding: 1.5rem 1.75rem 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+    .setup-cols {
+      flex: 1;
+      min-height: 0;
       display: grid;
       grid-template-columns: minmax(22rem, 28rem) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr);
       gap: 1.25rem;
-      align-items: start;
     }
     .setup-form {
       background: var(--fc-snow);
       border: 1px solid var(--fc-line);
       border-radius: 0.75rem;
       padding: 1.4rem 1.5rem 1.6rem;
+      min-height: 0;
+      overflow-y: auto;
     }
     .setup-docs {
       background: var(--fc-snow);
@@ -24,7 +33,6 @@
       border-radius: 0.75rem;
       padding: 1.25rem 1.45rem 1.6rem;
       min-height: 0;
-      max-height: calc(100vh - 3rem);
       overflow: auto;
       font-size: 0.88rem;
       color: var(--fc-ink-soft);
@@ -48,7 +56,6 @@
     }
     #status { color: var(--fc-ok); font-size: 0.85rem; }
     #extra-card {
-      grid-column: 1 / -1;
       display: flex;
       flex-wrap: wrap;
       align-items: center;
@@ -79,8 +86,15 @@
       cursor: not-allowed;
     }
     @media (max-width: 56rem) {
-      .setup-page { grid-template-columns: 1fr; }
-      .setup-docs { max-height: none; }
+      .setup-page { overflow-y: auto; }
+      .setup-cols {
+        grid-template-columns: 1fr;
+        grid-template-rows: none;
+        grid-auto-rows: auto;
+        flex: 0 0 auto;
+        min-height: auto;
+      }
+      .setup-form, .setup-docs { overflow: visible; min-height: auto; }
     }
 {% endblock %}
 {% block body %}
@@ -91,6 +105,7 @@
     <button type="button" id="extra-install">Install</button>
     <p id="extra-status"></p>
   </div>
+<div class="setup-cols">
 <form id="f" class="setup-form">
   <h1>Project setup</h1>
   {% if not mapping_ready %}
@@ -261,6 +276,7 @@
 <aside class="setup-docs" aria-label="Setup guide" id="setup-docs-pane">
   {{ setup_docs | safe }}
 </aside>
+</div>
 </div>
 <script>
 const saved = {

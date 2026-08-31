@@ -75,6 +75,7 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert res.status_code == 200
     assert "Project setup" in res.text
     assert "setup-docs" in res.text
+    assert "setup-cols" in res.text
     assert "wide events table" in res.text
     assert "Reporting timezone" in res.text
     assert "Timestamp stored as" in res.text

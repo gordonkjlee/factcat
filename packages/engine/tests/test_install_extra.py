@@ -133,7 +133,7 @@ def test_get_setup_does_not_pip(monkeypatch, tmp_path):
     assert 'id="extra-install"' in res.text
     assert "/api/install_extra" in res.text
     assert ">Install<" in res.text
-    assert "grid-column: 1 / -1" in res.text
+    assert res.text.find('id="extra-card"') < res.text.find('class="setup-cols"')
     assert res.text.find('id="extra-card"') < res.text.find('id="f"')
     for kind in ADAPTERS:
         assert f"factcat[{kind}]" in res.text or f"[{kind}]" in res.text

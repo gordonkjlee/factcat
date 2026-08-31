@@ -65,7 +65,7 @@
       padding: 0.35rem 0.15rem 0.75rem;
     }
     .brand img { width: 100%; height: auto; display: block; }
-    .rail-reports { display: flex; flex-direction: column; gap: 0.25rem; flex: 1; }
+    .rail-reports { display: flex; flex-direction: column; gap: 0.25rem; flex: 1; min-height: 0; overflow-y: auto; }
     .rail-item {
       display: block;
       text-align: center;
@@ -114,7 +114,6 @@
     .callout a { color: var(--fc-ochre-deep); font-weight: 600; }
     button:disabled { opacity: 0.55; cursor: not-allowed; }
     .app { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-    body.setup .app, body.preferences .app { overflow: auto; }
     h1 { font-size: 1.1rem; margin: 0 0 0.35rem; }
     h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fc-slate); margin: 1.1rem 0 0.4rem; }
     .lede { font-size: 0.8rem; color: var(--fc-ink-soft); margin: 0 0 0.75rem; }
