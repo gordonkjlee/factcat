@@ -226,7 +226,7 @@ def test_bigquery_week_start_monday_is_explicit():
     sql = events_sql(EVENTS_WEEK, dialect="bigquery")
     assert "WEEK(MONDAY)" in sql.upper().replace(" ", "")
     assert "factcat_period_start_shifted" not in sql
-    assert "DATE(occurred_at, 'UTC')" in sql.replace("`", "")
+    assert "DATE(CAST(occurred_at AS TIMESTAMP), 'UTC')" in sql.replace("`", "")
 
 
 def test_four_arg_placeholder_defaults_to_utc():
@@ -235,7 +235,9 @@ def test_four_arg_placeholder_defaults_to_utc():
         "occurred_at, 'week', 'monday', 0) AS DATE)",
         "bigquery",
     )
-    assert sql == "CAST(DATE_TRUNC(DATE(occurred_at, 'UTC'), WEEK(MONDAY)) AS DATE)"
+    assert sql == (
+        "CAST(DATE_TRUNC(DATE(CAST(occurred_at AS TIMESTAMP), 'UTC'), WEEK(MONDAY)) AS DATE)"
+    )
 
 
 def test_six_arg_placeholder_uses_reporting_zone():
@@ -244,7 +246,15 @@ def test_six_arg_placeholder_uses_reporting_zone():
         "occurred_at, 'day', 'monday', 0, 'Europe/Berlin', 'utc')",
         "bigquery",
     )
-    assert sql == "DATE(occurred_at, 'Europe/Berlin')"
+    assert sql == "DATE(CAST(occurred_at AS TIMESTAMP), 'Europe/Berlin')"
+
+
+def test_as_instant_survives_transpile():
+    sql = splice_placeholders(
+        "factcat_as_instant(occurred_at) >= TIMESTAMP('2026-01-01')",
+        "bigquery",
+    )
+    assert sql == "CAST(occurred_at AS TIMESTAMP) >= TIMESTAMP('2026-01-01')"
 
 
 def test_bigquery_civil_datetime_casts_to_date():

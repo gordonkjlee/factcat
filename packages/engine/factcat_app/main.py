@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import markdown
@@ -13,8 +14,11 @@ from fastapi.templating import Jinja2Templates
 from factcat.warehouses import AdapterError, BytesCapError, connect
 
 from .catalog import (
+    DISTINCT_OF_TYPES,
     ENTITY_TYPES,
     EVENT_NAME_TYPES,
+    JSON_TYPES,
+    PROPERTY_OF_TYPES,
     TIME_TYPES,
     bootstrap_project,
     columns_from_form,
@@ -52,7 +56,7 @@ app = FastAPI(title="Factcat")
 
 @app.get("/favicon.ico")
 def favicon() -> FileResponse:
-    return FileResponse(STATIC_DIR / "favicon.ico", media_type="image/x-icon")
+    return FileResponse(STATIC_DIR / "logo.png", media_type="image/png")
 
 
 def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLResponse:
@@ -65,6 +69,9 @@ def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLRespon
             "entity_types": sorted(ENTITY_TYPES),
             "time_types": sorted(TIME_TYPES),
             "event_name_types": sorted(EVENT_NAME_TYPES),
+            "property_of_types": sorted(PROPERTY_OF_TYPES),
+            "distinct_of_types": sorted(DISTINCT_OF_TYPES),
+            "json_types": sorted(JSON_TYPES),
         },
     )
 
@@ -128,6 +135,7 @@ async def api_columns(request: Request) -> JSONResponse:
         payload = columns_from_form(form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc)
+    save({"columns": payload.get("columns") or []})
     return JSONResponse({"ok": True, **payload})
 
 
@@ -167,6 +175,58 @@ async def api_save(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+# Job SQL in warehouse exceptions (indented, line-numbered, or the
+# google-cloud "Query Job SQL Follows" trailer). Table pane must not
+# show this; the compiled job already lives in the SQL pane.
+_SQL_DUMP = re.compile(
+    r"-----Query Job SQL Follows-----"
+    r"|(?:^|\n)\s*(?:\d+\s*:)?\s*(?:SELECT|WITH)\b"
+    r"|SELECT\s+\*\s+FROM",
+    re.IGNORECASE,
+)
+_SQL_ONLY = re.compile(r"^\s*(?:\d+\s*:)?\s*(?:SELECT|WITH)\b", re.IGNORECASE)
+
+
+def _client_error(exc: BaseException, sql: str | None = None) -> str:
+    """Warehouse errors must not dump the job SQL into the table pane."""
+    text = str(exc).replace("\r\n", "\n").strip() or "Query failed."
+    dump = _SQL_DUMP.search(text)
+    if dump:
+        prefix = text[: dump.start()].strip()
+        text = prefix or "Query failed. See SQL below."
+    if "googleapis.com" in text and ": " in text:
+        text = text.split(": ", 1)[1].strip()
+        dump = _SQL_DUMP.search(text)
+        if dump:
+            prefix = text[: dump.start()].strip()
+            text = prefix or "Query failed. See SQL below."
+    if sql:
+        compact_err = re.sub(r"\s+", " ", text).strip()
+        compact_sql = re.sub(r"\s+", " ", sql)
+        if compact_err and compact_err in compact_sql:
+            return "Query failed. See SQL below."
+    if _SQL_ONLY.match(text) or _SQL_DUMP.search(text):
+        return "Query failed. See SQL below."
+    lines = []
+    for ln in text.splitlines():
+        stripped = ln.strip()
+        if not stripped:
+            continue
+        if stripped.lower().startswith(("location:", "job id:", "job_id:")):
+            break
+        lines.append(stripped)
+        if len(lines) >= 6:
+            break
+    return "\n".join(lines) if lines else "Query failed. See SQL below."
+
+
+def _fail(exc: BaseException, sql: str | None) -> JSONResponse:
+    return JSONResponse(
+        {"ok": False, "error": _client_error(exc, sql), "sql": sql},
+        status_code=400,
+    )
+
+
 def _estimate_payload(processed: int | None, cap: int | None, *, over_cap: bool) -> dict:
     return {
         "ok": True,
@@ -181,9 +241,21 @@ def _estimate_payload(processed: int | None, cap: int | None, *, over_cap: bool)
     }
 
 
+@app.post("/api/sql")
+async def api_sql(request: Request) -> JSONResponse:
+    """Compile Events SQL from the form. No warehouse round-trip."""
+    form = await request.json()
+    try:
+        sql = events_sql_from_form(form)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, "sql": sql})
+
+
 @app.post("/api/estimate")
 async def api_estimate(request: Request) -> JSONResponse:
     form = await request.json()
+    sql = None
     try:
         conn = connection_from_form(form)
         sql = events_sql_from_form(form)
@@ -198,7 +270,7 @@ async def api_estimate(request: Request) -> JSONResponse:
             )
         )
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return _fail(exc, sql)
     return JSONResponse(
         _estimate_payload(
             result.bytes_processed, conn.get("maximum_bytes_billed"), over_cap=False
@@ -209,14 +281,17 @@ async def api_estimate(request: Request) -> JSONResponse:
 @app.post("/api/run")
 async def api_run(request: Request) -> JSONResponse:
     form = await request.json()
+    sql = None
     try:
+        sql = events_sql_from_form(form)
         conn = connection_from_form(form)
         save(form)
-        sql = events_sql_from_form(form)
         warehouse = connect("bigquery", **conn)
         result = warehouse.run(sql)
+    except BytesCapError as exc:
+        return _fail(exc, sql)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return _fail(exc, sql)
     raw_rows = []
     for r in result.rows:
         item = {str(k): v for k, v in r.items()}

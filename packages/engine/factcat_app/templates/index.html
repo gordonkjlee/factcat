@@ -2,6 +2,7 @@
 {% block title %}Factcat — Events{% endblock %}
 {% block extra_head %}
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="/static/catalog.js"></script>
 {% endblock %}
 {% block extra_css %}
     main.workspace {
@@ -39,6 +40,7 @@
     .pane-sql { flex: 0 1 9rem; min-height: 7rem; }
     .pane-sql .pane-body { padding: 0; }
     .empty { color: var(--fc-slate); font-size: 0.85rem; margin: 0; }
+    .empty.fail { color: var(--fc-alert); white-space: pre-wrap; }
     .chart-body { position: relative; }
     .chart-body canvas { width: 100% !important; height: 100% !important; }
     .empty-state {
@@ -52,7 +54,7 @@
       text-align: center;
       margin: 0;
     }
-    .empty-state[hidden], canvas[hidden] { display: none; }
+    .empty-state[hidden], canvas[hidden], .empty-state img[hidden] { display: none; }
     .empty-state img { width: 10rem; height: 10rem; object-fit: contain; margin-bottom: 0.75rem; }
     #sql { margin: 0; min-height: 100%; box-sizing: border-box; }
     .summary { font-size: 0.75rem; color: var(--fc-slate); margin: 0 0 0.75rem; }
@@ -143,8 +145,13 @@
     .range-row input[type="number"] { width: 4.5rem; }
     #breakdown-extra[hidden] { display: none !important; }
     #breakdown-extra .range-row { margin-top: 0.5rem; }
+    #of-wrap[hidden] { display: none !important; }
     #top_n { width: 4.5rem; }
     .incomplete-note { font-size: 0.75rem; color: var(--fc-slate); margin: 0.35rem 0 0; }
+    .stale-note {
+      font-size: 0.75rem; color: var(--fc-ochre-deep); margin: 0 0 0.5rem;
+    }
+    .stale-note[hidden] { display: none !important; }
     #result-table tr.incomplete td { color: var(--fc-slate); font-style: italic; }
     #custom-snap-hint { margin: 0.35rem 0 0; }
     .linkish {
@@ -191,6 +198,46 @@
       <select id="event_value" name="event_value"></select>
     </div>
 
+    <label for="measure">Measure</label>
+    <select name="measure" id="measure">
+      <optgroup label="Event">
+        <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>Volume</option>
+        <option value="uniques" title="Count distinct of the mapped entity id" {% if (config.on != "property") and (config.measure == "uniques" or not config.measure) %}selected{% endif %}>Unique {{ config.entity_label_plural or "Users" }}</option>
+        <option value="average" title="Volume divided by unique entities" {% if config.on != "property" and config.measure == "average" %}selected{% endif %}>Average per {{ config.entity_label or "User" }}</option>
+      </optgroup>
+      <optgroup label="Property">
+        <option value="sum" title="Sum of a numeric column" {% if config.measure == "sum" %}selected{% endif %}>Sum</option>
+        <option value="property_average" title="Average of a numeric column" {% if config.on == "property" and config.measure == "average" %}selected{% endif %}>Average</option>
+        <option value="median" title="Median of a numeric column" {% if config.measure == "median" %}selected{% endif %}>Median</option>
+        <option value="distinct" title="Mean distinct values of a column per entity" {% if config.measure == "distinct" %}selected{% endif %}>Distinct per {{ config.entity_label or "User" }}</option>
+      </optgroup>
+    </select>
+    <input type="hidden" name="on" id="on" value="{{ config.on or 'events' }}">
+    <div id="of-wrap" {% if config.on != "property" %}hidden{% endif %}>
+      <label for="of_column">Of <span id="of_column-loading" class="loading" hidden aria-label="Loading"></span>
+        <button type="button" id="refresh-of" class="linkish">Refresh list</button>
+      </label>
+      <select name="of_column" id="of_column"></select>
+      <div id="of-json-wrap" hidden>
+        <label for="of_json_key">JSON key</label>
+        <input id="of_json_key" name="of_json_key" autocomplete="off" value="{{ config.of_json_key }}" placeholder="plan">
+        <span class="hint">Dotted path in this JSON column (plan or user.plan).</span>
+      </div>
+      <div id="of-expr-wrap" hidden>
+        <label for="of_expr">SQL expression</label>
+        <input id="of_expr" name="of_expr" autocomplete="off" value="{{ config.of_expr }}" placeholder="revenue">
+        <span class="hint">Fills of=. Sum / Average / Median need a number. Distinct also allows STRING.</span>
+      </div>
+      <span class="hint" id="of-hint">Unused event types leave this column null. Pick the event that carries it (for example purchase for revenue).</span>
+    </div>
+    <div id="exact-wrap">
+      <div class="row">
+        <input name="exact" type="checkbox" id="exact" {% if config.exact %}checked{% endif %} style="width:auto">
+        <label for="exact" id="exact-label" style="margin:0">Exact unique counts</label>
+      </div>
+      <span class="hint" id="exact-hint">Same bytes scanned; more CPU. Off is HyperLogLog (faster).</span>
+    </div>
+
     <label for="grain">Time grain</label>
     <select name="grain" id="grain">
       <option value="day" {% if config.grain == "day" or not config.grain %}selected{% endif %}>Day</option>
@@ -209,7 +256,7 @@
     </div>
     <div id="range-include" class="row" hidden>
       <input name="include_current" type="checkbox" id="include_current" {% if config.include_current %}checked{% endif %} style="width:auto">
-      <label for="include_current" id="include_current_label" style="margin:0">Include this week</label>
+      <label for="include_current" id="include_current_label" style="margin:0">Include today</label>
     </div>
     <div id="custom-range" hidden>
       <select id="custom_kind" name="custom_kind">
@@ -240,21 +287,15 @@
       </div>
     </div>
 
-    <label>Measure</label>
-    <select name="measure" id="measure">
-      <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>Volume</option>
-      <option value="uniques" title="Count distinct of the mapped entity id" {% if config.measure == "uniques" %}selected{% endif %}>Unique {{ config.entity_label_plural or "Users" }}</option>
-      <option value="average" title="Volume divided by unique entities" {% if config.measure == "average" %}selected{% endif %}>Average per {{ config.entity_label or "User" }}</option>
-    </select>
-    <div id="exact-wrap">
-      <div class="row">
-        <input name="exact" type="checkbox" id="exact" {% if config.exact %}checked{% endif %} style="width:auto">
-        <label for="exact" style="margin:0">Exact unique counts</label>
-      </div>
-      <span class="hint" id="exact-hint">Same bytes scanned; more CPU. Off is HyperLogLog (faster).</span>
-    </div>
-    <label for="breakdown_column">Break down by <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <label for="breakdown_column">Break down by <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span>
+      <button type="button" id="refresh-columns" class="linkish">Refresh list</button>
+    </label>
     <select name="breakdown_column" id="breakdown_column"></select>
+    <div id="breakdown-json-wrap" hidden>
+      <label for="breakdown_json_key">JSON key</label>
+      <input id="breakdown_json_key" name="breakdown_json_key" autocomplete="off" value="{{ config.breakdown_json_key }}" placeholder="plan">
+      <span class="hint">Dotted path in this JSON column (plan or user.plan).</span>
+    </div>
     <div id="breakdown-expr-wrap" hidden>
       <label for="breakdown_expr">SQL expression</label>
       <input id="breakdown_expr" name="breakdown_expr" autocomplete="off" value="{{ config.breakdown_expr }}" placeholder="country">
@@ -338,8 +379,9 @@
         </span>
       </div>
       <div class="pane-body chart-body">
+        <p id="chart-stale" class="stale-note" hidden></p>
         <div id="chart-empty" class="empty-state">
-          <img src="/static/waiting.jpg" width="160" height="160" alt="">
+          <img id="waiting-cat" src="/static/waiting.jpg" width="160" height="160" alt="">
           <p id="empty-copy">No rows yet. The cat is waiting.</p>
         </div>
         <canvas id="chart" hidden></canvas>
@@ -359,7 +401,8 @@
         </span>
       </div>
       <div class="pane-body">
-        <p class="empty" id="table-empty">Run to see rows.</p>
+        <p id="table-stale" class="stale-note" hidden></p>
+        <p class="empty" id="table-empty">Run to fill the table.</p>
         <p id="limit-note" class="incomplete-note" hidden></p>
         <table id="result-table" hidden>
           <thead>
@@ -383,7 +426,7 @@
         </span>
       </div>
       <div class="pane-body">
-        <pre id="sql" class="empty">Run to see generated SQL.</pre>
+        <pre id="sql" class="empty">SQL updates as you change the form.</pre>
       </div>
     </section>
   </div>
@@ -391,13 +434,18 @@
 <script>
 const saved = {
   event_value: {{ config.event_value|tojson }},
+  of_column: {{ (config.of_column or "")|tojson }},
+  of_expr: {{ (config.of_expr or "")|tojson }},
+  of_json_key: {{ (config.of_json_key or "")|tojson }},
   breakdown_column: {{ (config.breakdown_column or "")|tojson }},
   breakdown_expr: {{ (config.breakdown_expr or "")|tojson }},
+  breakdown_json_key: {{ (config.breakdown_json_key or "")|tojson }},
   grain: {{ (config.grain or "day")|tojson }},
   range_mode: {{ (config.range_mode or "last")|tojson }},
   range_n: {{ (config.range_n or 30)|tojson }},
   range_unit: {{ (config.range_unit or "day")|tojson }},
   include_current: {{ (config.include_current or false)|tojson }},
+  exclude_current: {{ (config.exclude_current or false)|tojson }},
   custom_kind: {{ (config.custom_kind or "absolute")|tojson }},
 };
 const GRAIN_DEFAULTS = {
@@ -477,17 +525,38 @@ const endDateEl = document.getElementById("end_date");
 const titleEl = document.getElementById("chart-title");
 const titleLockedEl = document.getElementById("chart_title_locked");
 const cachedEventNames = {{ config.event_names|tojson }};
+const cachedColumns = {{ config.columns|tojson }};
 let chart;
-let valGen = 0;
 let tableRows = [];
+let lastRun = null;
 let sortKey = "bucket";
 let sortDir = 1;
 function setError(text) {
   document.getElementById("error").textContent = text || "";
 }
-function setLoading(sel, on) {
-  const hint = document.getElementById(sel.id + "-loading");
-  if (hint) hint.hidden = !on;
+function shortError(msg) {
+  let text = String(msg || "").replace(/\r\n/g, "\n").trim();
+  if (!text) return "Query failed. See SQL below.";
+  const dump = /-----Query Job SQL Follows-----|(?:^|\n)\s*(?:\d+\s*:)?\s*(?:SELECT|WITH)\b|SELECT\s+\*\s+FROM/i;
+  const hit = text.match(dump);
+  if (hit && hit.index != null) {
+    text = text.slice(0, hit.index).trim() || "Query failed. See SQL below.";
+  }
+  if (/googleapis\.com/i.test(text) && text.includes(": ")) {
+    text = text.slice(text.indexOf(": ") + 2).trim();
+  }
+  if (/^\s*(?:\d+\s*:)?\s*(?:SELECT|WITH)\b/i.test(text) || /SELECT\s+\*\s+FROM/i.test(text)) {
+    return "Query failed. See SQL below.";
+  }
+  const lines = [];
+  for (const ln of text.split("\n")) {
+    const stripped = ln.trim();
+    if (!stripped) continue;
+    if (/^(location|job id|job_id):/i.test(stripped)) break;
+    lines.push(stripped);
+    if (lines.length >= 6) break;
+  }
+  return lines.join("\n") || "Query failed. See SQL below.";
 }
 function fillEventSelect(items, selected) {
   // Empty cache must still show the control. Hiding it made Events
@@ -529,46 +598,118 @@ function fillSelect(sel, items, selected, blankLabel) {
   else if (!blankLabel && sel.options.length) sel.selectedIndex = 0;
   sel.hidden = false;
 }
-if (eventColumnEl.value) {
-  eventValueWrap.hidden = false;
-  fillEventSelect(cachedEventNames || [], saved.event_value);
-}
+if (eventColumnEl.value) eventValueWrap.hidden = false;
 const CUSTOM_BREAKDOWN = "__expr__";
+const CUSTOM_OF = "__expr__";
+const PROPERTY_OF_TYPES = new Set({{ property_of_types|tojson }});
+const DISTINCT_OF_TYPES = new Set({{ distinct_of_types|tojson }});
+const JSON_TYPES = new Set({{ json_types|tojson }});
 const breakdownColumnEl = document.getElementById("breakdown_column");
+const ofColumnEl = document.getElementById("of_column");
+const ofWrapEl = document.getElementById("of-wrap");
+const onEl = document.getElementById("on");
+let columnCache = Array.isArray(cachedColumns) ? cachedColumns : [];
+function isPropertyMeasure() {
+  const v = form.measure.value;
+  return v === "sum" || v === "property_average" || v === "median" || v === "distinct";
+}
+function ofAllowedTypes() {
+  const base = form.measure.value === "distinct" ? DISTINCT_OF_TYPES : PROPERTY_OF_TYPES;
+  return new Set([...base, ...JSON_TYPES]);
+}
+function columnType(name) {
+  const hit = (columnCache || []).find((c) => (c.name || c) === name);
+  return String((hit && hit.type) || "").toUpperCase();
+}
+function isJsonColumn(name) {
+  return JSON_TYPES.has(columnType(name));
+}
 function syncBreakdownUi() {
   const col = breakdownColumnEl.value;
+  const json = col && col !== CUSTOM_BREAKDOWN && (
+    isJsonColumn(col) || !!(saved.breakdown_json_key && col === saved.breakdown_column)
+  );
   document.getElementById("breakdown-expr-wrap").hidden = col !== CUSTOM_BREAKDOWN;
+  document.getElementById("breakdown-json-wrap").hidden = !json;
   document.getElementById("breakdown-extra").hidden = !col;
 }
-async function loadBreakdownColumns() {
-  setLoading(breakdownColumnEl, true);
-  try {
-    const data = await post("/api/columns", {
-      project: projectEl.value.trim(),
-      data_project: dataProjectEl.value.trim(),
-      credentials: credentialsEl.value.trim(),
-      dataset: form.dataset.value,
-      table_name: form.table_name.value,
-    });
-    const skip = new Set([form.entity.value, form.event_time.value, eventColumnEl.value].filter(Boolean));
-    const cols = (data.columns || []).map((c) => c.name || c).filter((n) => n && !skip.has(n));
-    const cur = saved.breakdown_expr ? CUSTOM_BREAKDOWN : (saved.breakdown_column || "");
-    fillSelect(breakdownColumnEl, cols, cur === CUSTOM_BREAKDOWN ? "" : cur, "(none)");
-    const custom = document.createElement("option");
-    custom.value = CUSTOM_BREAKDOWN;
-    custom.textContent = "SQL expression…";
-    breakdownColumnEl.appendChild(custom);
-    if (cur === CUSTOM_BREAKDOWN) breakdownColumnEl.value = CUSTOM_BREAKDOWN;
-    breakdownColumnEl.hidden = false;
-  } catch (err) {
-    fillSelect(breakdownColumnEl, [], saved.breakdown_column || "", "(none)");
-  } finally {
-    setLoading(breakdownColumnEl, false);
-    syncBreakdownUi();
+function syncOfUi() {
+  const property = isPropertyMeasure();
+  ofWrapEl.hidden = !property;
+  onEl.value = property ? "property" : "events";
+  if (!property) {
+    document.getElementById("of-expr-wrap").hidden = true;
+    document.getElementById("of-json-wrap").hidden = true;
+    return;
   }
+  fillOfSelect(columnCache);
+  const col = ofColumnEl.value;
+  const json = col && col !== CUSTOM_OF && (
+    isJsonColumn(col) || !!(saved.of_json_key && col === saved.of_column)
+  );
+  document.getElementById("of-expr-wrap").hidden = col !== CUSTOM_OF;
+  document.getElementById("of-json-wrap").hidden = !json;
+}
+function ensureOption(sel, value) {
+  if (!value) return;
+  if (![...sel.options].some((o) => o.value === value)) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = value;
+    sel.appendChild(opt);
+  }
+  sel.value = value;
+  sel.hidden = false;
+}
+function fillOfSelect(columns) {
+  const allowed = ofAllowedTypes();
+  const skip = new Set([form.entity.value, form.event_time.value, eventColumnEl.value].filter(Boolean));
+  const cols = (columns || [])
+    .filter((c) => {
+      const name = c.name || c;
+      const typ = String(c.type || "").toUpperCase();
+      if (!name || skip.has(name)) return false;
+      if (c.type && !allowed.has(typ)) return false;
+      return true;
+    })
+    .map((c) => (typeof c === "string" ? c : { value: c.name, label: c.type ? c.name + " (" + c.type + ")" : c.name }));
+  const cur = saved.of_expr ? CUSTOM_OF : (saved.of_column || ofColumnEl.value || "");
+  fillSelect(ofColumnEl, cols, cur === CUSTOM_OF ? "" : cur, "(none)");
+  const custom = document.createElement("option");
+  custom.value = CUSTOM_OF;
+  custom.textContent = "SQL expression…";
+  ofColumnEl.appendChild(custom);
+  if (cur && cur !== CUSTOM_OF) ensureOption(ofColumnEl, cur);
+  if (cur === CUSTOM_OF) ofColumnEl.value = CUSTOM_OF;
+  ofColumnEl.hidden = false;
+}
+function fillBreakdownSelect(columns) {
+  const skip = new Set([form.entity.value, form.event_time.value, eventColumnEl.value].filter(Boolean));
+  const cols = (columns || [])
+    .filter((c) => {
+      const name = c.name || c;
+      return name && !skip.has(name);
+    })
+    .map((c) => (typeof c === "string" ? c : { value: c.name, label: c.type ? c.name + " (" + c.type + ")" : c.name }));
+  const cur = saved.breakdown_expr ? CUSTOM_BREAKDOWN : (saved.breakdown_column || breakdownColumnEl.value || "");
+  fillSelect(breakdownColumnEl, cols, cur === CUSTOM_BREAKDOWN ? "" : cur, "(none)");
+  const custom = document.createElement("option");
+  custom.value = CUSTOM_BREAKDOWN;
+  custom.textContent = "SQL expression…";
+  breakdownColumnEl.appendChild(custom);
+  if (cur && cur !== CUSTOM_BREAKDOWN) ensureOption(breakdownColumnEl, cur);
+  if (cur === CUSTOM_BREAKDOWN) breakdownColumnEl.value = CUSTOM_BREAKDOWN;
+  breakdownColumnEl.hidden = false;
+}
+function paintColumns(columns) {
+  columnCache = columns || [];
+  fillBreakdownSelect(columnCache);
+  fillOfSelect(columnCache);
+  syncBreakdownUi();
+  syncOfUi();
 }
 breakdownColumnEl.addEventListener("change", syncBreakdownUi);
-loadBreakdownColumns();
+ofColumnEl.addEventListener("change", syncOfUi);
 function authBody() {
   return {
     project: projectEl.value.trim(),
@@ -584,6 +725,62 @@ async function post(url, body) {
   });
   return res.json();
 }
+bindCachedList({
+  items: cachedEventNames || [],
+  paint: (items) => {
+    if (!eventColumnEl.value) {
+      eventValueWrap.hidden = true;
+      return;
+    }
+    eventValueWrap.hidden = false;
+    fillEventSelect(items, eventValueEl.value || saved.event_value);
+  },
+  loadingFor: eventValueEl,
+  refreshButtons: [document.getElementById("refresh-events")],
+  loadIfEmpty: false,
+  async load() {
+    if (!eventColumnEl.value || !tableEl.value || !locationEl.value) return null;
+    const data = await post("/api/event_values", {
+      ...authBody(),
+      table: tableEl.value,
+      location: locationEl.value,
+      event_column: eventColumnEl.value,
+      event_time: eventTimeEl.value,
+      catalog: true,
+      reporting_timezone: document.getElementById("reporting_timezone").value,
+      event_time_tz: document.getElementById("event_time_tz").value,
+    });
+    if (!data.ok) {
+      setError(data.error || "Could not refresh events");
+      return null;
+    }
+    return data.values || [];
+  },
+});
+bindCachedList({
+  items: columnCache,
+  paint: paintColumns,
+  loadingFor: [breakdownColumnEl, ofColumnEl],
+  refreshButtons: [
+    document.getElementById("refresh-columns"),
+    document.getElementById("refresh-of"),
+  ],
+  loadIfEmpty: true,
+  async load() {
+    const data = await post("/api/columns", {
+      project: projectEl.value.trim(),
+      data_project: dataProjectEl.value.trim(),
+      credentials: credentialsEl.value.trim(),
+      dataset: document.getElementById("dataset").value,
+      table_name: document.getElementById("table_name").value,
+    });
+    if (!data.ok) {
+      setError(data.error || "Could not refresh columns");
+      return null;
+    }
+    return data.columns || [];
+  },
+});
 function currentGrain() {
   return grainEl.value || "day";
 }
@@ -612,7 +809,7 @@ function saveRangeForGrain(grain) {
   rangeByGrain[grain] = {
     choice: rangeChoiceEl.value || GRAIN_DEFAULTS[grain].choice,
     n: Number(rangeNEl.value) || GRAIN_DEFAULTS[grain].n,
-    includeCurrent: grain === "day" ? true : includeCurrentEl.checked,
+    includeCurrent: includeCurrentEl.checked,
   };
 }
 function applyRangeChoice() {
@@ -624,7 +821,7 @@ function applyRangeChoice() {
   document.getElementById("range_n_unit").textContent = UNIT_LABEL[grain];
   includeCurrentLabel.textContent = "Include " + GRAIN_NOUN[grain];
   rangeLastEl.hidden = !lastN;
-  rangeIncludeEl.hidden = grain === "day" || !(lastN || lastNamed);
+  rangeIncludeEl.hidden = !(lastN || lastNamed);
   customRangeEl.hidden = !custom;
   if (custom) {
     rangeModeEl.value = "custom";
@@ -637,7 +834,7 @@ function applyRangeChoice() {
   if (lastN) {
     rangeModeEl.value = "last";
     rangeUnitEl.value = grain;
-    if (grain !== "day") includeCurrentEl.checked = rangeByGrain[grain].includeCurrent;
+    includeCurrentEl.checked = rangeByGrain[grain].includeCurrent;
     saveRangeForGrain(grain);
     return;
   }
@@ -646,7 +843,7 @@ function applyRangeChoice() {
     rangeModeEl.value = "last";
     rangeNEl.value = parts[1];
     rangeUnitEl.value = grain;
-    if (grain !== "day") includeCurrentEl.checked = rangeByGrain[grain].includeCurrent;
+    includeCurrentEl.checked = rangeByGrain[grain].includeCurrent;
     saveRangeForGrain(grain);
     return;
   }
@@ -722,7 +919,9 @@ function seedRangeChoice() {
     rangeByGrain[grain] = {
       choice: choiceFromSaved(grain),
       n: Number(saved.range_n) || GRAIN_DEFAULTS[grain].n,
-      includeCurrent: grain === "day" ? true : !!saved.include_current,
+      includeCurrent: grain === "day"
+        ? !!(saved.include_current || !saved.exclude_current)
+        : !!saved.include_current,
     };
   }
   const state = rangeByGrain[grain];
@@ -730,33 +929,6 @@ function seedRangeChoice() {
   rangeNEl.value = state.n;
   includeCurrentEl.checked = state.includeCurrent;
   applyRangeChoice();
-}
-async function refreshEventNames() {
-  const gen = ++valGen;
-  if (!eventColumnEl.value) {
-    eventValueWrap.hidden = true;
-    return;
-  }
-  eventValueWrap.hidden = false;
-  if (!tableEl.value || !locationEl.value) return;
-  setLoading(eventValueEl, true);
-  const data = await post("/api/event_values", {
-    ...authBody(),
-    table: tableEl.value,
-    location: locationEl.value,
-    event_column: eventColumnEl.value,
-    event_time: eventTimeEl.value,
-    catalog: true,
-    reporting_timezone: document.getElementById("reporting_timezone").value,
-    event_time_tz: document.getElementById("event_time_tz").value,
-  });
-  if (gen !== valGen) return;
-  setLoading(eventValueEl, false);
-  if (!data.ok) {
-    setError(data.error || "Could not refresh events");
-    return;
-  }
-  fillEventSelect(data.values || [], eventValueEl.value || saved.event_value);
 }
 let activeGrain = currentGrain();
 rangeChoiceEl.addEventListener("change", applyRangeChoice);
@@ -773,9 +945,7 @@ grainEl.addEventListener("change", () => {
   rangeNEl.value = state.n;
   includeCurrentEl.checked = state.includeCurrent;
   applyRangeChoice();
-  syncTableHeaders();
 });
-document.getElementById("refresh-events").addEventListener("click", refreshEventNames);
 seedRangeChoice();
 activeGrain = currentGrain();
 
@@ -799,24 +969,78 @@ function relabelMeasures() {
     } else if (o.value === "average") {
       o.textContent = avg;
       o.title = "Volume divided by unique " + p.toLowerCase();
+    } else if (o.value === "sum") {
+      o.textContent = "Sum";
+      o.title = "Sum of a numeric column";
+    } else if (o.value === "property_average") {
+      o.textContent = "Average";
+      o.title = "Average of a numeric column";
+    } else if (o.value === "median") {
+      o.textContent = "Median";
+      o.title = "Median of a numeric column";
+    } else if (o.value === "distinct") {
+      o.textContent = "Distinct per " + w;
+      o.title = "Mean distinct values of a column per " + w.toLowerCase();
     }
   }
 }
 function syncExact() {
-  document.getElementById("exact-wrap").hidden = form.measure.value === "total";
+  const v = form.measure.value;
+  const show = v === "uniques" || v === "average" || v === "median" || v === "distinct";
+  document.getElementById("exact-wrap").hidden = !show;
+  const label = document.getElementById("exact-label");
+  const hint = document.getElementById("exact-hint");
+  if (v === "median") {
+    label.textContent = "Exact median";
+    hint.textContent = "Same bytes scanned; more CPU. Off is approx quantiles.";
+  } else if (v === "distinct") {
+    label.textContent = "Exact distinct counts";
+    hint.textContent = "Same bytes scanned; more CPU. Off is HyperLogLog (faster).";
+  } else if (v === "average") {
+    label.textContent = "Exact unique counts";
+    hint.textContent = "Denominator is unique entities. Off is HyperLogLog (faster).";
+  } else {
+    label.textContent = "Exact unique counts";
+    hint.textContent = "Same bytes scanned; more CPU. Off is HyperLogLog (faster).";
+  }
 }
 relabelMeasures();
 syncExact();
+syncOfUi();
 syncTableHeaders();
-form.measure.addEventListener("change", () => { syncExact(); syncTableHeaders(); });
+form.measure.addEventListener("change", () => {
+  syncExact();
+  syncOfUi();
+});
 
+function ofTitlePart() {
+  if (!isPropertyMeasure()) return "";
+  const col = (ofColumnEl.value || "").trim();
+  if (!col) return "";
+  if (col === CUSTOM_OF) return (document.getElementById("of_expr").value || "").trim();
+  const key = (document.getElementById("of_json_key").value || "").trim();
+  return key ? col + "." + key : col;
+}
+function measureTitle() {
+  const label = (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "Events";
+  const of = ofTitlePart();
+  if (!of) return label;
+  if (form.measure.value === "distinct") {
+    return label.replace(/^Distinct per /, "Distinct " + of + " per ");
+  }
+  return label + " " + of;
+}
 function defaultTitle() {
-  const measure = (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "Events";
   const ev = (eventValueEl.value || "").trim();
   const bd = breakdownColumnEl.value;
-  const by = !bd ? "" : (bd === CUSTOM_BREAKDOWN ? "by expression" : "by " + bd);
+  const bdKey = (document.getElementById("breakdown_json_key").value || "").trim();
+  const by = !bd ? "" : (
+    bd === CUSTOM_BREAKDOWN ? "by expression"
+    : bdKey ? "by " + bd + "." + bdKey
+    : "by " + bd
+  );
   const range = (rangeChoiceEl.selectedOptions[0] && rangeChoiceEl.selectedOptions[0].textContent) || "";
-  return [measure, ev, by, range].filter(Boolean).join(" · ");
+  return [measureTitle(), ev, by, range].filter(Boolean).join(" · ");
 }
 titleEl.addEventListener("input", () => { titleLockedEl.value = "true"; });
 document.getElementById("reset-title").addEventListener("click", () => {
@@ -829,7 +1053,7 @@ function payload() {
   const d = Object.fromEntries(new FormData(form).entries());
   d.exact = document.getElementById("exact").checked;
   d.range_unit = rangeUnitEl.value;
-  d.include_current = currentGrain() === "day" ? true : includeCurrentEl.checked;
+  d.include_current = includeCurrentEl.checked;
   d.exclude_current = !d.include_current;
   d.chart_labels = document.getElementById("chart_labels").checked;
   d.chart_axis_x = document.getElementById("chart_axis_x").checked;
@@ -839,8 +1063,26 @@ function payload() {
   d.override_cap = document.getElementById("override_cap").checked;
   d.query_row_limit_run = String(effectiveRowLimit());
   d.include_other = document.getElementById("include_other").checked;
-  if (d.breakdown_column === CUSTOM_BREAKDOWN) d.breakdown_column = "";
-  else d.breakdown_expr = "";
+  d.on = isPropertyMeasure() ? "property" : "events";
+  if (d.breakdown_column === CUSTOM_BREAKDOWN) {
+    d.breakdown_column = "";
+    d.breakdown_json_key = "";
+  } else {
+    d.breakdown_expr = "";
+    if (document.getElementById("breakdown-json-wrap").hidden) d.breakdown_json_key = "";
+  }
+  if (d.of_column === CUSTOM_OF) {
+    d.of_column = "";
+    d.of_json_key = "";
+  } else {
+    d.of_expr = "";
+    if (document.getElementById("of-json-wrap").hidden) d.of_json_key = "";
+  }
+  if (!isPropertyMeasure()) {
+    d.of_column = "";
+    d.of_expr = "";
+    d.of_json_key = "";
+  }
   return d;
 }
 function formatBytes(n) {
@@ -863,7 +1105,8 @@ function estimateKey(body) {
     body.range_unit, body.include_current, body.measure, body.custom_kind,
     body.start_date, body.end_date, body.rel_start_n, body.rel_end_n,
     body.override_cap, body.bytes_cap_override_gb, body.bytes_cap_gb,
-    body.breakdown_column, body.breakdown_expr, body.breakdown_at, body.top_n, body.include_other,
+    body.on, body.of_column, body.of_expr, body.of_json_key,
+    body.breakdown_column, body.breakdown_expr, body.breakdown_json_key, body.breakdown_at, body.top_n, body.include_other,
   ].join("\0");
 }
 let lastEstimateKey = "";
@@ -916,16 +1159,68 @@ async function runEstimate() {
     wrap.hidden = true;
   }
 }
+function showSql(text) {
+  const sqlEl = document.getElementById("sql");
+  if (!text) {
+    sqlEl.textContent = "SQL updates as you change the form.";
+    sqlEl.classList.add("empty");
+    document.getElementById("copy-sql").hidden = true;
+    return;
+  }
+  sqlEl.textContent = text;
+  sqlEl.classList.remove("empty");
+  document.getElementById("copy-sql").hidden = false;
+}
+let sqlGen = 0;
+async function compileSql() {
+  const gen = ++sqlGen;
+  const body = payload();
+  if (!body.table || !body.entity || !body.event_time) {
+    showSql("");
+    return;
+  }
+  if (isPropertyMeasure() && !((body.of_expr || "").trim() || (body.of_column || "").trim())) {
+    showSql("");
+    return;
+  }
+  if (!document.getElementById("of-json-wrap").hidden && !(body.of_json_key || "").trim()) {
+    showSql("");
+    return;
+  }
+  if (!document.getElementById("breakdown-json-wrap").hidden && !(body.breakdown_json_key || "").trim()) {
+    showSql("");
+    return;
+  }
+  try {
+    const data = await post("/api/sql", body);
+    if (gen !== sqlGen) return;
+    if (data.ok && data.sql) showSql(data.sql);
+    else showSql("");
+  } catch (err) {
+    if (gen !== sqlGen) return;
+  }
+}
 function scheduleEstimate() {
   clearTimeout(estimateTimer);
-  estimateTimer = setTimeout(runEstimate, 400);
+  estimateTimer = setTimeout(() => {
+    compileSql();
+    runEstimate();
+  }, 400);
 }
 form.addEventListener("change", (e) => {
-  if (e.target && e.target.id === "exact") return;
+  syncStaleNotes();
+  if (e.target && e.target.id === "exact") {
+    compileSql();
+    return;
+  }
   scheduleEstimate();
 });
 form.addEventListener("input", (e) => {
-  if (e.target && e.target.id === "exact") return;
+  syncStaleNotes();
+  if (e.target && e.target.id === "exact") {
+    compileSql();
+    return;
+  }
   scheduleEstimate();
 });
 document.getElementById("override_cap").addEventListener("change", scheduleEstimate);
@@ -935,17 +1230,68 @@ function csvCell(value) {
   if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
   return s;
 }
-function grainHeader() {
+function resultKey(body) {
+  return [
+    body.table, body.event_value, body.grain, body.range_mode, body.range_n,
+    body.range_unit, body.include_current, body.measure, body.custom_kind,
+    body.start_date, body.end_date, body.rel_start_n, body.rel_end_n,
+    body.on, body.of_column, body.of_expr, body.of_json_key,
+    body.breakdown_column, body.breakdown_expr, body.breakdown_json_key,
+    body.breakdown_at, body.top_n, body.include_other,
+    body.exact ? "1" : "0",
+  ].join("\0");
+}
+function draftGrainHeader() {
   const g = currentGrain();
   return g ? g.charAt(0).toUpperCase() + g.slice(1) : "Day";
 }
-function valueHeader() {
+function draftValueHeader() {
   return (form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "Value";
 }
-function seriesHeader() {
+function draftSeriesHeader() {
   const col = (form.breakdown_column && form.breakdown_column.value) || "";
-  if (col && col !== CUSTOM_BREAKDOWN) return col;
-  return "Break down";
+  if (!col || col === CUSTOM_BREAKDOWN) return "Break down";
+  const key = (document.getElementById("breakdown_json_key").value || "").trim();
+  return key ? col + "." + key : col;
+}
+function grainHeader() {
+  return (lastRun && lastRun.grainHeader) || draftGrainHeader();
+}
+function valueHeader() {
+  return (lastRun && lastRun.valueHeader) || draftValueHeader();
+}
+function seriesHeader() {
+  return (lastRun && lastRun.seriesHeader) || draftSeriesHeader();
+}
+function resultGrain() {
+  return (lastRun && lastRun.grain) || currentGrain();
+}
+function formDrifted() {
+  if (!lastRun) return false;
+  return resultKey(payload()) !== lastRun.key;
+}
+function syncStaleNotes() {
+  const stale = formDrifted();
+  const copy = "Showing the last run. Run again to apply form changes.";
+  ["chart-stale", "table-stale"].forEach((id) => {
+    const el = document.getElementById(id);
+    el.hidden = !stale;
+    el.textContent = stale ? copy : "";
+  });
+}
+function snapshotLastRun(body) {
+  lastRun = {
+    key: resultKey(body),
+    grain: currentGrain(),
+    grainHeader: draftGrainHeader(),
+    valueHeader: draftValueHeader(),
+    seriesHeader: draftSeriesHeader(),
+  };
+  syncStaleNotes();
+}
+function clearLastRun() {
+  lastRun = null;
+  syncStaleNotes();
 }
 function hasSeries() {
   return tableRows.some((r) => r.series);
@@ -1018,7 +1364,42 @@ function tableHeaderRow() {
   if (hasSeries()) return [grainHeader(), seriesHeader(), valueHeader(), "incomplete"];
   return [grainHeader(), valueHeader(), "incomplete"];
 }
+function tableErrorText() {
+  const el = document.getElementById("table-empty");
+  if (!el || el.hidden || !el.classList.contains("fail")) return "";
+  return (el.textContent || "").trim();
+}
+function setTableActions(mode) {
+  const copyBtn = document.getElementById("copy-table");
+  const exportBtn = document.getElementById("export-csv");
+  copyBtn.hidden = false;
+  exportBtn.hidden = false;
+  if (mode === "error") {
+    copyBtn.title = "Copy error";
+    copyBtn.setAttribute("aria-label", "Copy error");
+    exportBtn.title = "Export error";
+    exportBtn.setAttribute("aria-label", "Export error");
+    return;
+  }
+  copyBtn.title = "Copy table";
+  copyBtn.setAttribute("aria-label", "Copy table");
+  exportBtn.title = "Export CSV";
+  exportBtn.setAttribute("aria-label", "Export CSV");
+}
+function downloadBlob(text, filename, type) {
+  const blob = new Blob([text.endsWith("\n") ? text : text + "\n"], { type });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 function exportCsv() {
+  const err = tableErrorText();
+  if (err) {
+    downloadBlob(err, "factcat-error.txt", "text/plain");
+    return;
+  }
   const lines = [tableHeaderRow().map(csvCell).join(",")];
   for (const row of tableRows) {
     const cells = hasSeries()
@@ -1026,12 +1407,7 @@ function exportCsv() {
       : [row.bucket, row.value, row.incomplete ? "true" : "false"];
     lines.push(cells.map(csvCell).join(","));
   }
-  const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "factcat-events.csv";
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(lines.join("\n"), "factcat-events.csv", "text/csv");
 }
 document.querySelectorAll("#result-table th[data-key]").forEach((th) => {
   th.addEventListener("click", (e) => {
@@ -1062,6 +1438,12 @@ document.querySelectorAll("#result-table .grip").forEach((grip) => {
 });
 document.getElementById("export-csv").addEventListener("click", exportCsv);
 document.getElementById("copy-table").addEventListener("click", async () => {
+  const err = tableErrorText();
+  if (err) {
+    await navigator.clipboard.writeText(err);
+    flashCopied(document.getElementById("copy-table"));
+    return;
+  }
   const lines = [hasSeries()
     ? grainHeader() + "\t" + seriesHeader() + "\t" + valueHeader()
     : grainHeader() + "\t" + valueHeader()];
@@ -1173,20 +1555,35 @@ function effectiveChartType(n) {
   if (chosen !== "auto") return chosen;
   return n <= 2 ? "bar" : "line";
 }
+function setChartEmpty(kind) {
+  const empty = document.getElementById("chart-empty");
+  const img = document.getElementById("waiting-cat");
+  const copy = document.getElementById("empty-copy");
+  if (kind === "none") {
+    empty.hidden = true;
+    return;
+  }
+  empty.hidden = false;
+  img.hidden = kind !== "wait" && kind !== "empty";
+  if (kind === "running") copy.textContent = "Running…";
+  else if (kind === "fail") copy.textContent = "Query failed.";
+  else if (kind === "empty") copy.textContent = "Nothing to `cat`.";
+  else copy.textContent = "No rows yet. The cat is waiting.";
+}
 function drawChart() {
   const ctx = document.getElementById("chart");
-  const empty = document.getElementById("chart-empty");
   const copyBtn = document.getElementById("copy-chart");
   const pngBtn = document.getElementById("export-png");
   if (!tableRows.length) {
-    empty.hidden = false;
+    const copy = document.getElementById("empty-copy").textContent || "";
+    if (copy !== "Query failed." && copy !== "Running…") setChartEmpty("wait");
     ctx.hidden = true;
     copyBtn.hidden = true;
     pngBtn.hidden = true;
     if (chart) { chart.destroy(); chart = null; }
     return;
   }
-  empty.hidden = true;
+  setChartEmpty("none");
   ctx.hidden = false;
   copyBtn.hidden = false;
   pngBtn.hidden = false;
@@ -1203,16 +1600,19 @@ function drawChart() {
   const isBar = kind === "bar";
   const isArea = kind === "area";
   const type = isBar ? "bar" : "line";
-  const measureLabel = titleEl.value || ((form.measure.selectedOptions[0] && form.measure.selectedOptions[0].textContent) || "");
+  const measureLabel = titleEl.value || valueHeader();
   const note = document.getElementById("incomplete-note");
   const hasIncomplete = shown.some((r) => r.incomplete);
+  const grain = resultGrain();
   note.hidden = !hasIncomplete;
   note.textContent = hasIncomplete
-    ? (isBar ? "Faded bar is the current " : "Dotted point is the current ") + currentGrain() + " (through today)."
+    ? (isBar ? "Faded bar is the current " : "Dotted point is the current ") + grain + " (through today)."
     : "";
   if (labels.length <= 2 && (document.getElementById("chart_type").value || "auto") === "auto") {
     note.hidden = false;
-    const extra = "Few points at this grain — switch Time grain to Day to see days inside the range.";
+    const extra = grain === "day"
+      ? "Few points at this grain."
+      : "Few points at this grain — switch Time grain to Day and run again to see days inside the range.";
     note.textContent = [note.textContent, extra].filter(Boolean).join(" ");
   }
   if (chart) chart.destroy();
@@ -1372,17 +1772,28 @@ form.addEventListener("submit", async (e) => {
     setError("Pick an event.");
     return;
   }
+  if (isPropertyMeasure() && !((body.of_expr || "").trim() || (body.of_column || "").trim())) {
+    setError("Pick a column.");
+    return;
+  }
+  if (!document.getElementById("of-json-wrap").hidden && !(body.of_json_key || "").trim()) {
+    setError("Enter a JSON key.");
+    return;
+  }
+  if (!document.getElementById("breakdown-json-wrap").hidden && !(body.breakdown_json_key || "").trim()) {
+    setError("Enter a JSON key.");
+    return;
+  }
   const runBtn = document.getElementById("run");
   const runLoad = document.getElementById("run-loading");
   const runStatus = document.getElementById("run-status");
-  const empty = document.getElementById("chart-empty");
   const emptyCopy = document.getElementById("empty-copy");
+  const hadChart = !!chart || tableRows.length;
   runBtn.disabled = true;
   runBtn.textContent = "Running…";
   runLoad.hidden = false;
   runStatus.textContent = "Querying…";
-  empty.hidden = false;
-  emptyCopy.textContent = "Running…";
+  if (!hadChart) setChartEmpty("running");
   try {
     const res = await fetch("/api/run", {
       method: "POST",
@@ -1390,21 +1801,38 @@ form.addEventListener("submit", async (e) => {
       body: JSON.stringify(body),
     });
     const data = await res.json();
+    if (data.sql) showSql(data.sql);
     if (!data.ok) {
-      setError(data.error || res.statusText);
+      const msg = shortError(data.error || res.statusText || "Query failed.");
+      setError(msg);
+      const tableEmpty = document.getElementById("table-empty");
+      tableEmpty.hidden = false;
+      tableEmpty.classList.add("fail");
+      tableEmpty.textContent = msg;
+      document.getElementById("result-table").hidden = true;
+      setTableActions("error");
+      tableRows = [];
+      clearLastRun();
+      if (chart) {
+        chart.destroy();
+        chart = null;
+      }
+      document.getElementById("chart").hidden = true;
+      setChartEmpty("fail");
+      document.getElementById("copy-chart").hidden = true;
+      document.getElementById("export-png").hidden = true;
+      showLimitNote(false, 0);
       runStatus.textContent = "";
-      emptyCopy.textContent = "The cat is waiting.";
       return;
     }
     if (titleLockedEl.value !== "true") titleEl.value = body.chart_title || defaultTitle();
-    const sqlEl = document.getElementById("sql");
-    sqlEl.textContent = data.sql || "";
-    sqlEl.classList.remove("empty");
-    document.getElementById("copy-sql").hidden = false;
-    document.getElementById("table-empty").hidden = true;
+    const tableEmpty = document.getElementById("table-empty");
+    tableEmpty.hidden = true;
+    tableEmpty.classList.remove("fail");
+    tableEmpty.textContent = "Run to fill the table.";
     document.getElementById("result-table").hidden = false;
-    document.getElementById("export-csv").hidden = false;
-    document.getElementById("copy-table").hidden = false;
+    setTableActions("table");
+    snapshotLastRun(body);
     tableRows = (data.rows || []).map((row) => ({
       bucket: bucketLabel(row.bucket),
       value: row.value,
@@ -1419,7 +1847,9 @@ form.addEventListener("submit", async (e) => {
     runBtn.disabled = false;
     runBtn.textContent = "Run";
     runLoad.hidden = true;
-    if (!tableRows.length) emptyCopy.textContent = "Nothing to `cat`.";
+    if (!tableRows.length && emptyCopy.textContent === "Running…") {
+      setChartEmpty("empty");
+    }
   }
 });
 scheduleEstimate();

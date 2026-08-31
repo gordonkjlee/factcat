@@ -8,10 +8,10 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from factcat.warehouses import BytesCapError, QueryResult
+from factcat.warehouses import AdapterError, BytesCapError, QueryResult
 from factcat_app.catalog import column_fits
 from factcat_app.config import mapping_ready
-from factcat_app.main import APP_DIR, app
+from factcat_app.main import APP_DIR, _client_error, app
 
 
 def _map_cfg(tmp_path, monkeypatch, **extra):
@@ -100,6 +100,18 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Unique User<" not in res.text
     assert "Average per User" in res.text
     assert ">Uniques<" not in res.text
+    assert 'optgroup label="Event"' in res.text
+    assert 'optgroup label="Property"' in res.text
+    assert ">Sum<" in res.text
+    assert 'value="property_average"' in res.text
+    assert ">Median<" in res.text
+    assert "Distinct per User" in res.text
+    assert 'id="of_column"' in res.text
+    assert 'id="of_json_key"' in res.text
+    assert 'id="breakdown_json_key"' in res.text
+    assert "JSON_TYPES" in res.text
+    assert 'id="of-wrap"' in res.text
+    assert "Pick a column." in res.text
     assert "Only this event" not in res.text
     assert "Event name column" not in res.text
     assert "Date range" in res.text
@@ -115,7 +127,10 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Specific dates" in res.text
     assert ">Relative<" in res.text
     assert "event_names: data.values" not in res.text
-    assert "Include this week" in res.text
+    assert "Include today" in res.text
+    assert 'day: "today"' in res.text
+    assert 'week: "this week"' in res.text
+    assert 'month: "this month"' in res.text
     assert "RANGE_PRESETS" in res.text
     assert 'id="range_choice"' in res.text
     assert "applyRangeChoice" in res.text
@@ -126,13 +141,19 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     html = res.text
     grain_at = html.find('id="grain"')
     range_at = html.find('id="range_choice"')
+    measure_at = html.find('id="measure"')
+    of_at = html.find('id="of_column"')
     assert grain_at != -1 and range_at != -1 and grain_at < range_at
-    assert "fillEventSelect(cachedEventNames" in html
+    assert measure_at != -1 and of_at != -1
+    assert measure_at < of_at < grain_at
+    assert "bindCachedList" in html
+    assert "cachedEventNames" in html
     assert "fillSelect(eventValueEl, cachedEventNames" not in html
     assert 'id="reporting_timezone"' in html
     assert 'id="event_time_tz"' in html
     assert "syncChartTitle" not in html
     assert "Exact unique counts" in res.text
+    assert 'v === "uniques" || v === "average"' in res.text
     assert "Break down by" in res.text
     assert "Show (other)" in res.text
     assert "SQL expression…" in res.text
@@ -144,9 +165,23 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Exact (off = approx unique count)" not in res.text
     assert 'id="copy-sql"' in res.text
     assert 'id="copy-chart"' in res.text
+    assert 'id="waiting-cat"' in res.text
+    assert "setChartEmpty" in res.text
     assert 'id="copy-table"' in res.text
+    assert "tableErrorText" in res.text
+    assert "factcat-error.txt" in res.text
+    assert "Copy error" in res.text
     assert "grainHeader" in res.text
     assert "valueHeader" in res.text
+    assert "snapshotLastRun" in res.text
+    assert "formDrifted" in res.text
+    assert "resultKey" in res.text
+    assert 'id="table-stale"' in res.text
+    assert 'id="chart-stale"' in res.text
+    assert "Showing the last run. Run again to apply form changes." in res.text
+    assert "draftGrainHeader" in res.text
+    assert "syncTableHeaders();" in html
+    assert 'form.measure.addEventListener("change", () => {\n  syncExact();\n  syncOfUi();\n  syncTableHeaders();\n});' not in html.replace("\r\n", "\n")
     assert ">Bucket<" not in res.text
     assert 'id="export-png"' in res.text
     assert 'id="chart_type"' in res.text
@@ -154,6 +189,10 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert 'id="chart-title"' in res.text
     assert 'id="reset-title"' in res.text
     assert "Reset title" in res.text
+    assert "ofTitlePart" in res.text
+    assert "measureTitle" in res.text
+    assert 'label + " " + of' in res.text
+    assert 'label.replace(/^Distinct per /, "Distinct " + of + " per ")' in res.text
     assert 'value: "this:week"' in res.text
     assert "Export CSV" in res.text
     assert "All events" not in res.text
@@ -181,6 +220,10 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "class=\"sort\"" in res.text or 'className = "sort"' in res.text
     assert html.find('id="exact-wrap"') < html.find('id="exact-hint"') < html.find('id="run"')
     assert "Refresh list" in res.text
+    assert 'id="refresh-events"' in res.text
+    assert 'id="refresh-of"' in res.text
+    assert 'id="refresh-columns"' in res.text
+    assert "/static/catalog.js" in res.text
     assert "/api/event_values" in res.text
     assert "<h1>Project setup</h1>" not in res.text
     assert "GCP project that runs" not in res.text
@@ -191,8 +234,9 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "pane-sql" in res.text
     assert "The cat is waiting." in res.text
     assert "Run to plot." not in res.text
-    assert "Run to see rows." in res.text
-    assert "Run to see generated SQL." in res.text
+    assert "Run to fill the table." in res.text
+    assert "SQL updates as you change the form." in res.text
+    assert "/api/sql" in res.text
     assert "<summary>SQL</summary>" not in res.text
 
 
@@ -210,8 +254,29 @@ def test_events_serves_cached_event_names(monkeypatch, tmp_path):
     assert '"opened"' in html
     assert '"paid"' in html
     assert 'id="event_value-wrap" hidden' not in html
-    assert "fillEventSelect(cachedEventNames" in html
+    assert "cachedEventNames" in html
+    assert "bindCachedList" in html
     assert "All events" not in html
+
+
+def test_events_serves_cached_columns_and_breakdown_selection(monkeypatch, tmp_path):
+    _map_cfg(
+        tmp_path,
+        monkeypatch,
+        breakdown_column="course_code",
+        columns=[
+            {"name": "course_code", "type": "STRING"},
+            {"name": "country", "type": "STRING"},
+        ],
+    )
+    client = TestClient(app)
+    html = client.get("/").text
+    assert "cachedColumns" in html
+    assert '"course_code"' in html
+    assert "paintColumns" in html
+    assert "ensureOption" in html
+    assert 'id="refresh-of"' in html
+    assert 'id="refresh-columns"' in html
 
 
 def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
@@ -254,11 +319,137 @@ def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
     sql = warehouse.run.call_args.args[0]
     compact = " ".join(sql.split()).upper()
     assert "LIMIT 1000000" in compact
-    assert "ORDER BY BUCKET DESC" in compact
+    assert "ORDER BY CAST(BUCKET AS DATE) DESC" in compact
     assert "account_id" in sql
     assert "user_id" not in sql
-    assert "DATE(occurred_at, 'UTC')" in sql.replace("`", "")
+    assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'UTC')" in sql.replace("`", "")
     assert "CURRENT_DATE('UTC')" in sql
+
+
+def test_sql_endpoint_compiles_without_warehouse(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    res = client.post(
+        "/api/sql",
+        json={
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "sum",
+            "of_column": "revenue",
+            "grain": "day",
+            "lookback_days": 30,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert "SUM" in body["sql"].upper()
+    assert "revenue" in body["sql"]
+
+
+def test_run_returns_sql_when_warehouse_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.side_effect = AdapterError("Syntax error: unexpected keyword")
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post(
+        "/api/run",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "uniques",
+            "grain": "day",
+            "lookback_days": 30,
+        },
+    )
+    assert res.status_code == 400
+    body = res.json()
+    assert body["ok"] is False
+    assert "Syntax error" in body["error"]
+    assert not body["error"].lstrip().upper().startswith("SELECT")
+    assert body["sql"]
+    assert "account_id" in body["sql"]
+    assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'UTC')" in body["sql"].replace("`", "")
+
+
+def test_client_error_drops_indented_select_star():
+    assert _client_error(AdapterError("  SELECT * FROM (")) == (
+        "Query failed. See SQL below."
+    )
+    assert "SELECT" not in _client_error(
+        AdapterError("Unrecognized name: revenue at [8:3]\n  SELECT * FROM (\n  SELECT 1\n)")
+    )
+    numbered = _client_error(
+        AdapterError("Syntax error at [1:1]\n   1:SELECT * FROM (\n   2:  SELECT 1")
+    )
+    assert "SELECT" not in numbered
+    assert "Syntax error" in numbered
+    assert _client_error(
+        AdapterError("SELECT * FROM (\n  SELECT 1\n)"),
+        sql="SELECT * FROM (\n  SELECT 1\n)",
+    ) == "Query failed. See SQL below."
+
+
+def test_run_strips_sql_dump_from_warehouse_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.side_effect = AdapterError(
+        "Unrecognized name: revenue at [8:3]\n  SELECT * FROM (\n  SELECT 1\n)"
+    )
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post(
+        "/api/run",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "uniques",
+            "grain": "day",
+        },
+    )
+    body = res.json()
+    assert body["ok"] is False
+    assert "Unrecognized name: revenue" in body["error"]
+    assert "SELECT" not in body["error"]
+    assert body["sql"]
+    assert "SELECT" in body["sql"].upper()
+
+
+def test_run_property_sum_uses_of_column(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(
+        rows=[{"bucket": "2026-01-05", "value": 12.5}]
+    )
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post(
+        "/api/run",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "sum",
+            "of_column": "revenue",
+            "grain": "day",
+            "lookback_days": 30,
+        },
+    )
+    assert res.status_code == 200
+    sql = warehouse.run.call_args.args[0].upper()
+    assert "SUM(" in sql.replace(" ", "") or "SUM(" in sql
+    assert "REVENUE" in sql
+    assert "APPROX_COUNT_DISTINCT" not in sql
 
 
 def test_run_passes_breakdown_series(monkeypatch, tmp_path):
@@ -556,8 +747,11 @@ def test_template_ships_with_package():
     assert (templates / "setup.html").is_file()
     assert (templates / "base.html").is_file()
     static = Path(APP_DIR) / "static"
-    assert (static / "logo.svg").is_file()
-    assert (static / "favicon.ico").is_file()
+    assert (static / "logo.png").is_file()
+    assert (static / "catalog.js").is_file()
+    assert "bindCachedList" in (static / "catalog.js").read_text(encoding="utf-8")
+    assert not (static / "logo.svg").exists()
+    assert not (static / "favicon.ico").exists()
     assert (static / "waiting.jpg").is_file()
     assert (Path(APP_DIR) / "guides" / "setup-bigquery.md").is_file()
 
@@ -567,11 +761,14 @@ def test_favicon_and_mark_are_served(monkeypatch, tmp_path):
     client = TestClient(app)
     ico = client.get("/favicon.ico")
     assert ico.status_code == 200
-    assert ico.content[:4] == b"\x00\x00\x01\x00"
-    mark = client.get("/static/logo.svg")
+    assert ico.content[:8] == b"\x89PNG\r\n\x1a\n"
+    mark = client.get("/static/logo.png")
     assert mark.status_code == 200
-    assert b"#5C6B73" in mark.content
-    assert b"#C4841D" in mark.content
+    assert mark.content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert client.get("/static/logo.svg").status_code == 404
+    catalog = client.get("/static/catalog.js")
+    assert catalog.status_code == 200
+    assert b"bindCachedList" in catalog.content
 
 
 def test_chrome_uses_tokens_and_empty_state(monkeypatch, tmp_path):
@@ -580,23 +777,25 @@ def test_chrome_uses_tokens_and_empty_state(monkeypatch, tmp_path):
     client = TestClient(app)
     setup = client.get("/setup").text
     assert "--fc-ochre: #C4841D" in setup
-    assert "/static/logo.svg" in setup
+    assert "/static/logo.png" in setup
+    assert 'class="cog"' in setup
     assert "purrfect" not in setup.lower()
     _map_cfg(tmp_path, monkeypatch)
     events = client.get("/").text
     assert "--fc-ochre: #C4841D" in events
-    assert "/static/logo.svg" in events
+    assert "/static/logo.png" in events
+    assert 'class="cog"' in events
     assert "/static/waiting.jpg" in events
     assert "The cat is waiting." in events
     assert "purrfect" not in events.lower()
     assert "Fc</a>" not in events
 
 
-def test_readme_keeps_etymology_and_points_at_the_mark():
+def test_readme_keeps_slogan_and_points_at_the_mark():
     readme = Path(APP_DIR).resolve().parents[2] / "README.md"
     text = readme.read_text(encoding="utf-8")
-    assert "cat** is how you read a file" in text
-    assert "packages/engine/factcat_app/static/logo.svg" in text
+    assert "Open-source, warehouse-first product analytics." in text
+    assert "packages/engine/factcat_app/static/waiting.jpg" in text
     assert "one wide events table" in text
     assert "setup-bigquery.md" in text
 
@@ -678,6 +877,8 @@ def test_columns_are_sorted_alphabetically(monkeypatch, tmp_path):
     )
     names = [c["name"] for c in res.json()["columns"]]
     assert names == ["alpha", "zeta"]
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert [c["name"] for c in saved["columns"]] == ["alpha", "zeta"]
 
 
 def test_event_values_run_distinct_and_sort(monkeypatch, tmp_path):
@@ -799,6 +1000,11 @@ def test_columns_list_names(monkeypatch, tmp_path):
     assert res.status_code == 200
     names = [c["name"] for c in res.json()["columns"]]
     assert names == ["customer_care_id", "event_datetime"]
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert [c["name"] for c in saved["columns"]] == [
+        "customer_care_id",
+        "event_datetime",
+    ]
 
 
 def test_datasets_require_project(monkeypatch, tmp_path):
@@ -817,6 +1023,9 @@ def test_entity_column_types_are_ids_not_timestamps():
     assert not column_fits("FLOAT", "entity")
     assert not column_fits("BOOL", "entity")
     assert not column_fits("RECORD", "entity")
+    assert column_fits("JSON", "of")
+    assert column_fits("JSON", "of_distinct")
+    assert not column_fits("JSON", "entity")
 
 
 def test_event_time_column_types_are_temporal():
@@ -826,6 +1035,16 @@ def test_event_time_column_types_are_temporal():
     assert not column_fits("STRING", "event_time")
     assert not column_fits("TIME", "event_time")
     assert not column_fits("INT64", "event_time")
+
+
+def test_property_of_types_allow_float_not_string():
+    assert column_fits("FLOAT64", "of")
+    assert column_fits("NUMERIC", "of")
+    assert not column_fits("STRING", "of")
+    assert not column_fits("TIMESTAMP", "of")
+    assert column_fits("STRING", "of_distinct")
+    assert column_fits("FLOAT64", "of_distinct")
+    assert not column_fits("BOOL", "of_distinct")
 
 
 def test_event_name_column_is_string():

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "factcat"
 version = "0.4.1"
-description = "Product analytics on the event model already in your warehouse"
+description = "Open-source, warehouse-first product analytics"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

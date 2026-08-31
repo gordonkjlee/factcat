@@ -207,6 +207,13 @@ def test_include_other_false_drops_the_tail(pages):
     assert sum(got.values()) == 15.0
 
 
+def test_fold_is_a_join_not_correlated_exists():
+    sql = events_sql(_spec(), dialect="bigquery").upper()
+    assert "EXISTS" not in sql
+    assert "LEFT JOIN" in sql
+    assert "TOP_LABELS" in sql
+
+
 def test_labels_length_mismatch_is_rejected():
     with pytest.raises(ValueError, match="breakdown_labels"):
         EventsSpec(

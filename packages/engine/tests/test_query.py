@@ -57,7 +57,7 @@ def test_does_not_default_entity_to_user_id():
 
 def test_week_bucket_uses_explicit_week_start():
     spec = spec_from_form(_form(grain="week"))
-    assert _shifted("occurred_at", "week") in spec.bucket
+    assert _shifted("fc_event_ts", "week") in spec.bucket
     sql = events_sql(spec, dialect="bigquery")
     assert "WEEK(MONDAY)" in sql.upper().replace(" ", "")
     assert "factcat_period_start_shifted" not in sql
@@ -68,7 +68,7 @@ def test_week_bucket_uses_explicit_week_start():
 def test_range_preset_7_is_last_n_days():
     spec = spec_from_form(_form(range_preset="7"))
     assert (
-        "occurred_at >= TIMESTAMP(DATE_SUB(CURRENT_DATE('UTC'), INTERVAL 7 DAY), 'UTC')"
+        "factcat_as_instant(occurred_at) >= TIMESTAMP(DATE_SUB(CURRENT_DATE('UTC'), INTERVAL 7 DAY), 'UTC')"
         in spec.where
     )
 
@@ -96,7 +96,7 @@ def test_today_is_current_calendar_day():
 def test_this_week_by_day_keeps_week_window():
     spec = spec_from_form(_form(grain="day", range_mode="this", range_unit="week"))
     assert _shifted("current_date", "week") in spec.where
-    assert spec.bucket == f"CAST({_shifted('occurred_at', 'day')} AS DATE)"
+    assert spec.bucket == f"CAST({_shifted('fc_event_ts', 'day')} AS DATE)"
 
 
 def test_week_grain_this_day_bumps_to_this_week():
@@ -119,6 +119,27 @@ def test_last_eight_weeks_are_complete_by_default():
     )
     assert _shifted("current_date", "week", -8) in spec.where
     assert _shifted("current_date", "week", 0) in spec.where
+
+
+def test_last_days_include_today_by_default():
+    spec = spec_from_form(_form(grain="day", range_mode="last", range_n=30, range_unit="day"))
+    assert "INTERVAL 30 DAY" in spec.where.replace("'", "")
+    assert f"{spec.event_time} < " not in spec.where
+
+
+def test_last_days_can_exclude_today():
+    spec = spec_from_form(
+        _form(
+            grain="day",
+            range_mode="last",
+            range_n=30,
+            range_unit="day",
+            include_current=False,
+        )
+    )
+    assert "INTERVAL 30 DAY" in spec.where.replace("'", "")
+    assert "CURRENT_DATE('UTC')" in spec.where
+    assert "<" in spec.where
 
 
 def test_include_current_week_keeps_partial_trailing():
@@ -230,8 +251,14 @@ def test_events_sql_from_form_limits_most_recent_buckets():
     sql = events_sql_from_form(_form(query_row_limit=12))
     compact = " ".join(sql.split()).upper()
     assert "LIMIT 12" in compact
-    assert "ORDER BY BUCKET DESC" in compact
-    assert compact.index("LIMIT 12") < compact.rindex("ORDER BY BUCKET")
+    assert "ORDER BY CAST(BUCKET AS DATE) DESC" in compact
+    assert compact.index("LIMIT 12") < compact.rindex("ORDER BY CAST(BUCKET AS DATE)")
+    assert sql.startswith("SELECT * FROM (")
+    assert "\n    WITH src AS (" in sql
+    assert "AS _fc_inner" in sql
+    assert "AS _fc_recent" in sql
+    assert "ORDER BY CAST(bucket AS DATE) DESC" in sql
+    assert sql.strip().endswith("ORDER BY CAST(bucket AS DATE)")
 
 
 def test_query_row_limit_run_overrides_setup():
@@ -289,7 +316,7 @@ def test_event_filter_is_and_lookback():
     )
     assert "event_name = 'paid'" in spec.where
     assert (
-        "occurred_at >= TIMESTAMP(DATE_SUB(CURRENT_DATE('UTC'), INTERVAL 30 DAY), 'UTC')"
+        "factcat_as_instant(occurred_at) >= TIMESTAMP(DATE_SUB(CURRENT_DATE('UTC'), INTERVAL 30 DAY), 'UTC')"
         in spec.where
     )
 
@@ -349,14 +376,14 @@ def test_event_value_without_column_is_rejected():
 
 def test_month_bucket_is_date_trunc_sugar():
     spec = spec_from_form(_form(grain="month"))
-    assert spec.bucket == f"CAST({_shifted('occurred_at', 'month')} AS DATE)"
+    assert spec.bucket == f"CAST({_shifted('fc_event_ts', 'month')} AS DATE)"
 
 
 def test_day_bucket_casts_to_date():
     spec = spec_from_form(_form(grain="day"))
-    assert spec.bucket == f"CAST({_shifted('occurred_at', 'day')} AS DATE)"
+    assert spec.bucket == f"CAST({_shifted('fc_event_ts', 'day')} AS DATE)"
     sql = events_sql(spec, dialect="bigquery")
-    assert "DATE(occurred_at, 'UTC')" in sql.replace("`", "")
+    assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'UTC')" in sql.replace("`", "")
     assert "DATE_TRUNC" not in sql.upper()
 
 
@@ -419,9 +446,70 @@ def test_exact_uniques_is_count_distinct():
 
 def test_average_is_total_over_uniques():
     spec = spec_from_form(_form(measure="average"))
+    assert spec.on == "events"
     sql = events_sql(spec, dialect="bigquery").upper()
     assert "COUNT(*)" in sql.replace(" ", "") or "COUNT(*)" in sql
     assert "APPROX_COUNT_DISTINCT" in sql
+
+
+def test_property_sum_requires_of():
+    with pytest.raises(ValueError, match="of is required"):
+        spec_from_form(_form(measure="sum"))
+
+
+def test_property_sum_of_column():
+    spec = spec_from_form(_form(measure="sum", of_column="revenue"))
+    assert spec.on == "property"
+    assert spec.measure == "sum"
+    assert spec.of == "revenue"
+    sql = events_sql(spec, dialect="bigquery").upper()
+    assert "SUM(" in sql.replace(" ", "") or "SUM(" in sql
+
+
+def test_property_average_is_avg_of_column():
+    spec = spec_from_form(_form(measure="property_average", of_column="revenue"))
+    assert spec.on == "property"
+    assert spec.measure == "average"
+    assert spec.of == "revenue"
+    sql = events_sql(spec, dialect="bigquery").upper()
+    assert "AVG(" in sql or "AVG (" in sql
+    assert "APPROX_COUNT_DISTINCT" not in sql
+
+
+def test_saved_on_property_with_average_measure():
+    spec = spec_from_form(
+        _form(measure="average", on="property", of_column="amount")
+    )
+    assert spec.on == "property"
+    assert spec.measure == "average"
+    assert spec.of == "amount"
+
+
+def test_of_expr_wins_over_column():
+    spec = spec_from_form(
+        _form(measure="sum", of_column="ignored", of_expr="revenue / 100")
+    )
+    assert spec.of == "revenue / 100"
+
+
+def test_of_expr_rejects_statements():
+    with pytest.raises(ValueError, match="single SQL expression"):
+        spec_from_form(_form(measure="sum", of_expr="revenue; drop table x"))
+
+
+def test_distinct_is_per_entity_not_global_count():
+    spec = spec_from_form(_form(measure="distinct", of_column="country"))
+    assert spec.on == "property"
+    assert spec.measure == "distinct"
+    sql = events_sql(spec, dialect="bigquery").upper()
+    assert "AVG(" in sql
+    assert "APPROX_COUNT_DISTINCT" in sql or "COUNT(DISTINCT" in sql
+
+
+def test_event_measure_ignores_leftover_of():
+    spec = spec_from_form(_form(measure="uniques", of_column="revenue"))
+    assert spec.on == "events"
+    assert spec.of is None
 
 
 def test_breakdown_column_fills_expression():
@@ -433,6 +521,43 @@ def test_breakdown_column_fills_expression():
     sql = events_sql(spec, dialect="bigquery")
     assert "country" in sql
     assert "fc_fold_0" in sql
+
+
+def test_json_of_sum_extracts_key():
+    spec = spec_from_form(
+        _form(measure="sum", of_column="properties", of_json_key="revenue")
+    )
+    assert spec.of == "SAFE_CAST(JSON_VALUE(properties, '$.revenue') AS FLOAT64)"
+
+
+def test_json_of_distinct_is_untyped_json_value():
+    spec = spec_from_form(
+        _form(measure="distinct", of_column="properties", of_json_key="plan")
+    )
+    assert spec.of == "JSON_VALUE(properties, '$.plan')"
+    assert "SAFE_CAST" not in spec.of
+
+
+def test_json_breakdown_extracts_key():
+    spec = spec_from_form(
+        _form(breakdown_column="properties", breakdown_json_key="plan")
+    )
+    assert spec.breakdowns == ("JSON_VALUE(properties, '$.plan')",)
+    assert spec.breakdown_labels == ("plan",)
+
+
+def test_json_key_rejects_injection():
+    with pytest.raises(ValueError, match="JSON key"):
+        spec_from_form(
+            _form(measure="sum", of_column="properties", of_json_key="x'); DROP TABLE t; --")
+        )
+
+
+def test_json_key_accepts_dotted_path():
+    spec = spec_from_form(
+        _form(measure="sum", of_column="properties", of_json_key="user.plan")
+    )
+    assert "$.user.plan" in spec.of
 
 
 def test_breakdown_expr_wins_over_column():
@@ -460,24 +585,38 @@ def test_no_breakdown_when_column_blank():
 
 def test_berlin_timestamp_uses_date_in_that_zone():
     spec = spec_from_form(_form(reporting_timezone="Europe/Berlin"))
-    assert _shifted("occurred_at", "day", tz="Europe/Berlin") in spec.bucket
+    assert _shifted("fc_event_ts", "day", tz="Europe/Berlin") in spec.bucket
     assert "CURRENT_DATE('Europe/Berlin')" in spec.where
     sql = events_sql(spec, dialect="bigquery")
-    assert "DATE(occurred_at, 'Europe/Berlin')" in sql.replace("`", "")
+    assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'Europe/Berlin')" in sql.replace("`", "")
     assert "CURRENT_DATE('Europe/Berlin')" in sql
-    assert "DATE(occurred_at, 'UTC')" not in sql.replace("`", "")
+    assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'UTC')" not in sql.replace("`", "")
 
 
 def test_civil_datetime_casts_instead_of_date_tz():
     spec = spec_from_form(
         _form(grain="week", event_time_tz="reporting", reporting_timezone="Europe/London")
     )
-    assert _shifted("occurred_at", "week", tz="Europe/London", kind="reporting") in spec.bucket
+    assert _shifted("fc_event_ts", "week", tz="Europe/London", kind="reporting") in spec.bucket
     assert "AS DATETIME" in spec.where
     sql = events_sql(spec, dialect="bigquery")
-    assert "CAST(occurred_at AS DATE)" in sql.replace("`", "")
+    assert "CAST(fc_event_ts AS DATE)" in sql.replace("`", "")
     assert "DATE(occurred_at," not in sql.replace("`", "")
+    assert "DATE(fc_event_ts," not in sql.replace("`", "")
     assert "CURRENT_DATE('Europe/London')" in sql
+
+
+def test_utc_kind_casts_datetime_column_to_timestamp():
+    spec = spec_from_form(_form())
+    assert spec.event_time == "factcat_as_instant(occurred_at)"
+    assert "factcat_as_instant(occurred_at) >=" in spec.where
+    sql = events_sql(spec, dialect="bigquery").replace("`", "")
+    assert "factcat_as_instant" not in sql
+    assert "CAST(occurred_at AS TIMESTAMP) AS fc_event_ts" in sql
+    assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'UTC')" in sql
+    assert "CAST(occurred_at AS TIMESTAMP) >=" in sql
+    assert "CAST(occurred_at AS DATETIME) >=" not in sql
+    assert "CAST(fc_bucket AS DATE) AS bucket" in sql
 
 
 def test_unknown_timezone_is_rejected():

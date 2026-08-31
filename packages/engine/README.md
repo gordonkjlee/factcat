@@ -1,7 +1,6 @@
 # factcat
 
-Product analytics on the event model already in your warehouse. Your grain, your periods,
-your definitions.
+Open-source, warehouse-first product analytics.
 
 Every other product analytics tool hard-codes `entity = user`, `period = a calendar bucket`,
 and `retained = did any event`. Real definitions violate all three:
