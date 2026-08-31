@@ -38,6 +38,35 @@ def test_unmapped_root_redirects_to_setup(monkeypatch, tmp_path):
     assert res.headers["location"] == "/setup?events=1"
 
 
+def test_events_tab_loads_when_unmapped(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr("factcat_app.main.bootstrap_project", lambda: "adc-project")
+    client = TestClient(app)
+    res = client.get("/events")
+    assert res.status_code == 200
+    assert "<h1>Events</h1>" in res.text
+    assert 'href="/events"' in res.text
+    assert 'id="needs-setup"' in res.text
+    assert "Map a table on" in res.text
+    assert 'href="/setup"' in res.text
+    assert 'id="run" disabled' in res.text
+    assert "rail-setup needs-mapping" in res.text
+    assert "mapping required" in res.text.lower()
+    assert 'id="setup-needed"' not in res.text
+
+
+def test_snowflake_events_prompts_setup_when_unmapped(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    (tmp_path / "cfg.json").write_text(json.dumps({"kind": "snowflake"}), encoding="utf-8")
+    client = TestClient(app)
+    res = client.get("/events")
+    assert res.status_code == 200
+    assert 'id="needs-setup"' in res.text
+    assert 'id="run" disabled' in res.text
+    assert "rail-setup needs-mapping" in res.text
+    assert "BigQuery" not in res.text.split('id="needs-setup"', 1)[1].split("</div>", 1)[0]
+
+
 def test_setup_renders(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     monkeypatch.setattr("factcat_app.main.bootstrap_project", lambda: "adc-project")
@@ -112,6 +141,10 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "window.location.href" not in res.text
     assert "Saved" in res.text
     assert "catalog: true" in res.text
+    assert 'id="setup-needed"' in res.text
+    assert "Warehouse sign-in does not fill those fields" in res.text
+    assert "rail-setup active needs-mapping" in res.text
+    assert "gcloud config get-value project" in res.text
 
 
 def test_setup_explains_events_redirect(monkeypatch, tmp_path):
@@ -189,6 +222,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Exact unique counts" in res.text
     assert 'v === "uniques" || v === "average"' in res.text
     assert "Break down by" in res.text
+    assert "Add breakdown" in res.text
+    assert "BREAKDOWN_SLOT_CAP = 3" in res.text
     assert "Show (other)" in res.text
     assert "SQL expression" in res.text
     assert "sql_expr_ellipsis" in res.text
@@ -267,6 +302,9 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "icon-btn" in res.text
     assert "estimateKey" in res.text
     assert 'e.target.id === "exact"' in res.text
+    assert 'id="needs-setup"' not in res.text
+    assert 'id="run" disabled' not in res.text
+    assert "rail-setup needs-mapping" not in res.text
     assert "class=\"sort\"" in res.text or 'className = "sort"' in res.text
     assert html.find('id="exact-wrap"') < html.find('id="exact-hint"') < html.find('id="run"')
     assert "Exact series labels" in res.text
@@ -957,6 +995,54 @@ def test_readme_keeps_slogan_and_points_at_the_mark():
     assert "factcat[snowflake]" in text
     assert "Preferences" in text
     assert "~/.factcat/preferences.json" in text
+
+
+def test_setup_fills_project_from_gcloud_when_adc_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr("factcat_app.catalog.adc_quota_project", lambda: "")
+    monkeypatch.setattr("factcat_app.catalog.gcloud_config_project", lambda: "cli-project")
+    client = TestClient(app)
+    res = client.get("/setup")
+    assert res.status_code == 200
+    assert 'value="cli-project"' in res.text
+
+
+def test_snowflake_setup_does_not_fill_gcp_project(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    (tmp_path / "cfg.json").write_text(json.dumps({"kind": "snowflake"}), encoding="utf-8")
+    monkeypatch.setattr("factcat_app.main.bootstrap_project", lambda: "adc-project")
+    client = TestClient(app)
+    res = client.get("/setup")
+    assert res.status_code == 200
+    assert 'value="adc-project"' not in res.text
+    assert 'id="setup-needed"' in res.text
+    assert "rail-setup active needs-mapping" in res.text
+
+
+def test_bootstrap_project_prefers_adc_then_gcloud(monkeypatch):
+    from factcat_app.catalog import bootstrap_project
+
+    monkeypatch.setattr("factcat_app.catalog.adc_quota_project", lambda: "adc-project")
+    monkeypatch.setattr("factcat_app.catalog.gcloud_config_project", lambda: "cli-project")
+    assert bootstrap_project() == "adc-project"
+    monkeypatch.setattr("factcat_app.catalog.adc_quota_project", lambda: "")
+    assert bootstrap_project() == "cli-project"
+    monkeypatch.setattr("factcat_app.catalog.gcloud_config_project", lambda: "")
+    assert bootstrap_project() == ""
+
+
+def test_mapped_setup_hides_needed_callout(monkeypatch, tmp_path):
+    _map_cfg(tmp_path, monkeypatch)
+    client = TestClient(app)
+    res = client.get("/setup")
+    assert res.status_code == 200
+    assert 'id="setup-needed"' not in res.text
+    assert "rail-setup active needs-mapping" not in res.text
+    assert "rail-setup active" in res.text
+    assert 'value="analytics" selected' in res.text
+    assert 'value="events" selected' in res.text
+    assert 'value="account_id" selected' in res.text
+    assert 'value="occurred_at" selected' in res.text
 
 
 def test_mapping_ready_requires_table_entity_and_time():

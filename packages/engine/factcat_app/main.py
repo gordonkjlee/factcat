@@ -94,6 +94,7 @@ def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLRespon
                 for name in ADAPTERS
             },
             "filter_ui": filter_ui(user),
+            "mapping_ready": mapping_ready(cfg),
         },
     )
 
@@ -104,6 +105,14 @@ def index(request: Request):
     if not mapping_ready(cfg):
         return RedirectResponse("/setup?events=1", status_code=303)
     return _page(request, "index.html", "events", cfg)
+
+
+@app.get("/events")
+def events(request: Request) -> HTMLResponse:
+    """Events report. Always the chart page — unlike ``/``, which sends a
+    first run to Setup. Mapping can still be incomplete; Run says so.
+    """
+    return _page(request, "index.html", "events", load())
 
 
 @app.get("/setup", response_class=HTMLResponse)
@@ -136,6 +145,7 @@ def setup(request: Request) -> HTMLResponse:
             "extras": extras_status(),
             "extra_commands": extra_commands(),
             "catalog_steps_by_kind": catalog_steps_by_kind(),
+            "mapping_ready": mapping_ready(cfg),
         },
     )
 
@@ -249,6 +259,7 @@ def preferences(request: Request) -> HTMLResponse:
             "config": load(),
             "prefs": prefs_mod.load(),
             "screen": "preferences",
+            "mapping_ready": mapping_ready(),
         },
     )
 

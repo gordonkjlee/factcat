@@ -138,6 +138,17 @@ EVENTS_BREAKDOWN_PAIR = EventsSpec(
     top_n=8,
 )
 
+EVENTS_BREAKDOWN_TRIPLE = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=("country", "browser", "plan"),
+    breakdown_labels=("country", "browser", "plan"),
+    top_n=8,
+)
+
 EVENTS_WEEK = EventsSpec(
     table="events",
     entity="entity_id",
@@ -221,6 +232,7 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS_BREAKDOWN_APPROX, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_SUM_APPROX, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_PAIR, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_TRIPLE, dialect=dialect)
 
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"

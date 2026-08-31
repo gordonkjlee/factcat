@@ -93,9 +93,13 @@ print(events_sql(spec, dialect="bigquery"))
 ```
 
 On the Events chart, **Break down by** fills that expression (a column, or
-SQL). As-of, top N, and Show (other) are sugar; they do not replace it.
+SQL). **Add breakdown** adds a second or third; top N ranks the
+**combination** (not nested top-N per property). As-of, top N, and Show
+(other) are sugar; they do not replace the tuple. The chart legend joins
+labels with a middle dot (``US · Chrome``); the table and CSV keep one
+column per breakdown.
 
-Split a series by a caller expression. ``top_n`` (default 8) folds a long
+Split a series by caller expressions. ``top_n`` (default 8) folds a long
 tail into ``(other)``; set ``include_other=False`` to drop the tail instead.
 ``breakdown_at`` is ``rows`` (the value on the event), ``first``, or ``last``
 (one non-null value per entity). It does not replace the expression.
@@ -107,7 +111,7 @@ print(events_sql(EventsSpec(
     event_time="occurred_at",
     measure="uniques",
     where="event_name = 'paid'",
-    breakdowns=("country",),
+    breakdowns=("country", "browser"),
     breakdown_at="rows",
     top_n=8,
     include_other=True,
@@ -272,14 +276,17 @@ timestamp. Catalog lists load when you open a dropdown, not when you
 visit the page. **Save** writes `.factcat.json` and, if an event-name
 column is mapped, runs DISTINCT on the last 90 days and caches the names.
 It stays on Setup and shows **Saved**. Setup is a separate control at the
-bottom of the left rail, not an analysis. **Preferences** sits above it
-(wording, thousand/decimal separators, weekday/month display).
-Those follow the person in `~/.factcat/preferences.json`, not the project
-file.
+bottom of the left rail, not an analysis. **Events** stays reachable; until
+you Save a mapping it shows a prompt, Run is disabled, and Setup has a
+marker. Warehouse sign-in does not fill dataset, table, or grain.
+**Preferences** sits above Setup (wording, thousand/decimal separators,
+weekday/month display). Those follow the person in
+`~/.factcat/preferences.json`, not the project file.
 
 **BigQuery.** After the extra is present: `gcloud auth application-default login`
-and `gcloud config set project YOUR_GCP_PROJECT`. Billing project from ADC, then
-dataset → table (lists; greyed until the previous step is set). Location is
+and `gcloud config set project YOUR_GCP_PROJECT`. Billing project from ADC,
+then `GOOGLE_CLOUD_PROJECT`, then `gcloud config get-value project`. Dataset →
+table (lists; greyed until the previous step is set). Location is
 taken from the dataset (do not guess `US`). Advanced is only if you use a key
 file instead of ADC.
 

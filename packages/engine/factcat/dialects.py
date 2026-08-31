@@ -417,6 +417,18 @@ def json_value_sql(
     return expr
 
 
+def as_text(expr: str, dialect: str) -> str:
+    """Cast ``expr`` to a string for CONCAT overlay labels.
+
+    Overlay SQL is assembled after transpile, so this must be native.
+    """
+    if dialect == "bigquery":
+        return f"CAST({expr} AS STRING)"
+    if dialect == "clickhouse":
+        return f"toString({expr})"
+    return f"CAST({expr} AS VARCHAR)"
+
+
 def timestamp_at_date(
     date_sql: str, dialect: str, timezone: str, time_kind: str
 ) -> str:

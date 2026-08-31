@@ -29,7 +29,8 @@ You also need an **account identifier** and **user**. After sign-in,
 **Role** (optional; blank is the user's default) and **Compute warehouse**
 are lists, then **database → schema → table**. Catalog fields stay visible
 and greyed until the previous step is set (same as BigQuery dataset → table).
-Do not type those names.
+Do not type those names. Sign-in does not fill database, table, or grain;
+Events prompts until you Save a mapping.
 
 ## Table shape
 

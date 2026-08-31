@@ -9,6 +9,8 @@ the scan cap live on this class, not on ``Adapter``. Official
 from __future__ import annotations
 
 import importlib
+import os
+import subprocess
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
@@ -29,7 +31,7 @@ _EXTRA = "pip install factcat[bigquery]"
 
 def adc_quota_project() -> str:
     """Billing/quota project from ADC, or empty if ADC is missing."""
-    env = __import__("os").environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+    env = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
     try:
         google_auth = importlib.import_module("google.auth")
         creds, project = google_auth.default()
@@ -37,6 +39,48 @@ def adc_quota_project() -> str:
         return env
     quota = getattr(creds, "quota_project_id", None)
     return (quota or project or env or "").strip()
+
+
+def _cli_project_value(stdout: str) -> str:
+    lines = [ln.strip() for ln in (stdout or "").splitlines() if ln.strip()]
+    for line in reversed(lines):
+        lowered = line.lower()
+        if lowered in {"(unset)", "none"}:
+            return ""
+        if lowered.startswith("warning:") or lowered.startswith("your active"):
+            continue
+        return line
+    return ""
+
+
+def gcloud_config_project() -> str:
+    """Active gcloud CLI project, or empty if gcloud is missing or unset.
+
+    User ADC often has no ``quota_project_id``. ``gcloud config set project``
+    is a separate store from application-default credentials. Identity chrome
+    for Setup, not SQL generation, and not a live warehouse job.
+    """
+    env = os.environ.get("CLOUDSDK_CORE_PROJECT", "").strip()
+    if env:
+        return env
+    kwargs: dict[str, Any] = {
+        "capture_output": True,
+        "text": True,
+        "timeout": 5,
+        "check": False,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        completed = subprocess.run(
+            ["gcloud", "--quiet", "config", "get-value", "core/project"],
+            **kwargs,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return _cli_project_value(completed.stdout)
 
 
 def _load_google() -> tuple[Any, Any]:

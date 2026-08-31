@@ -6,9 +6,11 @@ runs it there. It does not ingest rows.
 ## Credentials
 
 `gcloud auth application-default login` unless you set a key file under
-Advanced. Billing project runs the job; **Project that holds the table**
-is only if the dataset is in another GCP project. Location is taken from
-the dataset.
+Advanced. Billing project runs the job; the field is pre-filled from ADC,
+then `GOOGLE_CLOUD_PROJECT`, then `gcloud config get-value project`.
+**Project that holds the table** is only if the dataset is in another GCP
+project. Dataset, table, entity id, and timestamp are not in that cache —
+pick them here. Location is taken from the dataset.
 
 Need BigQuery Job User on the billing project and Data Viewer on the
 dataset.

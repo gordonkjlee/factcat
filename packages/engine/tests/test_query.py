@@ -529,6 +529,61 @@ def test_breakdown_column_fills_expression():
     assert "APPROX_TOP_COUNT" in sql.upper()
 
 
+def test_two_breakdown_slots_fill_tuple():
+    spec = spec_from_form(
+        _form(
+            breakdowns=[
+                {"breakdown_column": "country"},
+                {"breakdown_column": "browser"},
+            ],
+            top_n=5,
+        )
+    )
+    assert spec.breakdowns == ("country", "browser")
+    assert spec.breakdown_labels == ("country", "browser")
+    sql = events_sql(spec, dialect="bigquery")
+    assert "fc_bd_1" in sql
+    assert "APPROX_TOP_COUNT" not in sql.upper()
+    assert "LIMIT" in sql.upper()
+
+
+def test_three_breakdown_slots_compile():
+    spec = spec_from_form(
+        _form(
+            breakdowns=[
+                {"column": "country"},
+                {"column": "browser"},
+                {"column": "plan"},
+            ]
+        )
+    )
+    assert spec.breakdowns == ("country", "browser", "plan")
+    sql = events_sql_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            breakdowns=[
+                {"column": "country"},
+                {"column": "browser"},
+                {"column": "plan"},
+            ],
+        )
+    )
+    assert "plan" in sql
+
+
+def test_empty_second_slot_is_one_breakdown():
+    spec = spec_from_form(
+        _form(
+            breakdowns=[
+                {"breakdown_column": "country"},
+                {"breakdown_column": ""},
+            ]
+        )
+    )
+    assert spec.breakdowns == ("country",)
+
+
 def test_snowflake_breakdown_uses_approx_top_k():
     spec = spec_from_form(
         _form(
@@ -1458,6 +1513,37 @@ def test_overlay_per_series_breakdown():
     assert "UNION ALL" in sql
     assert "CONCAT('started', ' · ', CAST(country AS STRING)) AS series" in sql
     assert "'completed' AS series" in sql
+
+
+def test_overlay_concat_all_breakdown_labels():
+    sql = events_sql_from_form(
+        _form(
+            event_column="event_name",
+            breakdowns=[
+                {"breakdown_column": "country"},
+                {"breakdown_column": "browser"},
+            ],
+            series=[{"event": "paid"}, {"event": "signup"}],
+        )
+    )
+    assert "UNION ALL" in sql
+    assert "CAST(country AS STRING)" in sql
+    assert "CAST(browser AS STRING)" in sql
+    assert ", country, browser," in sql.replace("\n", " ")
+
+
+def test_snowflake_overlay_cast_is_varchar():
+    sql = events_sql_from_form(
+        _form(
+            kind="snowflake",
+            table="ANALYTICS.MARTS.EVENTS",
+            event_column="event_name",
+            series=[{"event": "started"}, {"event": "completed"}],
+            breakdown_column="country",
+        )
+    )
+    assert "CAST(country AS VARCHAR)" in sql
+    assert "CAST(country AS STRING)" not in sql
 
 
 def test_series_measure_overrides_chart_measure():

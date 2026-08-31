@@ -80,10 +80,10 @@ def _rows(con, spec: EventsSpec) -> list[tuple]:
     out = []
     for row in raw:
         bucket = str(row[0])[:10]
-        if len(row) == 2:
-            out.append((bucket, float(row[1])))
-        else:
-            out.append((bucket, row[1], float(row[2])))
+        rest = list(row[1:])
+        value = float(rest[-1])
+        dims = rest[:-1]
+        out.append((bucket, *dims, value))
     return out
 
 
@@ -255,6 +255,112 @@ def test_top_n_must_be_positive():
             breakdowns=("country",),
             top_n=0,
         )
+
+
+# country × browser on one day. Counts: US/Chrome 5, US/Firefox 4,
+# UK/Chrome 3, UK/Firefox 2, DE/Chrome 1. Total 15.
+PAIR_HITS: list[tuple[str, str, str, str]] = []
+for n, country, browser in (
+    (5, "US", "Chrome"),
+    (4, "US", "Firefox"),
+    (3, "UK", "Chrome"),
+    (2, "UK", "Firefox"),
+    (1, "DE", "Chrome"),
+):
+    for i in range(n):
+        PAIR_HITS.append((f"{country}-{browser}-{i}", "2026-01-01", country, browser))
+
+
+@pytest.fixture()
+def pairs() -> duckdb.DuckDBPyConnection:
+    con = duckdb.connect()
+    con.execute(
+        "CREATE TABLE hits ("
+        "  entity_id VARCHAR,"
+        "  occurred_at DATE,"
+        "  country VARCHAR,"
+        "  browser VARCHAR"
+        ")"
+    )
+    con.executemany("INSERT INTO hits VALUES (?, ?, ?, ?)", PAIR_HITS)
+    return con
+
+
+def _pair_spec(**overrides) -> EventsSpec:
+    base = dict(
+        table="hits",
+        entity="entity_id",
+        event_time="occurred_at",
+        measure="total",
+        exact=True,
+        breakdowns=("country", "browser"),
+        breakdown_labels=("country", "browser"),
+    )
+    base.update(overrides)
+    return EventsSpec(**base)
+
+
+def test_two_breakdowns_pair_counts(pairs):
+    got = {
+        (country, browser): value
+        for _, country, browser, value in _rows(pairs, _pair_spec(top_n=8))
+    }
+    assert got == {
+        ("US", "Chrome"): 5.0,
+        ("US", "Firefox"): 4.0,
+        ("UK", "Chrome"): 3.0,
+        ("UK", "Firefox"): 2.0,
+        ("DE", "Chrome"): 1.0,
+    }
+    assert OTHER_LABEL not in {c for c, _ in got} | {b for _, b in got}
+
+
+def test_top_n_ranks_pairs_not_first_column(pairs):
+    """US is the top country (9) but DE/Chrome (1) is not a top-3 pair.
+
+    Nested top-N countries would still show DE. Pair ranking must not.
+    """
+    got = {
+        (country, browser): value
+        for _, country, browser, value in _rows(pairs, _pair_spec(top_n=3))
+    }
+    assert got == {
+        ("US", "Chrome"): 5.0,
+        ("US", "Firefox"): 4.0,
+        ("UK", "Chrome"): 3.0,
+        (OTHER_LABEL, OTHER_LABEL): 3.0,
+    }
+    assert ("DE", "Chrome") not in got
+    assert "DE" not in {c for c, _ in got}
+    assert sum(got.values()) == 15.0
+
+
+def test_pair_null_axis_stays_null(pairs):
+    pairs.execute("INSERT INTO hits VALUES ('N1', '2026-01-01', 'US', NULL)")
+    got = {
+        (country, browser): value
+        for _, country, browser, value in _rows(pairs, _pair_spec(top_n=8))
+    }
+    assert got[("US", None)] == 1.0
+    assert OTHER_LABEL not in {got_k for pair in got for got_k in pair}
+
+
+def test_three_breakdowns_compile():
+    spec = EventsSpec(
+        table="events",
+        entity="entity_id",
+        event_time="occurred_at",
+        measure="total",
+        exact=True,
+        breakdowns=("country", "browser", "plan"),
+        breakdown_labels=("country", "browser", "plan"),
+        top_n=8,
+    )
+    sql = events_sql(spec, dialect="duckdb")
+    assert "fc_bd_2" in sql
+    assert "plan" in sql
+    assert "APPROX_TOP" not in sql.upper()
+    assert "LIMIT" in sql.upper()
 
 
 def test_invalid_breakdown_at_is_rejected():

@@ -13,7 +13,7 @@ from factcat.warehouses import CAP_SCAN_CAP, capabilities
 from factcat.warehouses.bigquery import DEFAULT_MAXIMUM_BYTES_BILLED
 from factcat.warehouses.snowflake import passphrase_from_env
 from factcat._emit import transpile
-from factcat.dialects import json_value_sql, splice_placeholders
+from factcat.dialects import as_text, json_value_sql, splice_placeholders
 from factcat_app.config import WAREHOUSE_KINDS
 from .filters import (
     EXACT_STRING_OPS,
@@ -484,30 +484,63 @@ def _single_expr(raw: str, label: str) -> str:
     return expr
 
 
-def _breakdown_from_form(
-    form: dict[str, Any], *, unit: dict[str, Any] | None = None
-) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
-    """Fill ``breakdowns`` from a column, JSON key, or SQL expression. Expression wins."""
-    src: dict[str, Any] = form
-    if unit is not None and _bool(form, "breakdown_by_series"):
-        src = unit
-    expr = _single_expr(str(src.get("breakdown_expr") or ""), "breakdown expression")
-    column = (src.get("breakdown_column") or "").strip()
+def _breakdown_slot(
+    slot: dict[str, Any], dialect: str
+) -> tuple[str, str | None] | None:
+    """One Break down by slot. Expression wins. Empty is omitted."""
+    expr = _single_expr(str(slot.get("breakdown_expr") or slot.get("expr") or ""), "breakdown expression")
+    column = str(slot.get("breakdown_column") or slot.get("column") or "").strip()
     if expr:
-        return (expr,), None
+        return expr, None
     if not column:
-        return (), None
-    json_key = (src.get("breakdown_json_key") or "").strip()
+        return None
+    json_key = str(slot.get("breakdown_json_key") or slot.get("json_key") or "").strip()
     if json_key:
         extracted = _json_value_sql(
-            column, json_key, "breakdown", numeric=False, dialect=form_kind(form)
+            column, json_key, "breakdown", numeric=False, dialect=dialect
         )
         label = _json_label(json_key)
         if not _COLUMN.match(label):
             label = "json_key"
-        return (extracted,), (label,)
-    column = _ident_column(column, "breakdown")
-    return (column,), (column,)
+        return extracted, label
+    return _ident_column(column, "breakdown"), column
+
+
+def _breakdown_slot_dicts(src: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = src.get("breakdowns")
+    if isinstance(raw, list) and raw:
+        return [item for item in raw if isinstance(item, dict)][:BREAKDOWN_SLOT_CAP]
+    return [
+        {
+            "breakdown_column": src.get("breakdown_column") or "",
+            "breakdown_expr": src.get("breakdown_expr") or "",
+            "breakdown_json_key": src.get("breakdown_json_key") or "",
+        }
+    ]
+
+
+def _breakdown_from_form(
+    form: dict[str, Any], *, unit: dict[str, Any] | None = None
+) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
+    """Fill ``breakdowns`` from slots (column, JSON key, or SQL). Expression wins."""
+    src: dict[str, Any] = form
+    if unit is not None and _bool(form, "breakdown_by_series"):
+        src = unit
+    dialect = form_kind(form)
+    exprs: list[str] = []
+    labels: list[str | None] = []
+    for slot in _breakdown_slot_dicts(src):
+        parsed = _breakdown_slot(slot, dialect)
+        if parsed is None:
+            continue
+        expr, label = parsed
+        exprs.append(expr)
+        labels.append(label)
+    if not exprs:
+        return (), None
+    if any(lab is None for lab in labels):
+        return tuple(exprs), None
+    return tuple(exprs), tuple(str(lab) for lab in labels)
 
 
 def _of_from_form(form: dict[str, Any], *, measure: str) -> str:
@@ -1176,6 +1209,7 @@ def _filters_from_form(form: dict[str, Any]) -> str:
 
 
 SERIES_CAP = 8
+BREAKDOWN_SLOT_CAP = 3
 
 
 def _and_filters(
@@ -1357,19 +1391,27 @@ def _indent_sql(sql: str, n: int = 4) -> str:
     return "\n".join(pad + line if line else line for line in sql.splitlines())
 
 
-def _series_arm_sql(inner: str, spec, label: str, alias: str) -> str:
+def _series_arm_sql(
+    inner: str,
+    spec,
+    label: str,
+    alias: str,
+    dialect: str,
+    extra_cols: tuple[str, ...] = (),
+) -> str:
     """Wrap one Events aggregation so overlay UNION ALL has bucket, series, value."""
     quoted = _sql_string(label)
     body = _indent_sql(inner.rstrip(), 4)
     if spec.breakdowns:
-        bd = spec.bd_labels()[0]
-        series_expr = f"CONCAT({quoted}, ' · ', CAST({bd} AS STRING))"
+        parts = [quoted] + [as_text(lab, dialect) for lab in spec.bd_labels()]
+        series_expr = "CONCAT(" + ", ' · ', ".join(parts) + ")"
     else:
         series_expr = quoted
+    extra = "".join(f", {col}" for col in extra_cols)
     return (
         f"SELECT\n"
         f"  bucket,\n"
-        f"  {series_expr} AS series,\n"
+        f"  {series_expr} AS series{extra},\n"
         f"  value\n"
         f"FROM (\n{body}\n) AS {alias}"
     )
@@ -1380,14 +1422,24 @@ def events_sql_from_form(form: dict[str, Any]) -> str:
     dialect = form_kind(form)
     units = _series_units(form)
     if len(units) > 1:
+        specs = [spec_from_form(form, unit=unit) for unit in units]
+        label_sets = [spec.bd_labels() for spec in specs]
+        shared = (
+            label_sets[0]
+            if label_sets and label_sets[0] and all(s == label_sets[0] for s in label_sets)
+            else ()
+        )
         arms: list[str] = []
-        for i, unit in enumerate(units):
-            spec = spec_from_form(form, unit=unit)
+        for i, (unit, spec) in enumerate(zip(units, specs)):
             _pred, label = _unit_predicate(
                 unit, (form.get("event_column") or "").strip(), form
             )
             inner = events_sql(spec, dialect=dialect)
-            arms.append(_series_arm_sql(inner, spec, label, f"_fc_arm_{i}"))
+            arms.append(
+                _series_arm_sql(
+                    inner, spec, label, f"_fc_arm_{i}", dialect, extra_cols=shared
+                )
+            )
         sql = "\nUNION ALL\n".join(arms)
     elif len(units) == 1:
         sql = events_sql(spec_from_form(form, unit=units[0]), dialect=dialect)
