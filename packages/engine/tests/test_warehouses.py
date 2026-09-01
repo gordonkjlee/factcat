@@ -16,6 +16,7 @@ from factcat.warehouses import (
     Adapter,
     AdapterError,
     DryRunNotSupported,
+    is_missing_relation,
     QueryResult,
     capabilities,
     connect,
@@ -190,3 +191,18 @@ def test_google_is_optional_extra_not_a_core_dependency():
 def test_adapter_error_hierarchy():
     assert issubclass(DryRunNotSupported, AdapterError)
     assert inspect.isclass(Adapter)
+
+
+def test_is_missing_relation():
+    assert is_missing_relation(AdapterError("not found"))
+    assert is_missing_relation(
+        AdapterError("Not found: Table dest.analytics.fc_event_names")
+    )
+    assert is_missing_relation(
+        AdapterError("Object 'A.B.FC_EVENT_NAMES' does not exist or not authorized.")
+    )
+    assert not is_missing_relation(AdapterError("Access Denied"))
+    assert not is_missing_relation(
+        AdapterError("service-account JSON not found: /tmp/key.json")
+    )
+    assert is_missing_relation(AdapterError("nope", not_found=True))

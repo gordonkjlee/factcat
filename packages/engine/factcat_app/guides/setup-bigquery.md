@@ -17,7 +17,10 @@ dataset.
 
 **Dataset** and **table** are lists after the billing project is set.
 They stay visible and greyed until then, same as Snowflake's catalog
-chain.
+chain. Each list loads as soon as the previous field is set the first time
+(tables when the dataset is set, columns when the table is set), then
+is cached. Returning to Setup does not re-query. **Refresh** on a field
+reloads that list.
 
 ## Table shape
 
@@ -77,10 +80,14 @@ zone. Do not store local time in a TIMESTAMP and label it UTC.
 ## Event name
 
 Optional STRING column. Mapping persists as you pick fields; it does not query.
-Events **Refresh list** loads names for the event-name lookback on Setup
-(90 days by default; 0 is all time). That job does not use the scan cap.
-The filter isolates the timestamp column so a table partitioned on it can
-prune. Optional: allow Factcat to create and maintain tables in a
-project and dataset for better performance. First Refresh creates
-`fc_event_names` if it is missing; later Refresh reads that cache (lookback
-does not apply). Events then filters `event_name = '…'`.
+**Look back for event names** on this page (90 days by default; 0 is all
+time) is the window for the Events picker. That job does not use the scan
+cap. Events **Refresh event names** re-runs it; the chevron next to it raises the window. The filter isolates the timestamp column so a table
+partitioned on it can prune. Optional: allow Factcat to create and maintain
+tables in a project and dataset for better performance. First fetch creates
+`fc_event_names` if it is missing (materialized view, or a table if the
+source cannot back a view). Later Refresh reads the view, or rebuilds the
+table snapshot. The object stores a fingerprint of the mapped table and
+event-name column. Lookback does not apply (and is hidden here) while that
+dest is set. Catalog jobs do not use the scan cap. Events then filters
+`event_name = '…'`.

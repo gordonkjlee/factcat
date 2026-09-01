@@ -136,6 +136,20 @@
       border-radius: 0.25rem;
     }
     button.secondary { background: var(--fc-snow); color: var(--fc-ink); border: 1px solid var(--fc-line); }
+    button.linkish, .linkish {
+      margin: 0 0 0 0.5rem;
+      padding: 0;
+      background: none;
+      color: var(--fc-ochre-deep);
+      border: 0;
+      border-radius: 0;
+      font-size: 0.75rem;
+      font-weight: 400;
+      text-decoration: underline;
+      cursor: pointer;
+      vertical-align: baseline;
+    }
+    button.linkish:hover, .linkish:hover { color: var(--fc-ochre); }
     #error { color: var(--fc-alert); white-space: pre-wrap; font-size: 0.85rem; }
     .hint { display: block; font-weight: 400; color: var(--fc-slate); font-size: 0.7rem; margin: 0.15rem 0 0.35rem; }
     .loading {

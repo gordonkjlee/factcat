@@ -129,12 +129,23 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert 'href="/setup"' in res.text
     assert "rail-setup" in res.text
     assert "if (catalogProject()) loadDatasets()" not in res.text
+    assert "catalogArmed" in res.text
+    assert "catalogArmed && ready" in res.text
+    assert "function paintStep" in res.text
+    assert "persistCatalogLists" in res.text
+    assert "catalog-refresh" in res.text
+    assert "linkish catalog-refresh" in res.text
+    assert "function invalidateStep" in res.text
+    assert "invalidateStep(step.id)" in res.text
     assert 'addEventListener("mousedown"' in res.text
     assert ">Analysis<" not in res.text
     assert "Job scan cap" in res.text
     assert 'id="bytes_cap_gb"' in res.text
-    assert "Event name lookback" in res.text
+    assert "Look back for event names" in res.text
+    assert "Event name lookback" not in res.text
     assert 'id="catalog_lookback_days"' in res.text
+    assert 'id="catalog-lookback-wrap"' in res.text
+    assert "syncManagedChrome" in res.text
     assert "Factcat-managed tables" in res.text
     assert 'id="write_project"' in res.text
     assert 'id="write_dataset"' in res.text
@@ -357,10 +368,24 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Exact series labels" in res.text
     assert "hasBreakdown" in res.text
     assert "approx top-K" in res.text
-    assert "Refresh list" in res.text
+    assert "Creating event-name cache" in res.text
+    assert "Loading event names seen in the last " in res.text
+    assert "Loading event names from all time" in res.text
+    assert "This list is a snapshot" in res.text
     assert 'id="refresh-events"' in res.text
+    assert ">Refresh event names</button>" in res.text
+    assert "Refresh list of events" not in res.text
+    assert "Use the arrow to look further back" in res.text
     assert 'id="catalog_lookback_days"' in res.text
-    assert 'id="look-further"' in res.text
+    assert 'id="look-further"' not in res.text
+    assert "Not listed?" not in res.text
+    assert "Can't find an event?" not in res.text
+    assert "refresh-more" in res.text
+    assert "Look further back for event names" in res.text
+    assert "Look back 6 months" in res.text
+    assert "Look back 12 months" in res.text
+    assert 'id="find-event-panel"' in res.text
+    assert "catalog-lookback" not in res.text
     assert 'id="refresh-of"' in res.text
     assert 'id="refresh-columns"' in res.text
     assert "/static/catalog.js" in res.text
@@ -1392,15 +1417,28 @@ def _catalog_write_body():
 
 def test_event_values_write_cache_reads_existing(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    meta = {
+        "v": 1,
+        "table": "analytics.events",
+        "event_column": "event_name",
+        "kind": "materialized_view",
+    }
+    (tmp_path / "cfg.json").write_text(
+        json.dumps({"event_name_cache": meta}), encoding="utf-8"
+    )
     warehouse = MagicMock()
     warehouse.run.return_value = QueryResult(rows=[{"fc_value": "paid"}])
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
     client = TestClient(app)
-    res = client.post("/api/event_values", json=_catalog_write_body())
+    res = client.post(
+        "/api/event_values",
+        json={**_catalog_write_body(), "event_name_cache": meta},
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["values"] == ["paid"]
     assert body["cache"] == "cached"
+    assert body["kind"] == "materialized_view"
     assert warehouse.run.call_count == 1
     sql = warehouse.run.call_args.args[0].upper()
     assert "FC_EVENT_NAMES" in sql
@@ -1457,6 +1495,30 @@ def test_event_values_write_cache_falls_back_to_table(monkeypatch, tmp_path):
     body = res.json()
     assert body["values"] == ["opened"]
     assert body["cache"] == "table"
+
+
+def test_event_values_write_cache_permission_does_not_create(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    meta = {
+        "v": 1,
+        "table": "analytics.events",
+        "event_column": "event_name",
+        "kind": "materialized_view",
+    }
+    (tmp_path / "cfg.json").write_text(
+        json.dumps({"event_name_cache": meta}), encoding="utf-8"
+    )
+    warehouse = MagicMock()
+    warehouse.run.side_effect = AdapterError("Access Denied")
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post(
+        "/api/event_values",
+        json={**_catalog_write_body(), "event_name_cache": meta},
+    )
+    assert res.status_code == 400
+    assert "CREATE" not in warehouse.run.call_args.args[0].upper()
+    assert warehouse.run.call_count == 1
 
 
 def test_event_values_write_cache_falls_back_to_distinct(monkeypatch, tmp_path):

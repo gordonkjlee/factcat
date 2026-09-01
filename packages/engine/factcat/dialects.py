@@ -471,17 +471,30 @@ def timestamp_at_date(
 
 
 def create_or_replace_relation(
-    dest: str, select_sql: str, dialect: str, *, materialized: bool
+    dest: str,
+    select_sql: str,
+    dialect: str,
+    *,
+    materialized: bool,
+    comment: str | None = None,
 ) -> str:
     """CREATE OR REPLACE a cache relation whose body is ``select_sql``.
 
-    BigQuery and Snowflake share this spelling. ``materialized`` is a
+    BigQuery and Snowflake share the CREATE spelling. ``materialized`` is a
     materialized view the warehouse can refresh; otherwise a table.
-    ``dialect`` is accepted so a later warehouse can branch.
+    ``comment`` is the cache fingerprint (JSON), stored as a BigQuery
+    description or a Snowflake COMMENT.
     """
-    _ = dialect
     kind = "MATERIALIZED VIEW" if materialized else "TABLE"
-    return f"CREATE OR REPLACE {kind} {dest} AS {select_sql}"
+    head = f"CREATE OR REPLACE {kind} {dest}"
+    note = (comment or "").strip()
+    if note:
+        safe = note.replace("'", "''")
+        if dialect == "snowflake":
+            head += f" COMMENT = '{safe}'"
+        else:
+            head += f" OPTIONS(description='{safe}')"
+    return f"{head} AS {select_sql}"
 
 
 def _civil_datetime(expr: str, dialect: str, timezone: str, time_kind: str) -> str:

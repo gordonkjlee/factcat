@@ -29,6 +29,9 @@ You also need an **account identifier** and **user**. After sign-in,
 **Role** (optional; blank is the user's default) and **Compute warehouse**
 are lists, then **database → schema → table**. Catalog fields stay visible
 and greyed until the previous step is set (same as BigQuery dataset → table).
+Each list loads as soon as the previous field is set the first time
+(database → schema → table → columns), then is cached. Returning to Setup
+does not re-query. **Refresh** on a field reloads that list.
 Do not type those names. Sign-in does not fill database, table, or grain;
 mapping persists as you pick fields. Events prompts until the mapping is ready.
 
@@ -77,10 +80,14 @@ a “week”.
 ## Event name
 
 Optional string column. Mapping persists as you pick fields; it does not query.
-Events **Refresh list** loads names for the event-name lookback on Setup
-(90 days by default; 0 is all time). The filter isolates the timestamp
-column so Snowflake can prune micro-partitions. Optional: allow Factcat
-to create and maintain tables in a database and schema for better
-performance. First Refresh creates `fc_event_names` if it is missing;
-later Refresh reads that cache (lookback does not apply). Events then
-filters `event_name = '…'`.
+**Look back for event names** on this page (90 days by default; 0 is all
+time) is the window for the Events picker. That job does not use the scan
+cap. Events **Refresh event names** re-runs it; the chevron next to it raises the window. The filter isolates the timestamp column so Snowflake
+can prune micro-partitions. Optional: allow Factcat to create and maintain
+tables in a database and schema for better performance. First fetch creates
+`fc_event_names` if it is missing (materialized view, or a table if the
+source cannot back a view). Later Refresh reads the view, or rebuilds the
+table snapshot. The object stores a fingerprint of the mapped table and
+event-name column. Lookback does not apply (and is hidden here) while that
+dest is set. Catalog jobs do not use the scan cap. Events then filters
+`event_name = '…'`.

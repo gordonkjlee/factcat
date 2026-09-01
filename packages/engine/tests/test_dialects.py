@@ -396,6 +396,22 @@ def test_create_or_replace_relation_spelling():
     assert mv.startswith("CREATE OR REPLACE MATERIALIZED VIEW")
     assert table.startswith("CREATE OR REPLACE TABLE")
     assert "GROUP BY 1" in mv and "GROUP BY 1" in table
+    noted = create_or_replace_relation(
+        "d.fc_event_names",
+        select,
+        "bigquery",
+        materialized=True,
+        comment='{"event_column":"event_name","table":"analytics.events","v":1}',
+    )
+    assert "OPTIONS(description=" in noted
+    sf_noted = create_or_replace_relation(
+        "d.fc_event_names",
+        select,
+        "snowflake",
+        materialized=False,
+        comment='{"v":1}',
+    )
+    assert "COMMENT =" in sf_noted
 
 
 def test_bigquery_civil_datetime_casts_to_date():
