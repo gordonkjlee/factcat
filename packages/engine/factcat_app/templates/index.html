@@ -368,6 +368,14 @@
       padding: 0;
       border-radius: 0.25rem;
     }
+    /* Export chrome is always visible; no content = disabled, never hidden. */
+    .icon-btn:disabled { color: var(--fc-slate); }
+    .icon-btn:disabled:hover { color: var(--fc-slate); border-color: var(--fc-line); }
+    .format-pop.disabled > summary {
+      opacity: 0.55;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
     .format-pop[open] > .export-body {
       position: absolute; right: 0; top: calc(100% + 0.2rem); z-index: 8;
       background: var(--fc-snow); border: 1px solid var(--fc-line); padding: 0.25rem;
@@ -999,10 +1007,10 @@
               </label>
             </div>
           </details>
-          <button type="button" id="copy-chart" class="icon-btn" hidden title="Copy chart" aria-label="Copy chart">
+          <button type="button" id="copy-chart" class="icon-btn" disabled title="Copy chart" aria-label="Copy chart">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
-          <details class="format-pop" id="chart-export" hidden>
+          <details class="format-pop disabled" id="chart-export">
             <summary class="icon-btn" title="Download chart" aria-label="Download chart">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 19h16"/></svg>
             </summary>
@@ -1032,10 +1040,10 @@
         </button>
         <h2>Table</h2>
         <span class="pane-actions">
-          <button type="button" id="copy-table" class="icon-btn" hidden title="Copy table" aria-label="Copy table">
+          <button type="button" id="copy-table" class="icon-btn" disabled title="Copy table" aria-label="Copy table">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
-          <details class="format-pop" id="table-export" hidden>
+          <details class="format-pop disabled" id="table-export">
             <summary class="icon-btn" title="Download table" aria-label="Download table">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 19h16"/></svg>
             </summary>
@@ -1071,10 +1079,10 @@
         </button>
         <h2>SQL</h2>
         <span class="pane-actions">
-          <button type="button" id="copy-sql" class="icon-btn" hidden title="Copy SQL" aria-label="Copy SQL">
+          <button type="button" id="copy-sql" class="icon-btn" disabled title="Copy SQL" aria-label="Copy SQL">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
-          <details class="format-pop" id="sql-export" hidden>
+          <details class="format-pop disabled" id="sql-export">
             <summary class="icon-btn" title="Download SQL" aria-label="Download SQL">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 19h16"/></svg>
             </summary>
@@ -3489,19 +3497,23 @@ async function runEstimate() {
     wrap.hidden = true;
   }
 }
+function setExportEnabled(copyId, popId, on) {
+  document.getElementById(copyId).disabled = !on;
+  const pop = document.getElementById(popId);
+  pop.classList.toggle("disabled", !on);
+  if (!on) pop.removeAttribute("open");
+}
 function showSql(text) {
   const sqlEl = document.getElementById("sql");
   if (!text) {
     sqlEl.textContent = "SQL updates as you change the form.";
     sqlEl.classList.add("empty");
-    document.getElementById("copy-sql").hidden = true;
-    document.getElementById("sql-export").hidden = true;
+    setExportEnabled("copy-sql", "sql-export", false);
     return;
   }
   sqlEl.textContent = text;
   sqlEl.classList.remove("empty");
-  document.getElementById("copy-sql").hidden = false;
-  document.getElementById("sql-export").hidden = false;
+  setExportEnabled("copy-sql", "sql-export", true);
 }
 let sqlGen = 0;
 async function compileSql() {
@@ -3801,8 +3813,7 @@ function setTableActions(mode) {
   const copyBtn = document.getElementById("copy-table");
   const exportPop = document.getElementById("table-export");
   const exportBtn = exportPop.querySelector("summary");
-  copyBtn.hidden = false;
-  exportPop.hidden = false;
+  setExportEnabled("copy-table", "table-export", true);
   if (mode === "error") {
     copyBtn.title = "Copy error";
     copyBtn.setAttribute("aria-label", "Copy error");
@@ -4258,15 +4269,13 @@ function drawChart() {
   if (!tableRows.length) {
     if (catKind !== "fail" && catKind !== "running") setChartEmpty("wait");
     ctx.hidden = true;
-    copyBtn.hidden = true;
-    pngBtn.hidden = true;
+    setExportEnabled("copy-chart", "chart-export", false);
     if (chart) { chart.destroy(); chart = null; }
     return;
   }
   setChartEmpty("none");
   ctx.hidden = false;
-  copyBtn.hidden = false;
-  pngBtn.hidden = false;
+  setExportEnabled("copy-chart", "chart-export", true);
   const shown = tableRows;
   const names = seriesNames();
   const multi = names.length > 1 || (names.length === 1 && names[0] !== "");
@@ -4521,8 +4530,7 @@ form.addEventListener("submit", async (e) => {
       }
       document.getElementById("chart").hidden = true;
       setChartEmpty("fail");
-      document.getElementById("copy-chart").hidden = true;
-      document.getElementById("chart-export").hidden = true;
+      setExportEnabled("copy-chart", "chart-export", false);
       showLimitNote(false, 0);
       runStatus.textContent = "";
       return;

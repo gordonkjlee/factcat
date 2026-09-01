@@ -327,6 +327,12 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "exportSlug" in res.text
     assert ".pane-actions button.icon-btn," in res.text
     assert ".pane-actions .format-pop > summary.icon-btn {" in res.text
+    assert 'id="copy-chart" class="icon-btn" disabled' in res.text
+    assert 'id="copy-table" class="icon-btn" disabled' in res.text
+    assert 'id="copy-sql" class="icon-btn" disabled' in res.text
+    assert res.text.count('class="format-pop disabled"') == 3
+    assert "setExportEnabled" in res.text
+    assert res.headers.get("cache-control") == "no-store"
     assert 'id="chart_type"' in res.text
     assert "Labels" in res.text
     assert 'id="chart-title"' in res.text
@@ -2057,6 +2063,17 @@ def test_layout_state_roundtrips(monkeypatch, tmp_path):
     assert "--fc-chart-px: 260px" in html
     assert 'class="pane pane-chart closed"' in html
     assert 'class="pane pane-sql closed"' not in html
+
+
+def test_html_is_never_cached_but_static_is(monkeypatch, tmp_path):
+    """A stale tab showing last week's template is the recurring local-app
+    failure; HTML must be no-store while static files stay cacheable."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr("factcat_app.main.bootstrap_project", lambda: "p")
+    client = TestClient(app)
+    for path in ("/events", "/setup", "/preferences"):
+        assert client.get(path).headers.get("cache-control") == "no-store", path
+    assert client.get("/static/save.js").headers.get("cache-control") != "no-store"
 
 
 def test_blocking_endpoints_use_threadpool():

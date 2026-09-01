@@ -56,6 +56,18 @@ from .query import (
 )
 
 APP_DIR = Path(__file__).resolve().parent
+
+
+def _install_no_store(application: FastAPI) -> None:
+    """HTML is rendered per request and must never be cached: a stale tab
+    showing last week's template is the recurring local-app failure."""
+
+    @application.middleware("http")
+    async def no_store_html(request: Request, call_next):
+        response = await call_next(request)
+        if str(response.headers.get("content-type", "")).startswith("text/html"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 STATIC_DIR = APP_DIR / "static"
 DOCS_DIR = APP_DIR / "guides"
 SETUP_DOCS = {kind: DOCS_DIR / f"setup-{kind}.md" for kind in ADAPTERS}
@@ -71,6 +83,7 @@ def setup_docs_html(kind: str = "bigquery") -> str:
     return markdown.markdown(text, extensions=["fenced_code", "nl2br", "tables"])
 
 app = FastAPI(title="Factcat")
+_install_no_store(app)
 
 
 @app.get("/favicon.ico")
