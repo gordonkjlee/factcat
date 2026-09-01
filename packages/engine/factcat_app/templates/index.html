@@ -368,6 +368,9 @@
       padding: 0;
       border-radius: 0.25rem;
     }
+    /* The global `details` rule adds margin-top: 0.75rem; inside a centred
+       flex row that rides the popover 6px below its neighbours. */
+    .pane-actions details { margin: 0; }
     /* Export chrome is always visible; no content = disabled, never hidden. */
     .icon-btn:disabled { color: var(--fc-slate); }
     .icon-btn:disabled:hover { color: var(--fc-slate); border-color: var(--fc-line); }
