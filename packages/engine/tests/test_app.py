@@ -338,6 +338,11 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "setPaneOpen" in res.text
     assert "bindDivider" in res.text
     assert "position: sticky" in res.text
+    assert "col-flyout" in res.text
+    assert 'id="config-collapse"' in res.text
+    assert 'id="config-default"' in res.text
+    assert 'id="config-wide"' in res.text
+    assert "Drag to resize" not in res.text
     assert "setConfigCollapsed" in res.text
     assert "layout_config_px" in res.text
     assert "layout_chart_px" in res.text
@@ -566,6 +571,7 @@ def test_run_builds_spec_and_calls_adapter(monkeypatch, tmp_path):
     sql = warehouse.run.call_args.args[0]
     compact = " ".join(sql.split()).upper()
     assert "LIMIT 1000000" in compact
+    assert "-- safety cap, not meant to be hit" in sql
     assert "ORDER BY CAST(BUCKET AS DATE) DESC" in compact
     assert "account_id" in sql
     assert "user_id" not in sql
