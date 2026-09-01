@@ -2432,6 +2432,111 @@ def test_breakdown_fill_from_expr_wins_over_event():
     assert bd.fill_from == "source = 'billing'"
 
 
+def test_fill_from_charted_events_sentinel():
+    """The Charted-events sugar fills the predicate with every charted
+    event name — one stream for every overlay arm."""
+    form = _form(
+        event_column="event_name",
+        series=[
+            {"event": "login", "filters": []},
+            {
+                "kind": "any_of",
+                "members": [
+                    {"event": "signup", "filters": []},
+                    {"event": "paid", "filters": []},
+                ],
+            },
+        ],
+        breakdowns=[
+            {
+                "breakdown_column": "plan",
+                "value_at": "event",
+                "if_missing": "fill",
+                "fill_from_event": "__charted__",
+            }
+        ],
+    )
+    bd = spec_from_form(form, unit=form["series"][0]).breakdowns[0]
+    assert bd.fill_from == "event_name IN ('login', 'signup', 'paid')"
+    assert bd.own_value_first is True
+    other_arm = spec_from_form(form, unit=form["series"][1]).breakdowns[0]
+    assert other_arm.fill_from == bd.fill_from
+
+
+def test_fill_from_series_sentinel_is_per_card_only_in_series_mode():
+    """This-series' fills resolve against the card in per-series mode; a
+    chart-wide slot carrying the stale sentinel degrades to charted."""
+    series = [
+        {
+            "event": "login",
+            "filters": [],
+            "breakdowns": [
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "event",
+                    "if_missing": "fill",
+                    "fill_from_event": "__series__",
+                }
+            ],
+        },
+        {
+            "kind": "any_of",
+            "members": [
+                {"event": "signup", "filters": []},
+                {"event": "paid", "filters": []},
+            ],
+            "breakdowns": [
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "event",
+                    "if_missing": "fill",
+                    "fill_from_event": "__series__",
+                }
+            ],
+        },
+    ]
+    form = _form(
+        event_column="event_name", series=series, breakdown_by_series=True
+    )
+    first = spec_from_form(form, unit=series[0]).breakdowns[0]
+    assert first.fill_from == "event_name = 'login'"
+    second = spec_from_form(form, unit=series[1]).breakdowns[0]
+    assert second.fill_from == "event_name IN ('signup', 'paid')"
+    # Chart-wide mode: the same sentinel must NOT become arm-specific.
+    wide = _form(
+        event_column="event_name",
+        series=[
+            {"event": "login", "filters": []},
+            {"event": "signup", "filters": []},
+        ],
+        breakdowns=[
+            {
+                "breakdown_column": "plan",
+                "value_at": "event",
+                "if_missing": "fill",
+                "fill_from_event": "__series__",
+            }
+        ],
+    )
+    arm = spec_from_form(wide, unit=wide["series"][0]).breakdowns[0]
+    assert arm.fill_from == "event_name IN ('login', 'signup')"
+
+
+def test_fill_from_sentinel_requires_event_column():
+    with pytest.raises(ValueError, match="event column"):
+        spec_from_form(
+            _form(
+                breakdowns=[
+                    {
+                        "breakdown_column": "plan",
+                        "value_at": "latest_record",
+                        "fill_from_event": "__charted__",
+                    }
+                ]
+            )
+        )
+
+
 def test_breakdown_fill_from_event_requires_event_column():
     with pytest.raises(ValueError, match="event column"):
         spec_from_form(

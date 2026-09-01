@@ -301,6 +301,11 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "bd-ever-note" not in res.text
     assert "All history is" not in res.text
     assert "bd-value-pair" in res.text
+    assert '"bd_at_first": "first ever"' in res.text
+    assert '"bd_at_latest": "latest ever"' in res.text
+    assert '"bd_fill_charted": "Charted events"' in res.text
+    assert "__charted__" in res.text
+    assert "__series__" in res.text
     assert "IGNORE NULLS" not in res.text
     assert 'id="bd-null-nudge"' in res.text
     assert "Use last known at the event" in res.text
@@ -1969,8 +1974,10 @@ def test_events_sql_vocab(monkeypatch, tmp_path):
     # Value-semantics chrome folds per the CHROME table; nothing names a
     # SQL construct the emitter does not produce.
     assert '"bd_at_event": "each row"' in html
-    assert '"bd_at_first": "first non-null"' in html
-    assert '"bd_at_latest": "last non-null"' in html
+    assert '"bd_at_first": "first non-null ever"' in html
+    assert '"bd_at_latest": "last non-null ever"' in html
+    assert '"bd_fill_charted": "charted events"' in html
+    assert '"bd_fill_series": "this series"' in html
     assert "IGNORE NULLS" not in html
     assert "COUNT(*)" in html
     assert "COUNT(DISTINCT id)" in html

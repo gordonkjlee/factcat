@@ -739,8 +739,47 @@ _LEGACY_VALUE_AT = {
 }
 
 
-def _slot_fill_from(slot: dict[str, Any], form: dict[str, Any]) -> str | None:
-    """Which rows may stamp a value: an event pick, or a SQL predicate."""
+# Fill-from sugar sentinels the select can carry instead of an event name.
+FILL_FROM_CHARTED = "__charted__"
+FILL_FROM_SERIES = "__series__"
+
+
+def _unit_event_names(unit: dict[str, Any]) -> list[str]:
+    members = unit.get("members") if unit.get("kind") == "any_of" else None
+    if members is None and "any_of" in unit:
+        members = unit.get("any_of")
+    if isinstance(members, list):
+        return [
+            str(m.get("event")).strip()
+            for m in members
+            if isinstance(m, dict) and str(m.get("event") or "").strip()
+        ]
+    event = str(unit.get("event") or "").strip()
+    return [event] if event else []
+
+
+def _charted_event_names(form: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for unit in _series_units(form):
+        for name in _unit_event_names(unit):
+            if name not in names:
+                names.append(name)
+    if not names:
+        names = _event_names_from_form(form)
+    return names
+
+
+def _slot_fill_from(
+    slot: dict[str, Any],
+    form: dict[str, Any],
+    series_unit: dict[str, Any] | None = None,
+) -> str | None:
+    """Which rows may stamp a value: an event pick, a sugar sentinel
+    (charted events / this series' events), or a SQL predicate.
+
+    Event names only — series property filters never narrow the stamp
+    stream, and the date range never applies to it.
+    """
     expr = _single_expr(str(slot.get("fill_from_expr") or ""), "fill from")
     if expr:
         return expr
@@ -750,6 +789,20 @@ def _slot_fill_from(slot: dict[str, Any], form: dict[str, Any]) -> str | None:
     event_column = (form.get("event_column") or "").strip()
     if not event_column:
         raise ValueError("Fill from an event requires an event column")
+    if event in (FILL_FROM_CHARTED, FILL_FROM_SERIES):
+        # "This series' events" only means something when the slot rides
+        # a series card; a stale sentinel on a chart-wide slot degrades
+        # to the charted set rather than failing the run.
+        names: list[str] = []
+        if event == FILL_FROM_SERIES and series_unit is not None:
+            names = _unit_event_names(series_unit)
+        if not names:
+            names = _charted_event_names(form)
+        if not names:
+            raise ValueError(
+                "Fill from charted events needs a charted event name"
+            )
+        return _event_names_clause(event_column, names)
     return _event_names_clause(event_column, [event])
 
 
@@ -758,6 +811,7 @@ def _slot_breakdown(
     slot: dict[str, Any],
     form: dict[str, Any],
     anchors: tuple[str, str | None],
+    series_unit: dict[str, Any] | None = None,
 ) -> str | Breakdown:
     """Map (Value at × If missing × Fill from) onto the library config.
 
@@ -785,7 +839,7 @@ def _slot_breakdown(
         # not even parsed — a stale fill_from_event must never fail a run
         # the code path is about to discard.
         return expr
-    fill_from = _slot_fill_from(slot, form)
+    fill_from = _slot_fill_from(slot, form, series_unit)
     if value_at == "event":
         # The app's contract is own-value-first: "Value at: each event"
         # stays literally true even when Fill from names an authoritative
@@ -851,7 +905,8 @@ def _breakdown_from_form(
     clauses, converted to the instant type.
     """
     src: dict[str, Any] = form
-    if unit is not None and _bool(form, "breakdown_by_series"):
+    per_series = unit is not None and _bool(form, "breakdown_by_series")
+    if per_series:
         src = unit
     dialect = form_kind(form)
     entries: list[str | Breakdown] = []
@@ -868,7 +923,14 @@ def _breakdown_from_form(
                 _anchor_rhs(start, form),
                 _anchor_rhs(end, form) if end is not None else None,
             )
-        entries.append(_slot_breakdown(expr, slot, form, anchors))
+        # "This series' events" resolves against the card only in
+        # per-series mode — a chart-wide overlay arm must not get an
+        # arm-specific stamp stream (one legend label, one meaning).
+        entries.append(
+            _slot_breakdown(
+                expr, slot, form, anchors, unit if per_series else None
+            )
+        )
         labels.append(label)
     if not entries:
         return (), None

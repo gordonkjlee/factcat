@@ -508,7 +508,15 @@
       margin: 0;
       flex: 0 0 auto;
     }
-    #breakdown-more .breakdown-slot { margin-top: 0.35rem; }
+    /* Same card surface as .event-card (border/background/padding values
+       reused verbatim); nested series slots take the .event-group-members
+       .event-card snow background, the shipped card-in-card treatment. */
+    #breakdown-chart .breakdown-slot, .series-bd-slot {
+      border: 1px solid var(--fc-line); background: var(--fc-paper);
+      padding: 0.5rem 0.55rem 0.4rem; margin: 0 0 0.5rem;
+      min-width: 0;
+    }
+    .series-bd-slot { background: var(--fc-snow); margin: 0 0 0.35rem; }
     .bd-value-controls { margin-top: 0.3rem; }
     .bd-value-controls[hidden], .bd-fill-wrap[hidden],
     .bd-fill-expr-wrap[hidden], .bd-value-pair[hidden],
@@ -543,7 +551,6 @@
     .bd-fill-wrap .bd-fill-expr-wrap input { flex: 0 0 auto; width: 100%; }
     #bd-null-nudge { margin-top: 0.35rem; }
     #bd-null-nudge .linkish { margin-left: 0; }
-    .series-bd-slot { margin-top: 0.35rem; }
     .series-bd .remove-breakdown { margin-left: 0.4rem; }
     #of-wrap[hidden] { display: none !important; }
     #events-band { margin: 0 0 1rem; }
@@ -1694,26 +1701,37 @@ function paintIfMissingSelect(sel, current) {
     });
   sel.value = current === "fill" ? "fill" : "null";
 }
+const FILL_CHARTED = "__charted__";
+const FILL_SERIES = "__series__";
+const FILL_CHARTED_TITLE = "Rows with any event name charted here may supply the value; series filters do not narrow it. The event's own value still wins.";
+const FILL_SERIES_TITLE = "Rows with this series' event name(s) may supply the value. The event's own value still wins.";
 function paintFillEventSelect(sel, current) {
   const cur = current !== undefined ? current : sel.value;
   sel.innerHTML = "";
-  const any = document.createElement("option");
-  any.value = "";
-  any.textContent = t("bd_fill_any");
-  any.title = FILL_FROM_TITLE;
-  sel.appendChild(any);
-  [...eventNameCache].sort((a, b) => String(a).localeCompare(String(b))).forEach((name) => {
+  const add = (value, label, title) => {
     const o = document.createElement("option");
-    o.value = name;
-    o.textContent = name;
+    o.value = value;
+    o.textContent = label;
+    if (title) o.title = title;
     sel.appendChild(o);
+  };
+  add("", t("bd_fill_any"), FILL_FROM_TITLE);
+  // Sentinels the backend interprets: series → that card's event names,
+  // charted → every charted name (a chart-wide "__series__" falls back
+  // to charted server-side).
+  if (sel.closest(".series-bd")) add(FILL_SERIES, t("bd_fill_series"), FILL_SERIES_TITLE);
+  add(FILL_CHARTED, t("bd_fill_charted"), FILL_CHARTED_TITLE);
+  [...eventNameCache].sort((a, b) => String(a).localeCompare(String(b))).forEach((name) => {
+    add(name, name);
   });
-  const custom = document.createElement("option");
-  custom.value = CUSTOM_BREAKDOWN;
-  custom.textContent = t("sql_expr_ellipsis");
-  sel.appendChild(custom);
-  if (cur && cur !== CUSTOM_BREAKDOWN) ensureOption(sel, cur);
-  sel.value = cur || "";
+  add(CUSTOM_BREAKDOWN, t("sql_expr_ellipsis"));
+  // A stale series sentinel restored onto a chart-wide slot would render
+  // its raw value via ensureOption; coerce it to charted, matching the
+  // backend's degradation.
+  const fixed =
+    cur === FILL_SERIES && !sel.closest(".series-bd") ? FILL_CHARTED : cur;
+  if (fixed && fixed !== CUSTOM_BREAKDOWN) ensureOption(sel, fixed);
+  sel.value = fixed || "";
 }
 function slotColumnValue(slotEl) {
   const sel = slotEl.querySelector(".bd-column, .series-bd-column") || breakdownColumnEl;
