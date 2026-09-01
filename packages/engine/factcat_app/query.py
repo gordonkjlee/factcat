@@ -780,25 +780,39 @@ def _slot_breakdown(
     missing = missing or "null"
     if missing not in ("null", "fill"):
         raise ValueError("if_missing must be null or fill")
+    if value_at == "event" and missing == "null":
+        # The shipped default. Fill from is hidden chrome here, so it is
+        # not even parsed — a stale fill_from_event must never fail a run
+        # the code path is about to discard.
+        return expr
     fill_from = _slot_fill_from(slot, form)
     if value_at == "event":
-        if missing == "fill":
-            return Breakdown(expr, at="carried", fill_from=fill_from)
-        return expr  # the shipped default; Fill from is hidden chrome here
+        return Breakdown(expr, at="carried", fill_from=fill_from)
     if value_at == "first_record":
         return Breakdown(expr, at="first", fill_from=fill_from)
     if value_at == "latest_record":
         return Breakdown(expr, at="last", fill_from=fill_from)
     start_anchor, end_anchor = anchors
-    until = start_anchor if value_at == "range_start" else end_anchor
-    if until is None:
+    if value_at == "range_start":
+        # The start boundary is inside the window: inclusive until.
+        return Breakdown(
+            expr,
+            at="last",
+            until=start_anchor,
+            fill_from=fill_from,
+            backfill=missing == "fill",
+        )
+    if end_anchor is None:
         # The window runs to now: "at range end" is the latest record,
         # and there is no later stamp for If-missing to fill from.
         return Breakdown(expr, at="last", fill_from=fill_from)
+    # The end boundary is EXCLUSIVE (the window is `< end`): strict
+    # before, so a stamp at exactly that instant stays outside the
+    # window it closes and "never reads past the range" stays true.
     return Breakdown(
         expr,
         at="last",
-        until=until,
+        before=end_anchor,
         fill_from=fill_from,
         backfill=missing == "fill",
     )

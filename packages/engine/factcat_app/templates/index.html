@@ -511,18 +511,30 @@
     #breakdown-more .breakdown-slot { margin-top: 0.35rem; }
     .bd-value-controls { margin-top: 0.3rem; }
     .bd-value-controls[hidden], .bd-fill-wrap[hidden],
-    .bd-fill-expr-wrap[hidden], #bd-null-nudge[hidden] { display: none !important; }
+    .bd-fill-expr-wrap[hidden], .bd-ever-note[hidden],
+    #bd-null-nudge[hidden] { display: none !important; }
     .bd-value-row {
-      display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center;
+      display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: flex-end;
     }
-    .bd-value-row label, .bd-fill-wrap > label {
-      margin: 0; font-size: 0.7rem; flex: 0 0 auto;
+    .bd-value-pair {
+      display: flex; flex-direction: column; flex: 1 1 9rem; min-width: 7rem;
     }
-    .bd-value-row select { width: auto; flex: 1 1 6rem; font-size: 0.75rem; margin: 0; }
+    /* Two-class chains so these beat .series-bd label (0,1,1, later in the
+       file); descendant (not >) so the SQL-expression label inside
+       .bd-fill-expr-wrap is owned here too. */
+    .bd-value-controls .bd-value-pair label,
+    .bd-value-controls .bd-fill-wrap label,
+    .bd-value-controls .bd-fill-expr-wrap label {
+      margin: 0; font-size: 0.7rem; font-weight: 600;
+    }
+    .bd-value-pair select { width: auto; font-size: 0.75rem; margin: 0; }
     .bd-fill-wrap { margin-top: 0.3rem; display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
-    .bd-fill-wrap select { width: auto; flex: 1 1 8rem; font-size: 0.75rem; margin: 0; }
+    .bd-fill-wrap select, .bd-fill-wrap input {
+      width: auto; flex: 1 1 8rem; font-size: 0.75rem; margin: 0;
+    }
     .bd-fill-expr-wrap { flex: 1 1 100%; }
     #bd-null-nudge { margin-top: 0.35rem; }
+    #bd-null-nudge .linkish { margin-left: 0; }
     .series-bd-slot { margin-top: 0.35rem; }
     .series-bd .remove-breakdown { margin-left: 0.4rem; }
     #of-wrap[hidden] { display: none !important; }
@@ -1617,19 +1629,35 @@ function valueControlsHtml() {
   return (
     '<div class="bd-value-controls" hidden>'
     + '<div class="bd-value-row">'
+    + '<div class="bd-value-pair">'
     + "<label>" + tHtml("bd_value_at") + "</label>"
-    + '<select class="bd-value-at" aria-label="' + t("bd_value_at") + '"></select>'
-    + "<label>" + tHtml("bd_if_missing") + "</label>"
-    + '<select class="bd-if-missing" aria-label="' + t("bd_if_missing") + '"></select>'
+    + '<select class="bd-value-at"></select>'
     + "</div>"
+    + '<div class="bd-value-pair">'
+    + "<label>" + tHtml("bd_if_missing") + "</label>"
+    + '<select class="bd-if-missing"></select>'
+    + "</div>"
+    + "</div>"
+    + '<span class="hint bd-ever-note" hidden>All history is searched — nothing further to fill from.</span>'
     + '<div class="bd-fill-wrap" hidden>'
     + "<label>" + tHtml("bd_fill_from") + "</label>"
-    + '<select class="bd-fill-event" aria-label="' + t("bd_fill_from") + '"></select>'
+    + '<select class="bd-fill-event"></select>'
     + '<div class="bd-fill-expr-wrap" hidden><label>' + tHtml("sql_expr") + "</label>"
-    + '<input class="bd-fill-expr" autocomplete="off" placeholder="event_name = \'signup\'" aria-label="Fill from SQL"></div>'
+    + '<input class="bd-fill-expr" autocomplete="off" placeholder="event_name = \'signup\'"></div>'
     + "</div>"
     + "</div>"
   );
+}
+let bdControlSeq = 0;
+function wireValueControlIds(block) {
+  bdControlSeq += 1;
+  ["bd-value-at", "bd-if-missing", "bd-fill-event", "bd-fill-expr"].forEach((cls) => {
+    const ctl = block.querySelector("." + cls);
+    if (!ctl) return;
+    ctl.id = "bdc-" + bdControlSeq + "-" + cls;
+    const lab = ctl.previousElementSibling;
+    if (lab && lab.tagName === "LABEL") lab.htmlFor = ctl.id;
+  });
 }
 function paintValueAtSelect(sel, current) {
   sel.innerHTML = "";
@@ -1691,6 +1719,7 @@ function attachValueControls(slotEl, init, onChange) {
   holder.innerHTML = valueControlsHtml();
   const block = holder.firstElementChild;
   slotEl.appendChild(block);
+  wireValueControlIds(block);
   const data = normalizeBreakdownSlot(init);
   paintValueAtSelect(block.querySelector(".bd-value-at"), data.value_at);
   paintIfMissingSelect(block.querySelector(".bd-if-missing"), data.if_missing);
@@ -1718,8 +1747,10 @@ function syncValueControls(slotEl) {
   const ever = atSel.value === "first_record" || atSel.value === "latest_record";
   missSel.disabled = ever;
   missSel.title = ever ? EVER_TITLE : "";
+  const note = block.querySelector(".bd-ever-note");
+  if (note) note.hidden = !ever;
   const fillWrap = block.querySelector(".bd-fill-wrap");
-  fillWrap.hidden = atSel.value === "event" && (ever || missSel.value !== "fill");
+  fillWrap.hidden = atSel.value === "event" && missSel.value !== "fill";
   const fillSel = block.querySelector(".bd-fill-event");
   block.querySelector(".bd-fill-expr-wrap").hidden = fillSel.value !== CUSTOM_BREAKDOWN;
 }
@@ -2997,9 +3028,12 @@ document.getElementById("bd-null-nudge-fix").addEventListener("click", () => {
   if (!nudgeSlotEl || !document.contains(nudgeSlotEl)) { hideNullNudge(); return; }
   const miss = nudgeSlotEl.querySelector(".bd-value-controls .bd-if-missing");
   if (miss && !miss.disabled) {
+    // Programmatic value set fires no change event: sync everything the
+    // change handler would have, stale-results banner included.
     miss.value = "fill";
     syncValueControls(nudgeSlotEl);
     scheduleEstimate();
+    syncStaleNotes();
   }
   hideNullNudge();
 });
@@ -3685,7 +3719,7 @@ function estimateKey(body) {
     body.on, body.of_column, body.of_expr, body.of_json_key,
     body.breakdown_column, body.breakdown_expr, body.breakdown_json_key,
     JSON.stringify(body.breakdowns || []),
-    body.breakdown_at, body.top_n, body.include_other,
+    body.top_n, body.include_other,
   ].join("\0");
 }
 let lastEstimateKey = "";
@@ -3826,7 +3860,7 @@ function resultKey(body) {
     body.on, body.of_column, body.of_expr, body.of_json_key,
     body.breakdown_column, body.breakdown_expr, body.breakdown_json_key,
     JSON.stringify(body.breakdowns || []),
-    body.breakdown_at, body.top_n, body.include_other,
+    body.top_n, body.include_other,
     body.exact ? "1" : "0",
   ].join("\0");
 }

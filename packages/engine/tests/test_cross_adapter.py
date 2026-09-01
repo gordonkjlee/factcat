@@ -100,6 +100,11 @@ def test_breakdown_value_semantics_compile(kind, sqlglot_warnings):
                     "fill_from_event": "signup",
                 },
                 {"breakdown_column": "browser", "value_at": "range_start"},
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "range_end",
+                    "if_missing": "fill",
+                },
             ],
         )
     )

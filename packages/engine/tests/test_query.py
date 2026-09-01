@@ -2289,7 +2289,11 @@ def test_breakdown_value_at_range_anchors():
             breakdowns=[{"breakdown_column": "plan", "value_at": "range_end"}],
         )
     ).breakdowns[0]
-    assert end.until == _ts("DATE '2026-02-01'", kind="instant")
+    # The end boundary is exclusive (the window is `< end`), so the anchor
+    # is the strict bound: a stamp at exactly midnight of the exclusive
+    # end must not be read as the range-end state.
+    assert end.before == _ts("DATE '2026-02-01'", kind="instant")
+    assert end.until is None
 
 
 def test_breakdown_range_end_open_window_is_latest_record():
@@ -2393,6 +2397,19 @@ def test_breakdown_hidden_chrome_is_ignored():
             breakdowns=[
                 {"breakdown_column": "plan", "fill_from_event": "signup"}
             ],
+        )
+    )
+    assert spec.breakdowns == ("plan",)
+
+
+def test_breakdown_hidden_fill_from_never_fails_the_run():
+    """A stale fill_from_event with NO event column mapped must not raise
+    on the default path — the value is hidden chrome the code discards."""
+    spec = spec_from_form(
+        _form(
+            breakdowns=[
+                {"breakdown_column": "plan", "fill_from_event": "signup"}
+            ]
         )
     )
     assert spec.breakdowns == ("plan",)
