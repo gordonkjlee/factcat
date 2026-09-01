@@ -2,6 +2,14 @@
 
 Mutation: ignore ``breakdowns`` (always one series) and the US/UK as-of
 tests go red. Drop the ``(other)`` fold and the high-card test goes red.
+Carried/bounds mutations that must go red: build stamps from ``src`` not
+the table (S1's pre-window stamp is lost); drop the ``until`` bound
+(as-of-start returns silver); substitute unbounded ``last`` for as-of-end
+(returns gold); flip the stamp/needle tie key (S2 loses its own-instant
+stamp); drop the value tiebreak (S4 flips); drop ``fill_from`` (S5 gains
+enterprise); drop ``WHERE fc_is_row = 1`` (stamp rows inflate totals);
+apply spec ``breakdown_at`` over per-column ``at`` (the mixed test);
+drop ``backfill`` (S2 stays NULL at range start).
 """
 
 from __future__ import annotations
@@ -9,7 +17,7 @@ from __future__ import annotations
 import duckdb
 import pytest
 
-from factcat import EventsSpec, events_sql
+from factcat import Breakdown, EventsSpec, events_sql
 from factcat.spec import OTHER_LABEL
 
 # entity_id, occurred_at, country, path, event_name
@@ -373,3 +381,318 @@ def test_invalid_breakdown_at_is_rejected():
             breakdowns=("country",),
             breakdown_at="person",  # type: ignore[arg-type]
         )
+
+
+# entity_id, occurred_at, event_name, plan_tier. Logins are the metric;
+# plan_tier is stamped sparsely. Hand-computed paper for every mode:
+#   S1  free stamped pre-window (Dec 1); pro stamped Jan 5.
+#       carried: Jan 2 login = free, Jan 6 login = pro.
+#   S2  stamp and login share one instant (Jan 3 08:00): the login sees it.
+#   S3  never stamped: NULL in every mode, never (other).
+#   S4  two stamps at one instant (pro, free): greatest value (pro) wins.
+#   S5  enterprise stamped on profile_update only: fill_from
+#       'subscription_started' excludes it.
+#   S6  bronze Dec 15, silver Jan 10, gold Feb 5. With a January window:
+#       as-of start = bronze, as-of end = silver, last ever = gold,
+#       first-in-window = silver. Every anchor answers differently.
+SUBS = [
+    ("S1", "2025-12-01 00:00:00", "subscription_started", "free"),
+    ("S1", "2026-01-02 10:00:00", "login", None),
+    ("S1", "2026-01-05 09:00:00", "subscription_started", "pro"),
+    ("S1", "2026-01-06 10:00:00", "login", None),
+    ("S2", "2026-01-03 08:00:00", "subscription_started", "pro"),
+    ("S2", "2026-01-03 08:00:00", "login", None),
+    ("S3", "2026-01-04 12:00:00", "login", None),
+    ("S4", "2026-01-01 00:00:00", "subscription_started", "pro"),
+    ("S4", "2026-01-01 00:00:00", "subscription_started", "free"),
+    ("S4", "2026-01-02 12:00:00", "login", None),
+    ("S5", "2026-01-01 06:00:00", "profile_update", "enterprise"),
+    ("S5", "2026-01-02 07:00:00", "login", None),
+    ("S6", "2025-12-15 00:00:00", "subscription_started", "bronze"),
+    ("S6", "2026-01-10 00:00:00", "subscription_started", "silver"),
+    ("S6", "2026-01-20 09:00:00", "login", None),
+    ("S6", "2026-02-05 00:00:00", "subscription_started", "gold"),
+    # S7 mirrors S4 with the opposite insertion order (free before pro),
+    # so dropping the value tiebreak flips the attr answer under a stable
+    # sort; S4's order catches the carried side of the same mutation.
+    ("S7", "2026-01-15 00:00:00", "subscription_started", "free"),
+    ("S7", "2026-01-15 00:00:00", "subscription_started", "pro"),
+    ("S7", "2026-01-16 10:00:00", "login", None),
+]
+
+WINDOW_START = "TIMESTAMP '2026-01-01 00:00:00'"
+WINDOW_END = "TIMESTAMP '2026-02-01 00:00:00'"
+
+
+@pytest.fixture()
+def subs() -> duckdb.DuckDBPyConnection:
+    con = duckdb.connect()
+    con.execute(
+        "CREATE TABLE subs ("
+        "  entity_id VARCHAR,"
+        "  occurred_at TIMESTAMP,"
+        "  event_name VARCHAR,"
+        "  plan_tier VARCHAR"
+        ")"
+    )
+    con.executemany("INSERT INTO subs VALUES (?, ?, ?, ?)", SUBS)
+    return con
+
+
+def _subs_spec(*breakdowns, **overrides) -> EventsSpec:
+    base = dict(
+        table="subs",
+        entity="entity_id",
+        event_time="occurred_at",
+        measure="total",
+        exact=True,
+        where="event_name = 'login'",
+        breakdowns=tuple(breakdowns) or (Breakdown("plan_tier", at="carried"),),
+        breakdown_labels=None,
+    )
+    base.update(overrides)
+    return EventsSpec(**base)
+
+
+def test_carried_resolves_stamps_outside_window_and_where(subs):
+    """S1's free stamp is pre-window AND outside where (not a login).
+
+    Mutations: stamps built from ``src`` (the filtered scan) lose it;
+    so does bounding the stamp scan to the chart window.
+    """
+    got = {(d, t): v for d, t, v in _rows(subs, _subs_spec())}
+    assert got[("2026-01-02", "free")] == 1.0  # S1 before the upgrade
+    assert got[("2026-01-06", "pro")] == 1.0  # S1 after it
+    assert got[("2026-01-20", "silver")] == 1.0  # S6: latest at-or-before
+
+
+def test_carried_same_instant_stamp_is_seen(subs):
+    """S2's stamp shares the login's instant; the login sees it."""
+    got = {(d, t): v for d, t, v in _rows(subs, _subs_spec())}
+    assert got[("2026-01-03", "pro")] == 1.0
+    assert ("2026-01-03", None) not in got
+
+
+def test_carried_same_instant_greatest_value_wins(subs):
+    """S4 has pro and free stamped at one instant; pro > free."""
+    got = {(d, t): v for d, t, v in _rows(subs, _subs_spec())}
+    assert got[("2026-01-02", "pro")] == 1.0
+    assert ("2026-01-02", "free") in got  # that one is S1, not S4
+
+
+def test_carried_never_stamped_stays_null_not_other(subs):
+    got = {(d, t): v for d, t, v in _rows(subs, _subs_spec(top_n=1))}
+    assert got[("2026-01-04", None)] == 1.0
+    assert all(t != OTHER_LABEL for d, t in got if d == "2026-01-04")
+
+
+def test_carried_fill_from_excludes_other_stamps(subs):
+    """S5's enterprise lives on profile_update; fill_from must drop it."""
+    spec = _subs_spec(
+        Breakdown(
+            "plan_tier",
+            at="carried",
+            fill_from="event_name = 'subscription_started'",
+        )
+    )
+    got = {(d, t): v for d, t, v in _rows(subs, spec)}
+    assert got[("2026-01-02", None)] == 1.0  # S5, no authoritative stamp
+    without = {(d, t): v for d, t, v in _rows(subs, _subs_spec())}
+    assert without[("2026-01-02", "enterprise")] == 1.0
+
+
+def test_carried_slices_sum_to_unsplit_total(subs):
+    """Attribution assigns groups; it must not invent or drop rows.
+
+    Mutation: drop ``WHERE fc_is_row = 1`` and stamp rows inflate this.
+    """
+    unsplit = {
+        d: v
+        for d, v in _rows(
+            subs,
+            EventsSpec(
+                table="subs",
+                entity="entity_id",
+                event_time="occurred_at",
+                measure="total",
+                exact=True,
+                where="event_name = 'login'",
+            ),
+        )
+    }
+    split = _rows(subs, _subs_spec())
+    by_day: dict[str, float] = {}
+    for d, _, v in split:
+        by_day[d] = by_day.get(d, 0.0) + v
+    assert by_day == unsplit
+
+
+def test_every_anchor_answers_differently_on_s6(subs):
+    """S6: bronze pre-window, silver in-window, gold post-window.
+
+    Mutations: drop the ``until`` bound and as-of-start returns silver;
+    substitute unbounded last for as-of-end and it returns gold.
+    """
+    def tier(spec: EventsSpec) -> str | None:
+        got = {(d, t): v for d, t, v in _rows(subs, spec)}
+        hits = [t for (d, t) in got if d == "2026-01-20"]
+        assert len(hits) == 1
+        return hits[0]
+
+    asof_start = _subs_spec(Breakdown("plan_tier", at="last", until=WINDOW_START))
+    asof_end = _subs_spec(Breakdown("plan_tier", at="last", until=WINDOW_END))
+    last_ever = _subs_spec(Breakdown("plan_tier", at="last"))
+    first_in_window = _subs_spec(
+        Breakdown("plan_tier", at="first", since=WINDOW_START, until=WINDOW_END)
+    )
+    first_ever = _subs_spec(Breakdown("plan_tier", at="first"))
+    assert tier(asof_start) == "bronze"
+    assert tier(asof_end) == "silver"
+    assert tier(last_ever) == "gold"
+    assert tier(first_in_window) == "silver"
+    assert tier(first_ever) == "bronze"
+
+
+def test_asof_boundary_is_inclusive(subs):
+    """S4's stamps land exactly at the window-start instant and count."""
+    spec = _subs_spec(Breakdown("plan_tier", at="last", until=WINDOW_START))
+    got = {(d, t): v for d, t, v in _rows(subs, spec)}
+    assert got[("2026-01-02", "pro")] == 1.0  # S4: at-boundary, greatest
+
+
+def test_attr_same_instant_greatest_value_wins(subs):
+    """S7 has free and pro stamped at one instant, free inserted first;
+    the attr pick must choose pro by value, not by a stable sort."""
+    spec = _subs_spec(Breakdown("plan_tier", at="last", until=WINDOW_END))
+    got = {(d, t): v for d, t, v in _rows(subs, spec)}
+    assert got[("2026-01-16", "pro")] == 1.0
+
+
+def test_backfill_fills_only_entities_empty_at_the_anchor(subs):
+    """S2 has nothing by Jan 1 and backfills to pro; S1's real as-of
+    value (free) is never overridden; S3 has nothing to backfill from."""
+    spec = _subs_spec(
+        Breakdown("plan_tier", at="last", until=WINDOW_START, backfill=True)
+    )
+    got = {(d, t): v for d, t, v in _rows(subs, spec)}
+    assert got[("2026-01-03", "pro")] == 1.0  # S2 backfilled
+    assert got[("2026-01-02", "free")] == 1.0  # S1 stays as-of
+    assert got[("2026-01-06", "free")] == 1.0
+    assert got[("2026-01-04", None)] == 1.0  # S3 stays NULL
+    strict = _subs_spec(Breakdown("plan_tier", at="last", until=WINDOW_START))
+    strict_got = {(d, t): v for d, t, v in _rows(subs, strict)}
+    assert strict_got[("2026-01-03", None)] == 1.0
+
+
+def test_carried_with_attr_column_slices_sum_to_unsplit_total(subs):
+    """carried + first in one tuple exercises the joined stream sliced;
+    attribution must still neither invent nor drop rows."""
+    unsplit = {
+        d: v
+        for d, v in _rows(
+            subs,
+            EventsSpec(
+                table="subs",
+                entity="entity_id",
+                event_time="occurred_at",
+                measure="total",
+                exact=True,
+                where="event_name = 'login'",
+            ),
+        )
+    }
+    split = _rows(
+        subs,
+        _subs_spec(
+            Breakdown("plan_tier", at="carried"),
+            Breakdown("event_name", at="first"),
+        ),
+    )
+    by_day: dict[str, float] = {}
+    for d, _t, _e, v in split:
+        by_day[d] = by_day.get(d, 0.0) + v
+    assert by_day == unsplit
+
+
+def test_mixed_semantics_per_column(subs):
+    """One carried column and one rows column in the same tuple; the
+    per-column ``at`` wins over the spec-level default.
+
+    Mutation: apply ``breakdown_at`` to every column and S1's Jan 2 login
+    groups as (NULL, login) instead of (free, login).
+    """
+    spec = _subs_spec(
+        Breakdown("plan_tier", at="carried"),
+        "event_name",
+        breakdown_at="rows",
+    )
+    got = {
+        (d, t, e): v for d, t, e, v in _rows(subs, spec)
+    }
+    assert got[("2026-01-02", "free", "login")] == 1.0
+    assert ("2026-01-02", None, "login") not in got
+
+
+def test_breakdown_object_matches_string_spec_sql():
+    """A plain string plus breakdown_at is the same spec as a Breakdown."""
+    for at in ("rows", "first", "last"):
+        as_string = _spec(breakdown_at=at)
+        as_object = _spec(
+            breakdowns=(Breakdown("country", at=at),), breakdown_at="rows"
+        )
+        assert events_sql(as_string) == events_sql(as_object), at
+
+
+def test_rows_only_spec_emits_no_stream_ctes():
+    sql = events_sql(_spec())
+    assert "fc_stamps" not in sql
+    assert "fc_stream" not in sql
+
+
+def test_breakdown_validation():
+    with pytest.raises(ValueError, match="since/until"):
+        Breakdown("plan", at="rows", until="TIMESTAMP '2026-01-01'")
+    with pytest.raises(ValueError, match="since/until"):
+        Breakdown("plan", at="carried", since="TIMESTAMP '2026-01-01'")
+    with pytest.raises(ValueError, match="backfill"):
+        Breakdown("plan", at="last", backfill=True)
+    with pytest.raises(ValueError, match="backfill"):
+        Breakdown("plan", at="first", until="x", backfill=True)
+    with pytest.raises(ValueError, match="fill_from"):
+        Breakdown("plan", at="rows", fill_from="event_name = 'x'")
+    with pytest.raises(ValueError, match="fill_from"):
+        Breakdown("plan", at="carried", fill_from="   ")
+    with pytest.raises(ValueError, match="expr"):
+        Breakdown("   ")
+
+
+def test_pair_null_first_axis_stays_null(pairs):
+    """Regression: the fold's match sentinel read t.fc_bd_0, so a matched
+    tuple whose FIRST axis is NULL folded its other axes into (other)."""
+    pairs.execute("INSERT INTO hits VALUES ('N2', '2026-01-01', NULL, 'Safari')")
+    got = {
+        (country, browser): value
+        for _, country, browser, value in _rows(pairs, _pair_spec(top_n=8))
+    }
+    assert got[(None, "Safari")] == 1.0
+    assert OTHER_LABEL not in {k for pair in got for k in pair}
+
+
+def test_distinct_measure_with_breakdown_executes(subs):
+    """Regression: folded was not the last CTE on the distinct path and
+    per_entity followed without a comma — broken SQL on every dialect."""
+    for breakdowns in (("event_name",), (Breakdown("plan_tier", at="carried"),)):
+        spec = EventsSpec(
+            table="subs",
+            entity="entity_id",
+            event_time="occurred_at",
+            measure="distinct",
+            on="property",
+            of="event_name",
+            exact=True,
+            where="event_name = 'login'",
+            breakdowns=breakdowns,
+        )
+        rows = _rows(subs, spec)
+        assert rows, breakdowns
+        assert all(v == 1.0 for *_dims, v in rows)
