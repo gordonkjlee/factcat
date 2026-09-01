@@ -3760,8 +3760,10 @@ let lastEstimateKey = "";
 // cap-rejected run; null means no known condition, never "unknown".
 let capBlock = null;
 let runInFlight = false;
-function capLabel(cap) {
-  return (Math.round((cap / (1024 * 1024 * 1024)) * 10) / 10) + " GB";
+// An exact figure, so it drops formatBytes' "~". Forcing GB here printed a
+// 50 MB cap as "0 GB"; unit choice has one owner and it is formatBytes.
+function bytesLabel(n) {
+  return formatBytes(n).replace("~", "");
 }
 function capBlocked() {
   if (!CAPABILITIES.has("scan_cap") || !capBlock) return false;
@@ -3794,13 +3796,13 @@ function paintEstimate(bytes, cap, overCap) {
   wrap.classList.toggle("hot", !overCap && !uncapped && frac >= 0.25);
   wrap.classList.toggle("warn", !overCap && !uncapped && frac >= 0.05 && frac < 0.25);
   el.textContent = formatBytes(bytes)
-    + (overCap && !uncapped ? " / " + capLabel(cap) + " cap" : "")
+    + (overCap && !uncapped ? " / " + bytesLabel(cap) + " cap" : "")
     + (uncapped ? " · no cap this run" : "");
   el.title = overCap
     ? "Over the job scan cap. Tick Override cap to run it anyway."
     : (uncapped
         ? "Estimated bytes scanned (free dry run). No cap this run."
-        : "Estimated bytes scanned (free dry run). Cap " + capLabel(cap) + ".");
+        : "Estimated bytes scanned (free dry run). Cap " + bytesLabel(cap) + ".");
 }
 async function runEstimate() {
   const wrap = document.getElementById("run-estimate-wrap");
@@ -4874,8 +4876,8 @@ form.addEventListener("submit", async (e) => {
         capBlock = {key: estimateKey(body), bytes: data.bytes, cap: data.cap};
         if (data.bytes != null) {
           paintEstimate(data.bytes, data.cap, true);
-          msg = "Needs " + formatBytes(data.bytes).replace("~", "")
-            + (data.cap != null ? ", over the " + capLabel(data.cap) + " cap" : ", over the job scan cap")
+          msg = "Needs " + bytesLabel(data.bytes)
+            + (data.cap != null ? ", over the " + bytesLabel(data.cap) + " cap" : ", over the job scan cap")
             + ". Tick Override cap to run it.";
         } else {
           msg = "Over the job scan cap. Tick Override cap to run it.";
