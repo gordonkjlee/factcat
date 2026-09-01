@@ -530,7 +530,9 @@
     .bd-value-pair select { width: auto; font-size: 0.75rem; margin: 0; }
     .bd-fill-wrap { margin-top: 0.3rem; display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
     .bd-fill-wrap select, .bd-fill-wrap input {
-      width: auto; flex: 1 1 8rem; font-size: 0.75rem; margin: 0;
+      /* min-width 0 lets flex shrink the select below its widest option
+         (long event names) so a 256px column never scrolls sideways. */
+      width: auto; flex: 1 1 8rem; min-width: 0; font-size: 0.75rem; margin: 0;
     }
     /* Column flex so the label and input stretch to the wrap's width; the
        input opts back out of the row rule above (flex-basis would become
