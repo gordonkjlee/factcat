@@ -325,6 +325,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert 'id="export-png"' not in res.text
     assert 'id="export-csv"' not in res.text
     assert "exportSlug" in res.text
+    assert ".pane-actions button.icon-btn," in res.text
+    assert ".pane-actions .format-pop > summary.icon-btn {" in res.text
     assert 'id="chart_type"' in res.text
     assert "Labels" in res.text
     assert 'id="chart-title"' in res.text
