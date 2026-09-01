@@ -6,7 +6,7 @@ import pytest
 
 from datetime import date
 
-from factcat import events_sql
+from factcat import Breakdown, events_sql
 from factcat_app.filters import FILTER_FAMILY_OPS, FILTER_OP_META
 from factcat.warehouses import AdapterError, QueryResult
 from factcat_app.query import (
@@ -2224,3 +2224,210 @@ def test_hour_filter_parses_12_hour_clock():
     )
     assert "EXTRACT(HOUR" in spec.where
     assert "= 15" in spec.where or "=15" in spec.where.replace(" ", "")
+
+
+# --- Breakdown value semantics (Value at × If missing × Fill from) ---
+
+_ABS_JAN = dict(
+    range_mode="custom",
+    custom_kind="absolute",
+    start_date="2026-01-01",
+    end_date="2026-01-31",
+)
+
+
+def test_breakdown_value_at_carried_with_fill_from_event():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_values=["paid"],
+            breakdowns=[
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "event",
+                    "if_missing": "fill",
+                    "fill_from_event": "O'Brien signup",
+                }
+            ],
+        )
+    )
+    bd = spec.breakdowns[0]
+    assert isinstance(bd, Breakdown)
+    assert bd.at == "carried"
+    assert bd.fill_from == "event_name = 'O''Brien signup'"
+    sql = events_sql(spec, dialect="bigquery")
+    assert "fc_stamps" in sql
+    assert "IGNORE NULLS" not in sql.upper()
+
+
+def test_breakdown_value_at_range_anchors():
+    start = spec_from_form(
+        _form(
+            **_ABS_JAN,
+            breakdowns=[{"breakdown_column": "plan", "value_at": "range_start"}],
+        )
+    ).breakdowns[0]
+    assert start.at == "last"
+    assert start.until == _ts("DATE '2026-01-01'", kind="instant")
+    assert start.backfill is False
+    filled = spec_from_form(
+        _form(
+            **_ABS_JAN,
+            breakdowns=[
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "range_start",
+                    "if_missing": "fill",
+                }
+            ],
+        )
+    ).breakdowns[0]
+    assert filled.backfill is True
+    end = spec_from_form(
+        _form(
+            **_ABS_JAN,
+            breakdowns=[{"breakdown_column": "plan", "value_at": "range_end"}],
+        )
+    ).breakdowns[0]
+    assert end.until == _ts("DATE '2026-02-01'", kind="instant")
+
+
+def test_breakdown_range_end_open_window_is_latest_record():
+    """A trailing window runs to now: at-range-end degrades to unbounded
+    last, and there is no later stamp for If-missing to fill from."""
+    bd = spec_from_form(
+        _form(
+            breakdowns=[
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "range_end",
+                    "if_missing": "fill",
+                }
+            ]
+        )
+    ).breakdowns[0]
+    assert bd.at == "last"
+    assert bd.until is None
+    assert bd.backfill is False
+
+
+def test_breakdown_value_at_ever_anchors_ignore_if_missing():
+    first = spec_from_form(
+        _form(
+            breakdowns=[
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "first_record",
+                    "if_missing": "fill",
+                }
+            ]
+        )
+    ).breakdowns[0]
+    assert first.at == "first"
+    assert first.until is None
+    assert first.backfill is False
+    latest = spec_from_form(
+        _form(
+            breakdowns=[{"breakdown_column": "plan", "value_at": "latest_record"}]
+        )
+    ).breakdowns[0]
+    assert latest.at == "last"
+    assert latest.until is None
+
+
+def test_breakdown_default_slot_stays_plain_string():
+    """Untouched reports build the same spec as before the control."""
+    spec = spec_from_form(_form(breakdown_column="plan"))
+    assert spec.breakdowns == ("plan",)
+    assert isinstance(spec.breakdowns[0], str)
+
+
+def test_breakdown_legacy_breakdown_at_folds_per_slot():
+    for legacy, at in (("first", "first"), ("last", "last"), ("carried", "carried")):
+        bd = spec_from_form(
+            _form(breakdown_column="plan", breakdown_at=legacy)
+        ).breakdowns[0]
+        assert isinstance(bd, Breakdown), legacy
+        assert bd.at == at
+
+
+def test_breakdown_fill_from_expr_wins_over_event():
+    bd = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_values=["paid"],
+            breakdowns=[
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "latest_record",
+                    "fill_from_event": "signup",
+                    "fill_from_expr": "source = 'billing'",
+                }
+            ],
+        )
+    ).breakdowns[0]
+    assert bd.fill_from == "source = 'billing'"
+
+
+def test_breakdown_fill_from_event_requires_event_column():
+    with pytest.raises(ValueError, match="event column"):
+        spec_from_form(
+            _form(
+                breakdowns=[
+                    {
+                        "breakdown_column": "plan",
+                        "value_at": "latest_record",
+                        "fill_from_event": "signup",
+                    }
+                ]
+            )
+        )
+
+
+def test_breakdown_hidden_chrome_is_ignored():
+    """Fill from under each-event + leave is hidden chrome, not an error."""
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_values=["paid"],
+            breakdowns=[
+                {"breakdown_column": "plan", "fill_from_event": "signup"}
+            ],
+        )
+    )
+    assert spec.breakdowns == ("plan",)
+
+
+def test_breakdown_junk_value_controls_rejected():
+    with pytest.raises(ValueError, match="value_at"):
+        spec_from_form(
+            _form(
+                breakdowns=[{"breakdown_column": "plan", "value_at": "person"}]
+            )
+        )
+    with pytest.raises(ValueError, match="if_missing"):
+        spec_from_form(
+            _form(
+                breakdowns=[{"breakdown_column": "plan", "if_missing": "maybe"}]
+            )
+        )
+
+
+def test_breakdown_anchor_kind_matches_event_time_kind():
+    """reporting columns get naive anchors; instant-family columns get
+    instants — the bound must compare with the spec's event_time type."""
+    rep = spec_from_form(
+        _form(
+            **_ABS_JAN,
+            event_time_tz="reporting",
+            breakdowns=[{"breakdown_column": "plan", "value_at": "range_start"}],
+        )
+    ).breakdowns[0]
+    assert "'reporting'" in rep.until
+    inst = spec_from_form(
+        _form(
+            **_ABS_JAN,
+            breakdowns=[{"breakdown_column": "plan", "value_at": "range_start"}],
+        )
+    ).breakdowns[0]
+    assert "'instant'" in inst.until

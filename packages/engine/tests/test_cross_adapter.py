@@ -82,6 +82,36 @@ def test_events_sql_from_form_emits_without_warnings(kind, sqlglot_warnings):
 
 
 @pytest.mark.parametrize("kind", list(ADAPTERS))
+def test_breakdown_value_semantics_compile(kind, sqlglot_warnings):
+    """Value at × If missing × Fill from compiles per shipped adapter:
+    carried stream, range anchor, and no placeholder residue."""
+    sql = events_sql_from_form(
+        _form(
+            kind,
+            range_mode="custom",
+            custom_kind="absolute",
+            start_date="2026-01-01",
+            end_date="2026-01-31",
+            breakdowns=[
+                {
+                    "breakdown_column": "country",
+                    "value_at": "event",
+                    "if_missing": "fill",
+                    "fill_from_event": "signup",
+                },
+                {"breakdown_column": "browser", "value_at": "range_start"},
+            ],
+        )
+    )
+    assert "fc_stamps" in sql
+    assert "FACTCAT_" not in sql.upper()
+    assert "IGNORE NULLS" not in sql.upper()
+    assert sqlglot_warnings.messages == [], (
+        f"sqlglot warned for {kind}: {sqlglot_warnings.messages}"
+    )
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
 def test_hour_grains_leave_no_placeholders(kind):
     for grain, extra in (
         ("hour", {"range_mode": "last", "range_n": 24, "range_unit": "hour"}),
