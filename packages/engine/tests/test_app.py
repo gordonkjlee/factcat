@@ -337,6 +337,7 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert 'class="pane pane-table closed"' not in res.text
     assert "setPaneOpen" in res.text
     assert "bindDivider" in res.text
+    assert "position: sticky" in res.text
     assert "setConfigCollapsed" in res.text
     assert "layout_config_px" in res.text
     assert "layout_chart_px" in res.text

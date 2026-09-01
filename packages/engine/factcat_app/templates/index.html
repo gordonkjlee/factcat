@@ -13,28 +13,46 @@
     }
     form.workspace-form {
       display: grid;
-      grid-template-columns: var(--fc-config-col, 22rem) 0.75rem minmax(0, 1fr);
+      grid-template-columns: var(--fc-config-col, 22rem) 0 minmax(0, 1fr);
       height: 100%;
       min-height: 0;
     }
-    form.workspace-form.config-collapsed { grid-template-columns: 0 0.75rem minmax(0, 1fr); }
+    form.workspace-form.config-collapsed { grid-template-columns: 0 0 minmax(0, 1fr); }
     form.workspace-form.config-collapsed .filters { display: none; }
     .filters { background: var(--fc-snow); padding: 1.25rem; border-right: 1px solid var(--fc-line); overflow-y: auto; min-height: 0; grid-column: 1; grid-row: 1; }
     .col-divider { grid-column: 2; grid-row: 1; }
     .results { grid-column: 3; grid-row: 1; }
     .col-divider {
       cursor: col-resize;
+      position: relative;
+      width: 9px;
+      margin-left: -5px;
+      z-index: 25;
       display: flex;
       align-items: center;
       justify-content: center;
       touch-action: none;
       min-height: 0;
     }
-    .col-divider:hover, .col-divider.dragging { background: color-mix(in srgb, var(--fc-ochre) 16%, transparent); }
+    .col-divider::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      transform: translateX(-50%);
+      background: var(--fc-ochre);
+      opacity: 0;
+    }
+    .col-divider:hover::before, .col-divider.dragging::before { opacity: 1; }
     form.workspace-form.config-collapsed .col-divider { cursor: default; }
+    form.workspace-form.config-collapsed .col-divider::before { display: none; }
     .col-toggle {
       margin: 0;
       padding: 0;
+      position: relative;
+      z-index: 1;
       width: 1.05rem;
       height: 2.75rem;
       display: inline-flex;
@@ -119,13 +137,20 @@
     }
     .results-toolbar #run-row button { margin: 0; }
     .results {
-      display: flex;
-      flex-direction: column;
-      gap: 0;
-      padding: 0.5rem;
+      display: block;
+      padding: 0 0.5rem 0.5rem;
       min-height: 0;
-      overflow: hidden;
+      overflow-y: auto;
       background: var(--fc-paper);
+    }
+    .results-toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: var(--fc-paper);
+      margin: 0 -0.5rem 0.5rem;
+      padding: 0.55rem 0.5rem 0.45rem;
+      border-bottom: 1px solid var(--fc-line);
     }
     .pane + .pane { margin-top: 0.5rem; }
     .row-divider {
@@ -148,8 +173,8 @@
     }
     .row-divider:hover::after, .row-divider.dragging::after { opacity: 1; }
     .row-divider[hidden] { display: none; }
-    .results.chart-sized .pane-chart:not(.closed) { flex: 0 0 var(--fc-chart-px); }
-    .pane.closed { flex: 0 0 auto; min-height: 0; }
+    .pane-chart:not(.closed) { height: var(--fc-chart-px, 55vh); min-height: 12rem; }
+    .pane-table:not(.closed) .pane-body { max-height: 75vh; }
     .pane.closed .pane-body { display: none; }
     .pane-toggle {
       margin: 0 0 0 0.25rem;
@@ -183,10 +208,7 @@
       border-bottom: 1px solid var(--fc-line);
       font-size: 0.7rem;
     }
-    .pane-body { flex: 1; overflow: auto; padding: 0.75rem; min-height: 0; }
-    .pane-chart { flex: 2; min-height: 12rem; }
-    .pane-table { flex: 1; min-height: 8rem; }
-    .pane-sql { flex: 0 1 9rem; min-height: 7rem; }
+    .pane-body { flex: 1 1 auto; overflow: auto; padding: 0.75rem; min-height: 0; }
     .pane-sql .pane-body { padding: 0; }
     .empty { color: var(--fc-slate); font-size: 0.85rem; margin: 0; }
     .empty.fail { color: var(--fc-alert); white-space: pre-wrap; }
@@ -765,7 +787,7 @@
       <svg class="chev-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
     </button>
   </div>
-  <div class="results{% if config.layout_chart_px %} chart-sized{% endif %}"{% if config.layout_chart_px %} style="--fc-chart-px: {{ config.layout_chart_px }}px"{% endif %}>
+  <div class="results"{% if config.layout_chart_px %} style="--fc-chart-px: {{ config.layout_chart_px }}px"{% endif %}>
     <div class="results-toolbar">
       <div class="toolbar-field">
         <label for="grain">Time grain</label>
@@ -4367,10 +4389,7 @@ function bindDivider(el, opts) {
     el.addEventListener("pointerup", up);
     el.addEventListener("pointercancel", up);
   });
-  el.addEventListener("dblclick", (e) => {
-    if (e.target && e.target.closest("button")) return;
-    opts.reset();
-  });
+  el.addEventListener("dblclick", () => opts.reset());
 }
 let configColPx = 0;
 bindDivider(document.getElementById("col-divider"), {
@@ -4395,9 +4414,8 @@ let chartHeightPx = 0;
 bindDivider(document.getElementById("row-divider"), {
   drag: (e) => {
     const top = document.querySelector(".pane-chart").getBoundingClientRect().top;
-    const max = Math.max(128, resultsEl.getBoundingClientRect().height - 176);
+    const max = Math.max(128, window.innerHeight - 220);
     chartHeightPx = Math.round(Math.min(max, Math.max(128, e.clientY - top)));
-    resultsEl.classList.add("chart-sized");
     resultsEl.style.setProperty("--fc-chart-px", chartHeightPx + "px");
   },
   end: (moved) => {
@@ -4405,7 +4423,6 @@ bindDivider(document.getElementById("row-divider"), {
   },
   reset: () => {
     chartHeightPx = 0;
-    resultsEl.classList.remove("chart-sized");
     resultsEl.style.removeProperty("--fc-chart-px");
     saveLayout({ layout_chart_px: 0 });
   },
