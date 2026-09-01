@@ -56,8 +56,11 @@ class — do not copy ``project`` / ``maximum_bytes_billed`` onto Snowflake.
 Say whether that warehouse's Setup guide / README still match, and whether
 the other kinds get the same chrome or why not. Setup catalog fields are
 ``factcat_app.catalog.CATALOG_STEPS`` (one list per kind): enable when
-``needs`` are met, load ``endpoint`` on first open, greyed until then. Do
-not copy a second enable/load chain in the template.
+``needs`` are met, then load ``endpoint`` (dataset → tables → columns;
+Snowflake the same chain). Greyed until the previous field is set. A
+native select closes if options arrive while the menu is open, so do
+not wait for first click. Do not copy a second enable/load chain in
+the template.
 
 No shared base class until a second real adapter shows duplicated code.
 """
@@ -65,6 +68,7 @@ No shared base class until a second real adapter shows duplicated code.
 from __future__ import annotations
 
 import importlib
+import re
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -124,6 +128,37 @@ class Adapter(Protocol):
 
 class AdapterError(Exception):
     """The caller's warehouse rejected the job or the connection failed."""
+
+    def __init__(self, message: str = "", *, not_found: bool = False) -> None:
+        super().__init__(message)
+        self.not_found = not_found
+
+
+def is_missing_relation(exc: BaseException) -> bool:
+    """True when ``exc`` means the relation is absent, not a permission failure.
+
+    Snowflake often uses “does not exist or not authorized” for both; that
+    still counts as missing here (CREATE then fails the same way).
+    """
+    if isinstance(exc, AdapterError) and exc.not_found:
+        return True
+    text = str(exc)
+    lowered = text.lower()
+    if re.search(
+        r"not found:\s*(table|view|dataset|object|relation|materialized)",
+        lowered,
+    ):
+        return True
+    if lowered.strip() == "not found":
+        return True
+    if "does not exist" in lowered:
+        return True
+    if "002003" in text:
+        return True
+    cause = exc.__cause__
+    if cause is not None and type(cause).__name__ == "NotFound":
+        return True
+    return False
 
 
 class DryRunNotSupported(AdapterError):
@@ -203,6 +238,7 @@ __all__ = [
     "CAP_SCAN_CAP",
     "Adapter",
     "AdapterError",
+    "is_missing_relation",
     "BytesCapError",
     "DryRunNotSupported",
     "QueryResult",

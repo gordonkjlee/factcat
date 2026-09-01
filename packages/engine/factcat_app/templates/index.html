@@ -317,20 +317,73 @@
     #of-wrap[hidden] { display: none !important; }
     #events-band { margin: 0 0 1rem; }
     .band-head {
-      display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
-      font-size: 0.7rem; font-weight: 600; margin: 0 0 0.45rem;
-      flex-wrap: wrap;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin: 0 0 0.35rem;
     }
-    .catalog-lookback {
-      display: flex; align-items: center; gap: 0.3rem;
-      font-weight: 500; margin: 0;
-    }
-    .catalog-lookback input {
-      width: 4.2rem; font-size: 0.75rem; font-weight: 400; margin: 0;
-    }
+    .band-head-title { min-width: 0; }
     .band-head-actions {
-      display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex: 0 0 auto;
     }
+    .band-head-actions .linkish { margin-left: 0; font-size: 0.75rem; }
+    .refresh-split {
+      display: inline-flex;
+      align-items: center;
+    }
+    .refresh-split .refresh-more {
+      margin-left: 0.35rem;
+      padding-left: 0.35rem;
+      border-left: 1px solid var(--fc-line);
+      text-decoration: none;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+    }
+    .refresh-split .refresh-more svg {
+      width: 0.7rem;
+      height: 0.7rem;
+      display: block;
+    }
+    .refresh-split .refresh-more[aria-expanded="true"] svg { transform: rotate(180deg); }
+    #find-event[hidden], #find-event-panel[hidden],
+    #event-names-snapshot[hidden], #event-names-status[hidden] {
+      display: none !important;
+    }
+    #find-event-panel {
+      margin: 0 0 0.45rem auto;
+      padding: 0.15rem 0 0.25rem;
+      width: max-content;
+      max-width: 100%;
+      text-align: left;
+    }
+    .find-event-opt {
+      display: block;
+      width: 100%;
+      margin: 0;
+      padding: 0.25rem 0;
+      border: 0;
+      background: none;
+      color: var(--fc-ochre-deep);
+      font-size: 0.75rem;
+      text-align: left;
+      cursor: pointer;
+    }
+    .find-event-opt:hover { text-decoration: underline; }
+    .find-event-opt .hint { margin: 0.1rem 0 0; }
+    .catalog-status {
+      font-weight: 400;
+      color: var(--fc-slate);
+      font-size: 0.7rem;
+      margin: 0 0 0.35rem;
+    }
+    #event-names-snapshot { margin: 0 0 0.35rem; }
     .fc-plus-labeled {
       display: flex;
       align-items: center;
@@ -455,11 +508,6 @@
     .stale-note[hidden] { display: none !important; }
     #result-table tr.incomplete td { color: var(--fc-slate); font-style: italic; }
     #custom-snap-hint { margin: 0.35rem 0 0; }
-    .linkish {
-      background: none; border: none; padding: 0; margin: 0 0 0 0.5rem;
-      color: var(--fc-ochre-deep); text-decoration: underline; font-size: 0.75rem;
-      font-weight: 400; cursor: pointer;
-    }
     .event-card-filters .add-card-filter { margin: 0.2rem 0 0 0; }
 {% endblock %}
 {% block body %}
@@ -515,16 +563,22 @@
 
     <div id="events-band">
       <div class="band-head">
-        <span>Event series <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span></span>
+        <span class="band-head-title">Event series <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span></span>
         <span id="event_value" hidden></span>
+        <input type="hidden" name="catalog_lookback_days" id="catalog_lookback_days" value="{{ config.catalog_lookback_days if config.catalog_lookback_days is not none else 90 }}">
         <span class="band-head-actions">
-        <label class="catalog-lookback" for="catalog_lookback_days">Last
-          <input type="number" id="catalog_lookback_days" name="catalog_lookback_days" min="0" step="1" value="{{ config.catalog_lookback_days if config.catalog_lookback_days is not none else 90 }}">
-          days
-        </label>
-        <button type="button" id="look-further" class="linkish">Look further back</button>
-        <button type="button" id="refresh-events" class="linkish">Refresh list</button>
+        <span class="refresh-split">
+          <button type="button" id="refresh-events" class="linkish">Refresh event names</button>
+          <button type="button" class="linkish refresh-more" id="find-event" hidden aria-haspopup="true" aria-expanded="false" aria-label="Look further back for event names">
+            <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5L6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
         </span>
+        </span>
+      </div>
+      <p id="event-names-status" class="catalog-status" hidden></p>
+      <p id="event-names-snapshot" class="hint" hidden>This list is a snapshot. Refresh rebuilds it.</p>
+      <div id="find-event-panel" hidden>
+        <div id="find-event-options"></div>
       </div>
       <div id="event-cards"></div>
       <div id="add-event-row">
@@ -984,6 +1038,7 @@ const titleEl = document.getElementById("chart-title");
 const titleLockedEl = document.getElementById("chart_title_locked");
 const cachedEventNames = {{ config.event_names|tojson }};
 const cachedColumns = {{ config.columns|tojson }};
+let eventNameCacheMeta = {{ (config.event_name_cache or {})|tojson }};
 let chart;
 let tableRows = [];
 let lastRun = null;
@@ -2497,20 +2552,73 @@ function catalogLookbackDays() {
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : 90;
 }
-function nextCatalogLookback(n) {
-  if (!n || n <= 0) return 0;
-  if (n < 180) return 180;
-  if (n < 365) return 365;
-  return 0;
-}
-function syncLookFurther() {
-  const cached = writeDestReady();
-  const look = document.querySelector(".catalog-lookback");
-  if (look) look.hidden = cached;
-  const btn = document.getElementById("look-further");
+const LOOKBACK_CHOICES = [
+  { days: 30, label: "Look back 1 month" },
+  { days: 90, label: "Look back 3 months" },
+  { days: 180, label: "Look back 6 months" },
+  { days: 365, label: "Look back 12 months" },
+  { days: 0, label: "All time", hint: "Scans the whole events table" },
+];
+function syncFindEvent() {
+  const trigger = document.getElementById("find-event");
+  const panel = document.getElementById("find-event-panel");
+  const host = document.getElementById("find-event-options");
+  if (!trigger || !panel || !host) return;
   const n = catalogLookbackDays();
-  btn.hidden = cached || n === 0;
-  btn.textContent = n < 180 ? "Look further back" : (n < 365 ? "Last year" : "All time");
+  const show = !writeDestReady() && n !== 0;
+  trigger.hidden = !show;
+  if (!show) {
+    panel.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    syncRefreshHint();
+    return;
+  }
+  const minDays = n * 2;
+  host.innerHTML = "";
+  LOOKBACK_CHOICES.forEach((choice) => {
+    if (choice.days !== 0 && choice.days < minDays) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "find-event-opt";
+    btn.textContent = choice.label;
+    if (choice.hint) {
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = choice.hint;
+      btn.appendChild(hint);
+    }
+    btn.addEventListener("click", () => {
+      document.getElementById("catalog_lookback_days").value = String(choice.days);
+      panel.hidden = true;
+      trigger.setAttribute("aria-expanded", "false");
+      syncFindEvent();
+      eventNameList.refresh();
+    });
+    host.appendChild(btn);
+  });
+  syncRefreshHint();
+}
+function syncSnapshotHint() {
+  const el = document.getElementById("event-names-snapshot");
+  if (el) el.hidden = !writeDestReady() || eventNameCacheMeta.kind !== "table";
+}
+function syncRefreshHint() {
+  const btn = document.getElementById("refresh-events");
+  if (!btn) return;
+  let title;
+  if (writeDestReady()) {
+    title = eventNameCacheMeta.kind === "table"
+      ? "Rebuild the snapshot of event names in the warehouse."
+      : "Reload event names from the Factcat-managed cache.";
+  } else {
+    const n = catalogLookbackDays();
+    title = !n
+      ? "Reload event names from all time."
+      : "Reload event names seen in the last " + n + " day" + (n === 1 ? "" : "s")
+        + ". Use the arrow to look further back.";
+  }
+  btn.title = title;
+  btn.setAttribute("aria-label", title);
 }
 const eventNameList = bindCachedList({
   items: cachedEventNames || [],
@@ -2520,12 +2628,28 @@ const eventNameList = bindCachedList({
     syncSeriesChrome();
   },
   loadingFor: [document.getElementById("event_value")],
+  statusFor: document.getElementById("event-names-status"),
+  statusText: (user) => {
+    if (writeDestReady()) {
+      if (user && eventNameCacheMeta.kind === "table") {
+        return "Rebuilding the event-name snapshot…";
+      }
+      if (!eventNameCacheMeta.kind) return "Creating event-name cache…";
+      return "Loading event names from the cache…";
+    }
+    const n = catalogLookbackDays();
+    if (!n) return "Loading event names from all time…";
+    if (n === 1) return "Loading event names seen in the last day…";
+    return "Loading event names seen in the last " + n + " days…";
+  },
   refreshButtons: [document.getElementById("refresh-events")],
-  loadIfEmpty: false,
-  async load() {
+  loadIfEmpty: true,
+  loadOnStart: () => writeDestReady(),
+  async load(opts) {
     if (!eventColumnEl.value || !tableEl.value) return null;
     const kind = document.getElementById("kind").value || "bigquery";
     if (kind !== "snowflake" && !locationEl.value) return null;
+    const user = !!(opts && opts.user);
     const data = await post("/api/event_values", {
       ...authBody(),
       kind,
@@ -2535,6 +2659,8 @@ const eventNameList = bindCachedList({
       event_time: eventTimeEl.value,
       catalog: true,
       catalog_lookback_days: catalogLookbackDays(),
+      rebuild: user && eventNameCacheMeta.kind === "table",
+      event_name_cache: eventNameCacheMeta,
       write_project: document.getElementById("write_project").value,
       write_dataset: document.getElementById("write_dataset").value,
       write_schema: document.getElementById("write_schema").value,
@@ -2556,19 +2682,38 @@ const eventNameList = bindCachedList({
       return null;
     }
     document.getElementById("catalog_lookback_days").value = String(catalogLookbackDays());
-    syncLookFurther();
+    if (data.kind) {
+      eventNameCacheMeta = {
+        v: 1,
+        table: tableEl.value,
+        event_column: eventColumnEl.value,
+        kind: data.kind,
+      };
+    } else if (!data.cache) {
+      eventNameCacheMeta = {};
+    }
+    syncFindEvent();
+    syncSnapshotHint();
+    syncRefreshHint();
     return data.values || [];
   },
 });
-syncLookFurther();
-document.getElementById("look-further").addEventListener("click", () => {
-  document.getElementById("catalog_lookback_days").value = String(
-    nextCatalogLookback(catalogLookbackDays())
-  );
-  syncLookFurther();
-  eventNameList.refresh();
+syncFindEvent();
+syncSnapshotHint();
+document.getElementById("find-event").addEventListener("click", () => {
+  const panel = document.getElementById("find-event-panel");
+  const trigger = document.getElementById("find-event");
+  if (!panel || trigger.hidden) return;
+  const open = panel.hidden;
+  panel.hidden = !open;
+  trigger.setAttribute("aria-expanded", open ? "true" : "false");
 });
-document.getElementById("catalog_lookback_days").addEventListener("change", syncLookFurther);
+document.getElementById("refresh-events").addEventListener("click", () => {
+  const panel = document.getElementById("find-event-panel");
+  const trigger = document.getElementById("find-event");
+  if (panel) panel.hidden = true;
+  if (trigger) trigger.setAttribute("aria-expanded", "false");
+});
 bindCachedList({
   items: columnCache,
   paint: paintColumns,

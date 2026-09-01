@@ -58,9 +58,12 @@ def form_kind(form: dict[str, Any]) -> str:
 
 
 # Setup catalog chain. One list per connect(kind=). The page enables a
-# field when every ``needs`` token is met, loads ``endpoint`` on first
-# open, and clears later steps on change. Identity/auth widgets stay on
-# the concrete adapter (project vs account); do not copy those here.
+# field when every ``needs`` token is met, then loads ``endpoint``
+# immediately (dataset → tables → columns, and the Snowflake chain).
+# Native <select> closes if options arrive while the menu is open, so
+# the list must exist before the first click. Later steps clear on
+# change. Identity/auth widgets stay on the concrete adapter (project
+# vs account); do not copy those here.
 #
 # needs: extra | signed_in | project | <field id>
 # fill: column picks that share one /api/columns response

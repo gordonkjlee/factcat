@@ -285,19 +285,27 @@ follow the person in `~/.factcat/preferences.json`, not the project file.
 **BigQuery.** After the extra is present: `gcloud auth application-default login`
 and `gcloud config set project YOUR_GCP_PROJECT`. Billing project from ADC,
 then `GOOGLE_CLOUD_PROJECT`, then `gcloud config get-value project`. Dataset →
-table (lists; greyed until the previous step is set). Location is
+table (lists; greyed until the previous step is set). Lists are cached in
+the mapping file so returning to Setup does not re-query; each field has
+**Refresh**. Location is
 taken from the dataset (do not guess `US`). Advanced is only if you use a key
 file instead of ADC.
 
 Map the event-name column on **Setup** (STRING). Names are not fetched
-while mapping. **Refresh list** on Events runs DISTINCT for **Event name
-lookback** (Setup; 90 days; 0 is all time) and does not use the job scan
-cap; raise the lookback if a name is missing. The time filter isolates
+while mapping. **Look back for event names** on Setup (90 days; 0 is all
+time) is the window for the event picker; that job does not use the scan
+cap. **Refresh event names** on Events re-runs that window. The chevron next to it looks
+further back (6 months / 12 months / all time, only steps at least twice
+the current lookback). The time filter isolates
 the timestamp column so a date-partitioned table can prune.
 Optional **Factcat-managed tables**: allow Factcat to create and maintain
 tables in your warehouse for better performance. BigQuery is project and
-dataset; Snowflake is database and schema. First Refresh creates
-`fc_event_names` if missing; later Refresh reads it and lookback is hidden.
+dataset; Snowflake is database and schema. First fetch creates
+`fc_event_names` if missing; later Refresh reads it. The object is stamped
+with a fingerprint of the mapped table and event-name column (JSON comment
+on the relation, plus `.factcat.json`) so a remapping rebuilds it. A table
+fallback is a snapshot — Refresh rebuilds it. Lookback and the Refresh chevron are
+hidden while that dest is set. Catalog jobs do not use the scan cap.
 On Events, each **event series** is a card: event name, **measure** (and Of
 when the measure is a property), and filters. Filter operators follow the
 column type (boolean, number, date, time, timestamp, string). String rows
@@ -309,8 +317,8 @@ digits, …). The mapped timestamp may be filtered on a series (intersects the
 chart date range). **Combine** nests another event
 into that series (OR); **Split** undoes it. Ungrouped series overlay as
 separate lines. **Break down by** is chart-wide unless **Break down each
-series** is on, in which case each series has its own split. **Refresh list** reloads
-event names for the current lookback (or from `fc_event_names` if you
+series** is on, in which case each series has its own split. **Refresh event names**
+reloads names for the current lookback (or from `fc_event_names` if you
 gave Factcat a write project and dataset). **Time grain** and **date range**
 sit above the chart with **Run** (warehouse cost is explicit). Grain is
 day / week / month / hour / day of week / hour of day; sugar fills
@@ -325,8 +333,8 @@ filters. Day grain also offers This week / Last week / This month as
 first bar is a full week or month. Include this week/month is opt-in and the
 current bar is marked incomplete. Custom is specific dates (snapped to the
 grain) or relative (from 12 to 3 weeks ago; 0 = this period). Sugar on
-`event_time`, not a period enum. If a write destination is set, **Refresh
-list** reads `fc_event_names` (created on first miss as a materialized
+`event_time`, not a period enum. If a write destination is set, **Refresh event names**
+reads `fc_event_names` (created on first miss as a materialized
 view, or a table if the source cannot back a view). Lookback does not apply
 while that cache is in use. Week start and reporting
 timezone stay on Setup (they change SQL). Thousand/decimal separators, wording
@@ -345,7 +353,8 @@ If the BigQuery table lives in another GCP project (billing in `dev`, data in `p
 **Snowflake.** Account identifier, user, and sign-in (key-pair path or browser
 SSO). Then Role (optional) and compute warehouse from lists, then
 database → schema → table. Catalog fields stay visible and greyed until the
-previous step is set. An encrypted key's passphrase is
+previous step is set, then loaded so the first click has options. An encrypted
+key's passphrase is
 `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` in the environment, not in `.factcat.json`.
 
 There is no `user_id` default. **Entity name** on Setup is a display label
