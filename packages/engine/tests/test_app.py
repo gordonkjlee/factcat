@@ -328,6 +328,13 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "All events" not in res.text
     assert "Pick an event." in res.text
     assert "Running…" in res.text
+    assert "setRunningCopy" in res.text
+    assert "stepRunDots" in res.text
+    assert 'dots.className = "run-dots"' in res.text
+    assert 'dots.setAttribute("aria-hidden", "true")' in res.text
+    assert ".run-dots span { visibility: hidden; }" in res.text
+    assert 'emptyCopy.textContent === "Running…"' not in res.text
+    assert 'catKind === "running"' in res.text
     assert 'id="run"' in res.text
     assert 'id="run-estimate"' in res.text
     assert "/api/estimate" in res.text
