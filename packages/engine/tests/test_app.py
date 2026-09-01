@@ -313,7 +313,18 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "syncTableHeaders();" in html
     assert 'form.measure.addEventListener("change", () => {\n  syncExact();\n  syncOfUi();\n  syncTableHeaders();\n});' not in html.replace("\r\n", "\n")
     assert ">Bucket<" not in res.text
-    assert 'id="export-png"' in res.text
+    assert 'id="chart-export"' in res.text
+    assert 'id="table-export"' in res.text
+    assert 'id="sql-export"' in res.text
+    assert 'data-chart-export="png2xt"' in res.text
+    assert 'data-table-export="tsv"' in res.text
+    assert 'data-table-export="md"' in res.text
+    assert 'data-table-export="json"' in res.text
+    assert 'data-sql-export="sql"' in res.text
+    assert 'data-sql-export="md"' in res.text
+    assert 'id="export-png"' not in res.text
+    assert 'id="export-csv"' not in res.text
+    assert "exportSlug" in res.text
     assert 'id="chart_type"' in res.text
     assert "Labels" in res.text
     assert 'id="chart-title"' in res.text
@@ -324,7 +335,7 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert 'label + " " + of' in res.text
     assert 'label.replace(/^Distinct per /, "Distinct " + of + " per ")' in res.text
     assert 'value: "this:week"' in res.text
-    assert "Export CSV" in res.text
+    assert ">CSV<" in res.text
     assert "All events" not in res.text
     assert "Pick an event." in res.text
     assert "Running…" in res.text
