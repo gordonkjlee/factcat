@@ -538,7 +538,9 @@
        input opts back out of the row rule above (flex-basis would become
        HEIGHT in a column context) and takes the full line. */
     .bd-fill-expr-wrap { flex: 1 1 100%; display: flex; flex-direction: column; }
-    .bd-fill-expr-wrap input { flex: 0 0 auto; width: 100%; }
+    /* Two-class chain: beats .bd-fill-wrap input on specificity, not
+       source order — the same convention as the label chains above. */
+    .bd-fill-wrap .bd-fill-expr-wrap input { flex: 0 0 auto; width: 100%; }
     #bd-null-nudge { margin-top: 0.35rem; }
     #bd-null-nudge .linkish { margin-left: 0; }
     .series-bd-slot { margin-top: 0.35rem; }
