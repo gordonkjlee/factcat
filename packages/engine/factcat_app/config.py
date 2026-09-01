@@ -85,6 +85,12 @@ DEFAULTS: dict[str, Any] = {
     "breakdown_at": "rows",
     "top_n": 8,
     "include_other": True,
+    "pane_chart_open": True,
+    "pane_table_open": True,
+    "pane_sql_open": False,
+    "layout_config_px": 0,
+    "layout_config_collapsed": False,
+    "layout_chart_px": 0,
 }
 
 WAREHOUSE_KINDS = tuple(ADAPTERS)

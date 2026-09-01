@@ -13,11 +13,44 @@
     }
     form.workspace-form {
       display: grid;
-      grid-template-columns: 22rem 1fr;
+      grid-template-columns: var(--fc-config-col, 22rem) 0.75rem minmax(0, 1fr);
       height: 100%;
       min-height: 0;
     }
-    .filters { background: var(--fc-snow); padding: 1.25rem; border-right: 1px solid var(--fc-line); overflow-y: auto; min-height: 0; }
+    form.workspace-form.config-collapsed { grid-template-columns: 0 0.75rem minmax(0, 1fr); }
+    form.workspace-form.config-collapsed .filters { display: none; }
+    .filters { background: var(--fc-snow); padding: 1.25rem; border-right: 1px solid var(--fc-line); overflow-y: auto; min-height: 0; grid-column: 1; grid-row: 1; }
+    .col-divider { grid-column: 2; grid-row: 1; }
+    .results { grid-column: 3; grid-row: 1; }
+    .col-divider {
+      cursor: col-resize;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      touch-action: none;
+      min-height: 0;
+    }
+    .col-divider:hover, .col-divider.dragging { background: color-mix(in srgb, var(--fc-ochre) 16%, transparent); }
+    form.workspace-form.config-collapsed .col-divider { cursor: default; }
+    .col-toggle {
+      margin: 0;
+      padding: 0;
+      width: 1.05rem;
+      height: 2.75rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--fc-snow);
+      color: var(--fc-slate);
+      border: 1px solid var(--fc-line);
+      border-radius: 0.5rem;
+      cursor: pointer;
+    }
+    .col-toggle:hover { color: var(--fc-ink); border-color: var(--fc-ochre); }
+    .col-toggle svg { width: 0.7rem; height: 0.7rem; display: block; }
+    .col-toggle .chev-right { display: none; }
+    form.config-collapsed .col-toggle .chev-left { display: none; }
+    form.config-collapsed .col-toggle .chev-right { display: block; }
     .results-toolbar {
       display: flex;
       flex-wrap: wrap;
@@ -88,12 +121,55 @@
     .results {
       display: flex;
       flex-direction: column;
-      gap: 0.5rem;
+      gap: 0;
       padding: 0.5rem;
       min-height: 0;
       overflow: hidden;
       background: var(--fc-paper);
     }
+    .pane + .pane { margin-top: 0.5rem; }
+    .row-divider {
+      flex: 0 0 0.5rem;
+      cursor: row-resize;
+      touch-action: none;
+      position: relative;
+    }
+    .row-divider::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 2.5rem;
+      height: 3px;
+      border-radius: 2px;
+      transform: translate(-50%, -50%);
+      background: var(--fc-ochre);
+      opacity: 0;
+    }
+    .row-divider:hover::after, .row-divider.dragging::after { opacity: 1; }
+    .row-divider[hidden] { display: none; }
+    .results.chart-sized .pane-chart:not(.closed) { flex: 0 0 var(--fc-chart-px); }
+    .pane.closed { flex: 0 0 auto; min-height: 0; }
+    .pane.closed .pane-body { display: none; }
+    .pane-toggle {
+      margin: 0 0 0 0.25rem;
+      padding: 0.15rem;
+      width: 1.5rem;
+      height: 1.5rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: 0;
+      border-radius: 0.25rem;
+      color: var(--fc-slate);
+      cursor: pointer;
+      flex: 0 0 auto;
+    }
+    .pane-toggle:hover { color: var(--fc-ink); background: var(--fc-paper); }
+    .pane-toggle svg { width: 0.85rem; height: 0.85rem; display: block; transition: transform 0.15s ease; }
+    .pane.closed .pane-toggle svg { transform: rotate(-90deg); }
+    .pane-head h2 { cursor: pointer; }
     .pane {
       background: var(--fc-snow);
       border: 1px solid var(--fc-line);
@@ -134,6 +210,7 @@
     .run-dots span.on { visibility: visible; }
     @media (prefers-reduced-motion: reduce) {
       #waiting-cat { animation: none; }
+      .pane-toggle svg { transition: none; }
     }
     #sql { margin: 0; min-height: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.78rem; }
     code.fc-sql {
@@ -151,7 +228,9 @@
       font-size: 0.78rem;
     }
     .summary { font-size: 0.75rem; color: var(--fc-slate); margin: 0 0 0.75rem; }
-    .pane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding-right: 0.5rem; }
+    .pane-head { display: flex; align-items: center; justify-content: flex-start; gap: 0.5rem; padding-right: 0.5rem; }
+    .pane-head .pane-actions { margin-left: auto; }
+    .pane-head h2 { padding-left: 0; }
     .pane-head h2 { border-bottom: none; padding: 0.45rem 0.75rem; }
     .pane-actions { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
     .pane-actions button, .pane-actions select { margin: 0; padding: 0.2rem 0.5rem; font-size: 0.7rem; width: auto; }
@@ -516,7 +595,7 @@
 {% endblock %}
 {% block body %}
 <main class="workspace">
-  <form id="f" class="workspace-form">
+  <form id="f" class="workspace-form{% if config.layout_config_collapsed %} config-collapsed{% endif %}"{% if config.layout_config_px %} style="--fc-config-col: {{ config.layout_config_px }}px"{% endif %}>
   <div class="filters">
     <h1>Events</h1>
     {% if not mapping_ready %}
@@ -680,7 +759,13 @@
     </div>
     <p id="error"></p>
   </div>
-  <div class="results">
+  <div id="col-divider" class="col-divider" role="separator" aria-orientation="vertical" title="Drag to resize the query panel. Double-click to reset.">
+    <button type="button" id="config-toggle" class="col-toggle" aria-expanded="{{ 'false' if config.layout_config_collapsed else 'true' }}" aria-label="{{ 'Expand the query panel' if config.layout_config_collapsed else 'Collapse the query panel' }}">
+      <svg class="chev-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+      <svg class="chev-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+    </button>
+  </div>
+  <div class="results{% if config.layout_chart_px %} chart-sized{% endif %}"{% if config.layout_chart_px %} style="--fc-chart-px: {{ config.layout_chart_px }}px"{% endif %}>
     <div class="results-toolbar">
       <div class="toolbar-field">
         <label for="grain">Time grain</label>
@@ -759,8 +844,11 @@
         <span id="run-status"></span>
       </div>
     </div>
-    <section class="pane pane-chart">
+    <section class="pane pane-chart{% if not config.pane_chart_open %} closed{% endif %}">
       <div class="pane-head">
+        <button type="button" class="pane-toggle" data-pane="chart" aria-expanded="{{ 'true' if config.pane_chart_open else 'false' }}" aria-controls="chart-pane-body" title="{{ 'Collapse chart' if config.pane_chart_open else 'Expand chart' }}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
         <input id="chart-title" class="chart-title" name="chart_title" value="{{ config.chart_title }}" placeholder="Chart title" spellcheck="false">
         <button type="button" id="reset-title" class="icon-btn" title="Reset title" aria-label="Reset title">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 15.36-6.36L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.36 6.36L3 16"/><path d="M3 21v-5h5"/></svg>
@@ -806,7 +894,7 @@
           </button>
         </span>
       </div>
-      <div class="pane-body chart-body">
+      <div class="pane-body chart-body" id="chart-pane-body">
         <p id="chart-stale" class="stale-note" hidden></p>
         <div id="chart-empty" class="empty-state">
           <img id="waiting-cat" src="/static/waiting.jpg" width="160" height="160" alt="">
@@ -816,8 +904,12 @@
         <p id="incomplete-note" class="incomplete-note" hidden></p>
       </div>
     </section>
-    <section class="pane pane-table">
+    <div id="row-divider" class="row-divider" role="separator" aria-orientation="horizontal" title="Drag to resize the chart. Double-click to reset."{% if not config.pane_chart_open or not config.pane_table_open %} hidden{% endif %}></div>
+    <section class="pane pane-table{% if not config.pane_table_open %} closed{% endif %}">
       <div class="pane-head">
+        <button type="button" class="pane-toggle" data-pane="table" aria-expanded="{{ 'true' if config.pane_table_open else 'false' }}" aria-controls="table-pane-body" title="{{ 'Collapse table' if config.pane_table_open else 'Expand table' }}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
         <h2>Table</h2>
         <span class="pane-actions">
           <button type="button" id="copy-table" class="icon-btn" hidden title="Copy table" aria-label="Copy table">
@@ -828,7 +920,7 @@
           </button>
         </span>
       </div>
-      <div class="pane-body">
+      <div class="pane-body" id="table-pane-body">
         <p id="table-stale" class="stale-note" hidden></p>
         <p class="empty" id="table-empty">Run to fill the table.</p>
         <p id="limit-note" class="incomplete-note" hidden></p>
@@ -844,8 +936,11 @@
         </table>
       </div>
     </section>
-    <section class="pane pane-sql">
+    <section class="pane pane-sql{% if not config.pane_sql_open %} closed{% endif %}">
       <div class="pane-head">
+        <button type="button" class="pane-toggle" data-pane="sql" aria-expanded="{{ 'true' if config.pane_sql_open else 'false' }}" aria-controls="sql-pane-body" title="{{ 'Collapse SQL' if config.pane_sql_open else 'Expand SQL' }}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
         <h2>SQL</h2>
         <span class="pane-actions">
           <button type="button" id="copy-sql" class="icon-btn" hidden title="Copy SQL" aria-label="Copy SQL">
@@ -853,7 +948,7 @@
           </button>
         </span>
       </div>
-      <div class="pane-body">
+      <div class="pane-body" id="sql-pane-body">
         <pre id="sql" class="empty">SQL updates as you change the form.</pre>
       </div>
     </section>
@@ -4228,6 +4323,127 @@ form.addEventListener("submit", async (e) => {
       setChartEmpty("empty");
     }
   }
+});
+// --- Layout: collapsible panes, draggable dividers. Persisted via /api/save.
+const layoutForm = document.getElementById("f");
+const resultsEl = document.querySelector(".results");
+const CONFIG_COL_MIN = 256;
+function configColMax() {
+  return Math.max(CONFIG_COL_MIN, Math.min(640, Math.round(window.innerWidth * 0.5)));
+}
+function saveLayout(patch) {
+  post("/api/save", patch);
+}
+function setConfigCollapsed(collapsed, persist) {
+  layoutForm.classList.toggle("config-collapsed", collapsed);
+  const btn = document.getElementById("config-toggle");
+  btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  btn.setAttribute("aria-label", collapsed ? "Expand the query panel" : "Collapse the query panel");
+  if (persist) saveLayout({ layout_config_collapsed: collapsed });
+}
+document.getElementById("config-toggle").addEventListener("click", () => {
+  setConfigCollapsed(!layoutForm.classList.contains("config-collapsed"), true);
+});
+function bindDivider(el, opts) {
+  el.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || (e.target && e.target.closest("button"))) return;
+    e.preventDefault();
+    let moved = false;
+    if (opts.begin) opts.begin();
+    el.classList.add("dragging");
+    try { el.setPointerCapture(e.pointerId); } catch (err) { /* synthetic pointers */ }
+    const move = (ev) => {
+      moved = true;
+      opts.drag(ev);
+    };
+    const up = () => {
+      el.classList.remove("dragging");
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+      opts.end(moved);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+  });
+  el.addEventListener("dblclick", (e) => {
+    if (e.target && e.target.closest("button")) return;
+    opts.reset();
+  });
+}
+let configColPx = 0;
+bindDivider(document.getElementById("col-divider"), {
+  begin: () => {
+    if (layoutForm.classList.contains("config-collapsed")) setConfigCollapsed(false, true);
+  },
+  drag: (e) => {
+    const left = layoutForm.getBoundingClientRect().left;
+    configColPx = Math.round(Math.min(configColMax(), Math.max(CONFIG_COL_MIN, e.clientX - left)));
+    layoutForm.style.setProperty("--fc-config-col", configColPx + "px");
+  },
+  end: (moved) => {
+    if (moved) saveLayout({ layout_config_px: configColPx, layout_config_collapsed: false });
+  },
+  reset: () => {
+    configColPx = 0;
+    layoutForm.style.removeProperty("--fc-config-col");
+    saveLayout({ layout_config_px: 0 });
+  },
+});
+let chartHeightPx = 0;
+bindDivider(document.getElementById("row-divider"), {
+  drag: (e) => {
+    const top = document.querySelector(".pane-chart").getBoundingClientRect().top;
+    const max = Math.max(128, resultsEl.getBoundingClientRect().height - 176);
+    chartHeightPx = Math.round(Math.min(max, Math.max(128, e.clientY - top)));
+    resultsEl.classList.add("chart-sized");
+    resultsEl.style.setProperty("--fc-chart-px", chartHeightPx + "px");
+  },
+  end: (moved) => {
+    if (moved && chartHeightPx) saveLayout({ layout_chart_px: chartHeightPx });
+  },
+  reset: () => {
+    chartHeightPx = 0;
+    resultsEl.classList.remove("chart-sized");
+    resultsEl.style.removeProperty("--fc-chart-px");
+    saveLayout({ layout_chart_px: 0 });
+  },
+});
+function paneFor(name) {
+  return document.querySelector(".pane-" + name);
+}
+function syncRowDivider() {
+  document.getElementById("row-divider").hidden =
+    paneFor("chart").classList.contains("closed") || paneFor("table").classList.contains("closed");
+}
+function setPaneOpen(name, open, persist) {
+  const pane = paneFor(name);
+  pane.classList.toggle("closed", !open);
+  const btn = pane.querySelector(".pane-toggle");
+  const label = name === "sql" ? "SQL" : name;
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  btn.title = (open ? "Collapse " : "Expand ") + label;
+  syncRowDivider();
+  if (name === "chart" && open) {
+    requestAnimationFrame(() => {
+      if (chart) chart.resize();
+    });
+  }
+  if (persist) saveLayout({ ["pane_" + name + "_open"]: open });
+}
+document.querySelectorAll(".pane-toggle").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const name = btn.getAttribute("data-pane");
+    setPaneOpen(name, paneFor(name).classList.contains("closed"), true);
+  });
+});
+document.querySelectorAll(".pane-head").forEach((head) => {
+  head.addEventListener("click", (e) => {
+    if (e.target.closest("button, input, select, details, a, label")) return;
+    const btn = head.querySelector(".pane-toggle");
+    if (btn) btn.click();
+  });
 });
 scheduleEstimate();
 prefetchCat();
