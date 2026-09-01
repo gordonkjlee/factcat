@@ -65,8 +65,6 @@ DEFAULTS: dict[str, Any] = {
     "chart_type": "auto",
     "chart_labels": False,
     "chart_value_format": "auto",
-    "chart_axis_x": True,
-    "chart_axis_y": True,
     "chart_grid": "major",
     "chart_title": "",
     "chart_title_locked": False,
