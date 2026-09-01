@@ -511,9 +511,11 @@
     }
     .refresh-split .refresh-more[aria-expanded="true"] svg { transform: rotate(180deg); }
     #find-event[hidden], #find-event-panel[hidden],
-    #event-names-snapshot[hidden], #event-names-status[hidden] {
+    #event-names-snapshot[hidden], #event-names-status[hidden],
+    #event-names-fallback[hidden] {
       display: none !important;
     }
+    #event-names-fallback { margin: 0 0 0.35rem; }
     #find-event-panel {
       margin: 0 0 0.45rem auto;
       padding: 0.15rem 0 0.25rem;
@@ -735,6 +737,7 @@
       </div>
       <p id="event-names-status" class="catalog-status" hidden></p>
       <p id="event-names-snapshot" class="hint" hidden>This list is a snapshot. Refresh rebuilds it.</p>
+      <p id="event-names-fallback" class="hint" hidden>Could not use the event-name snapshot in the write destination — ran a lookback scan instead. Check permissions on fc_event_names.</p>
       <div id="find-event-panel" hidden>
         <div id="find-event-options"></div>
       </div>
@@ -2818,7 +2821,6 @@ const eventNameList = bindCachedList({
   },
   refreshButtons: [document.getElementById("refresh-events")],
   loadIfEmpty: true,
-  loadOnStart: () => writeDestReady(),
   async load(opts) {
     if (!eventColumnEl.value || !tableEl.value) return null;
     const kind = document.getElementById("kind").value || "bigquery";
@@ -2863,9 +2865,10 @@ const eventNameList = bindCachedList({
         event_column: eventColumnEl.value,
         kind: data.kind,
       };
-    } else if (!data.cache) {
-      eventNameCacheMeta = {};
     }
+    // A lookback fallback keeps the stored fingerprint (the server does
+    // too): a degraded load must not zero the cache state.
+    document.getElementById("event-names-fallback").hidden = !data.fallback;
     syncFindEvent();
     syncSnapshotHint();
     syncRefreshHint();
