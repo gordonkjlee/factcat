@@ -129,6 +129,9 @@
     }
     .empty-state[hidden], canvas[hidden], .empty-state img[hidden] { display: none; }
     .empty-state img { width: 10rem; height: 10rem; object-fit: contain; margin-bottom: 0.75rem; }
+    /* Dots hide via visibility so the centred copy never shifts as they cycle. */
+    .run-dots span { visibility: hidden; }
+    .run-dots span.on { visibility: visible; }
     @media (prefers-reduced-motion: reduce) {
       #waiting-cat { animation: none; }
     }
@@ -3839,6 +3842,29 @@ function startIdleCat() {
   const gen = catGen;
   catLater(gen, idleGap(), () => playIdleBeat(Math.random() < 0.45));
 }
+function stepRunDots(gen, n) {
+  const dots = document.querySelectorAll("#empty-copy .run-dots span");
+  dots.forEach((d, i) => d.classList.toggle("on", i < n));
+  catLater(gen, 550, () => stepRunDots(gen, n >= 3 ? 1 : n + 1));
+}
+function setRunningCopy(copy) {
+  if (!catReduceMotion()) {
+    copy.textContent = "Running…";
+    return;
+  }
+  // Reduced motion: the cat freezes, so the dots carry liveness instead.
+  if (copy.querySelector(".run-dots")) return;
+  copy.textContent = "Running";
+  const dots = document.createElement("span");
+  dots.className = "run-dots";
+  dots.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < 3; i += 1) {
+    const d = document.createElement("span");
+    d.textContent = ".";
+    dots.appendChild(d);
+  }
+  copy.appendChild(dots);
+}
 function startRunCat() {
   stopCatMotion();
   const gen = catGen;
@@ -3846,7 +3872,10 @@ function startRunCat() {
   let i = 0;
   let dir = 1;
   setCatSrc(frames[0]);
-  if (catReduceMotion()) return;
+  if (catReduceMotion()) {
+    stepRunDots(gen, 1);
+    return;
+  }
   function step() {
     if (gen !== catGen) return;
     i += dir;
@@ -3869,7 +3898,7 @@ function setChartEmpty(kind) {
   }
   empty.hidden = false;
   img.hidden = false;
-  if (kind === "running") copy.textContent = "Running…";
+  if (kind === "running") setRunningCopy(copy);
   else if (kind === "fail") copy.textContent = "Query failed.";
   else if (kind === "empty") copy.textContent = "Nothing to `cat`.";
   else if (document.getElementById("needs-setup")) copy.textContent = "Map a table on Setup before Events can run.";
@@ -3892,8 +3921,7 @@ function drawChart() {
   const copyBtn = document.getElementById("copy-chart");
   const pngBtn = document.getElementById("export-png");
   if (!tableRows.length) {
-    const copy = document.getElementById("empty-copy").textContent || "";
-    if (copy !== "Query failed." && copy !== "Running…") setChartEmpty("wait");
+    if (catKind !== "fail" && catKind !== "running") setChartEmpty("wait");
     ctx.hidden = true;
     copyBtn.hidden = true;
     pngBtn.hidden = true;
@@ -4178,7 +4206,7 @@ form.addEventListener("submit", async (e) => {
     runBtn.disabled = false;
     runBtn.textContent = "Run";
     runLoad.hidden = true;
-    if (!tableRows.length && emptyCopy.textContent === "Running…") {
+    if (!tableRows.length && catKind === "running") {
       setChartEmpty("empty");
     }
   }
@@ -4186,8 +4214,7 @@ form.addEventListener("submit", async (e) => {
 scheduleEstimate();
 prefetchCat();
 if (!tableRows.length) {
-  const bootCopy = document.getElementById("empty-copy").textContent || "";
-  if (bootCopy !== "Query failed." && bootCopy !== "Running…") setChartEmpty("wait");
+  if (catKind !== "fail" && catKind !== "running") setChartEmpty("wait");
 }
 </script>
 {% endblock %}
