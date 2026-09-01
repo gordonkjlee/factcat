@@ -328,6 +328,18 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "All events" not in res.text
     assert "Pick an event." in res.text
     assert "Running…" in res.text
+    assert "startRunButtonDots" in res.text
+    assert "cancelEstimate();" in res.text
+    assert "Querying…" not in res.text
+    assert 'id="run-loading"' not in res.text
+    assert "chart_axis_x" not in res.text
+    assert "chart_axis_y" not in res.text
+    assert "X-axis labels" not in res.text
+    assert "Y-axis labels" not in res.text
+    assert "Dotted point is the current" not in res.text
+    assert "Faded bar is the current" not in res.text
+    assert '" — partial, " + through' in res.text
+    assert "Few points at this grain." in res.text
     assert "setRunningCopy" in res.text
     assert "stepRunDots" in res.text
     assert 'dots.className = "run-dots"' in res.text
@@ -1913,3 +1925,31 @@ def test_event_name_column_is_string():
     assert column_fits("STRING", "event_column")
     assert not column_fits("INT64", "event_column")
     assert not column_fits("TIMESTAMP", "event_column")
+
+
+def test_blocking_endpoints_use_threadpool():
+    """Warehouse round-trips must not block uvicorn's event loop.
+
+    Every endpoint that talks to a warehouse (or runs pip) awaits its
+    blocking work in the threadpool, so a slow estimate cannot queue a run
+    behind it. Handlers are async; the blocking call goes through
+    run_in_threadpool.
+    """
+    import inspect
+
+    from factcat_app import main as main_mod
+
+    blocking = (
+        main_mod.api_roles,
+        main_mod.api_warehouses,
+        main_mod.api_datasets,
+        main_mod.api_schemas,
+        main_mod.api_tables,
+        main_mod.api_columns,
+        main_mod.api_event_values,
+        main_mod.api_install_extra,
+        main_mod.api_estimate,
+        main_mod.api_run,
+    )
+    for fn in blocking:
+        assert "run_in_threadpool" in inspect.getsource(fn), fn.__name__

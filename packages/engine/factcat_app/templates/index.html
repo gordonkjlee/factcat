@@ -746,7 +746,6 @@
       </div>
       <div id="run-row">
         <button type="submit" id="run"{% if not mapping_ready %} disabled{% endif %}>Run</button>
-        <span id="run-loading" class="loading" hidden aria-label="Running"></span>
         <span id="run-estimate-wrap" hidden>
           <span id="run-estimate-bar" aria-hidden="true"><span id="run-estimate-fill"></span></span>
           <span id="run-estimate"></span>
@@ -790,8 +789,6 @@
                 </select>
               </label>
               <label>Data labels <input id="chart_labels" name="chart_labels" type="checkbox" {% if config.chart_labels %}checked{% endif %} style="width:auto"></label>
-              <label>X-axis labels <input id="chart_axis_x" name="chart_axis_x" type="checkbox" {% if config.chart_axis_x or config.chart_axis_x is not false %}checked{% endif %} style="width:auto"></label>
-              <label>Y-axis labels <input id="chart_axis_y" name="chart_axis_y" type="checkbox" {% if config.chart_axis_y or config.chart_axis_y is not false %}checked{% endif %} style="width:auto"></label>
               <label>Grid
                 <select id="chart_grid" name="chart_grid">
                   <option value="off" {% if config.chart_grid == "off" %}selected{% endif %}>Off</option>
@@ -3152,8 +3149,6 @@ function payload() {
   d.include_current = includeCurrentEl.checked;
   d.exclude_current = !d.include_current;
   d.chart_labels = document.getElementById("chart_labels").checked;
-  d.chart_axis_x = document.getElementById("chart_axis_x").checked;
-  d.chart_axis_y = document.getElementById("chart_axis_y").checked;
   d.chart_title_locked = titleLockedEl.value === "true";
   d.chart_title = titleLockedEl.value === "true" ? titleEl.value : defaultTitle();
   d.override_cap = document.getElementById("override_cap").checked;
@@ -3842,6 +3837,17 @@ function startIdleCat() {
   const gen = catGen;
   catLater(gen, idleGap(), () => playIdleBeat(Math.random() < 0.45));
 }
+function buildRunDots() {
+  const dots = document.createElement("span");
+  dots.className = "run-dots";
+  dots.setAttribute("aria-hidden", "true");
+  for (let i = 0; i < 3; i += 1) {
+    const d = document.createElement("span");
+    d.textContent = ".";
+    dots.appendChild(d);
+  }
+  return dots;
+}
 function stepRunDots(gen, n) {
   const dots = document.querySelectorAll("#empty-copy .run-dots span");
   dots.forEach((d, i) => d.classList.toggle("on", i < n));
@@ -3855,15 +3861,33 @@ function setRunningCopy(copy) {
   // Reduced motion: the cat freezes, so the dots carry liveness instead.
   if (copy.querySelector(".run-dots")) return;
   copy.textContent = "Running";
-  const dots = document.createElement("span");
-  dots.className = "run-dots";
-  dots.setAttribute("aria-hidden", "true");
-  for (let i = 0; i < 3; i += 1) {
-    const d = document.createElement("span");
-    d.textContent = ".";
-    dots.appendChild(d);
+  copy.appendChild(buildRunDots());
+}
+let runBtnTimer = 0;
+function startRunButtonDots() {
+  const btn = document.getElementById("run");
+  btn.textContent = "Running";
+  btn.appendChild(buildRunDots());
+  let n = 1;
+  const step = () => {
+    btn.querySelectorAll(".run-dots span").forEach((d, i) => d.classList.toggle("on", i < n));
+    n = n >= 3 ? 1 : n + 1;
+    runBtnTimer = setTimeout(step, 550);
+  };
+  step();
+}
+function stopRunButtonDots() {
+  clearTimeout(runBtnTimer);
+  runBtnTimer = 0;
+}
+function cancelEstimate() {
+  clearTimeout(estimateTimer);
+  estimateGen += 1;
+  const el = document.getElementById("run-estimate");
+  if (el.textContent === "Estimating…") {
+    document.getElementById("run-estimate-wrap").hidden = true;
+    el.textContent = "";
   }
-  copy.appendChild(dots);
 }
 function startRunCat() {
   stopCatMotion();
@@ -3947,26 +3971,20 @@ function drawChart() {
   const type = isBar ? "bar" : "line";
   const measureLabel = titleEl.value || valueHeader();
   const note = document.getElementById("incomplete-note");
-  const hasIncomplete = shown.some((r) => r.incomplete);
   const grain = resultGrain();
-  note.hidden = !hasIncomplete;
-  const through = grain === "hour" ? " (through this hour)." : " (through today).";
-  note.textContent = hasIncomplete
-    ? (isBar ? "Faded bar is the current " : "Dotted point is the current ") + grain + through
-    : "";
+  const through = grain === "hour" ? "through this hour" : "through today";
+  note.hidden = true;
+  note.textContent = "";
   if (labels.length <= 2 && (document.getElementById("chart_type").value || "auto") === "auto") {
     note.hidden = false;
-    const extra = grain === "day"
+    note.textContent = grain === "day"
       ? "Few points at this grain."
       : "Few points at this grain — switch Time grain to Day and run again to see days inside the range.";
-    note.textContent = [note.textContent, extra].filter(Boolean).join(" ");
   }
   if (chart) chart.destroy();
   if (!window.Chart) return;
   const furn = chartFurniture();
   const gridMode = document.getElementById("chart_grid").value || "major";
-  const showX = document.getElementById("chart_axis_x").checked;
-  const showY = document.getElementById("chart_axis_y").checked;
   const datasets = names.map((name, i) => {
     const color = name === "(other)" ? MUTED : SERIES_COLORS[i % SERIES_COLORS.length];
     const byBucket = {};
@@ -3977,6 +3995,7 @@ function drawChart() {
     const pointColors = labels.map((b) => (byBucket[b] && byBucket[b].incomplete ? MUTED : color));
     return {
       label: name || measureLabel,
+      fcIncomplete: labels.map((b) => !!(byBucket[b] && byBucket[b].incomplete)),
       data,
       tension: 0.1,
       fill: isArea ? "origin" : false,
@@ -3999,7 +4018,7 @@ function drawChart() {
       maintainAspectRatio: false,
       scales: {
         x: {
-          ticks: { display: showX, maxRotation: 0, autoSkip: true, color: furn.ink },
+          ticks: { maxRotation: 0, autoSkip: true, color: furn.ink },
           border: { color: furn.line },
           grid: {
             display: gridMode !== "off",
@@ -4009,7 +4028,6 @@ function drawChart() {
         y: {
           beginAtZero: true,
           ticks: {
-            display: showY,
             color: furn.ink,
             callback: (v) => formatValue(v),
             count: gridMode === "minor" ? 9 : 6,
@@ -4032,7 +4050,10 @@ function drawChart() {
           borderColor: furn.line,
           borderWidth: 1,
           callbacks: {
-            label: (ctx) => (multi ? ctx.dataset.label + ": " : "") + formatValue(ctx.parsed.y),
+            label: (ctx) => (multi ? ctx.dataset.label + ": " : "") + formatValue(ctx.parsed.y)
+              + (ctx.dataset.fcIncomplete && ctx.dataset.fcIncomplete[ctx.dataIndex]
+                ? " — partial, " + through
+                : ""),
           },
         },
       },
@@ -4062,7 +4083,7 @@ document.addEventListener("click", (e) => {
   if (pop.open && !pop.contains(e.target)) pop.removeAttribute("open");
 });
 document.getElementById("chart_type").addEventListener("change", drawChart);
-["chart_labels", "chart_value_format", "chart_axis_x", "chart_axis_y", "chart_grid"].forEach((id) => {
+["chart_labels", "chart_value_format", "chart_grid"].forEach((id) => {
   document.getElementById(id).addEventListener("change", () => {
     if (tableRows.length) {
       drawChart();
@@ -4132,15 +4153,12 @@ form.addEventListener("submit", async (e) => {
     setError("Enter a JSON key.");
     return;
   }
+  cancelEstimate();
   const runBtn = document.getElementById("run");
-  const runLoad = document.getElementById("run-loading");
   const runStatus = document.getElementById("run-status");
-  const emptyCopy = document.getElementById("empty-copy");
   const hadChart = !!chart || tableRows.length;
   runBtn.disabled = true;
-  runBtn.textContent = "Running…";
-  runLoad.hidden = false;
-  runStatus.textContent = "Querying…";
+  startRunButtonDots();
   if (!hadChart) setChartEmpty("running");
   try {
     const res = await fetch("/api/run", {
@@ -4203,9 +4221,9 @@ form.addEventListener("submit", async (e) => {
     showLimitNote(!!data.truncated, data.limit || effectiveRowLimit());
     runStatus.textContent = tableRows.length + " row" + (tableRows.length === 1 ? "" : "s");
   } finally {
+    stopRunButtonDots();
     runBtn.disabled = false;
     runBtn.textContent = "Run";
-    runLoad.hidden = true;
     if (!tableRows.length && catKind === "running") {
       setChartEmpty("empty");
     }

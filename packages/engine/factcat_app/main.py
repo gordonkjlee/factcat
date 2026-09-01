@@ -7,6 +7,7 @@ from pathlib import Path
 
 import markdown
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -170,7 +171,7 @@ def _catalog_error(exc: Exception, form: dict | None = None) -> JSONResponse:
 async def api_roles(request: Request) -> JSONResponse:
     form = await request.json()
     try:
-        roles = roles_from_form(form)
+        roles = await run_in_threadpool(roles_from_form, form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
     return JSONResponse({"ok": True, "roles": roles})
@@ -180,7 +181,7 @@ async def api_roles(request: Request) -> JSONResponse:
 async def api_warehouses(request: Request) -> JSONResponse:
     form = await request.json()
     try:
-        payload = warehouses_from_form(form)
+        payload = await run_in_threadpool(warehouses_from_form, form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
     return JSONResponse({"ok": True, **payload})
@@ -190,7 +191,7 @@ async def api_warehouses(request: Request) -> JSONResponse:
 async def api_datasets(request: Request) -> JSONResponse:
     form = await request.json()
     try:
-        datasets = datasets_from_form(form)
+        datasets = await run_in_threadpool(datasets_from_form, form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
     return JSONResponse({"ok": True, "datasets": datasets})
@@ -200,7 +201,7 @@ async def api_datasets(request: Request) -> JSONResponse:
 async def api_schemas(request: Request) -> JSONResponse:
     form = await request.json()
     try:
-        schemas = schemas_from_form(form)
+        schemas = await run_in_threadpool(schemas_from_form, form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
     return JSONResponse({"ok": True, "schemas": schemas})
@@ -210,7 +211,7 @@ async def api_schemas(request: Request) -> JSONResponse:
 async def api_tables(request: Request) -> JSONResponse:
     form = await request.json()
     try:
-        payload = tables_from_form(form)
+        payload = await run_in_threadpool(tables_from_form, form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
     return JSONResponse({"ok": True, **payload})
@@ -220,7 +221,7 @@ async def api_tables(request: Request) -> JSONResponse:
 async def api_columns(request: Request) -> JSONResponse:
     form = await request.json()
     try:
-        payload = columns_from_form(form)
+        payload = await run_in_threadpool(columns_from_form, form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
     save({"columns": payload.get("columns") or []})
@@ -243,15 +244,17 @@ async def api_event_values(request: Request) -> JSONResponse:
     try:
         catalog = form.get("catalog") in (True, "true", "on", "1", 1)
         conn = connection_from_form(form, apply_scan_cap=not catalog)
-        warehouse = connect(form_kind(form), **conn)
+        warehouse = await run_in_threadpool(connect, form_kind(form), **conn)
         if catalog:
             cfg = load()
             if "event_name_cache" not in form:
                 form = {**form, "event_name_cache": cfg.get("event_name_cache") or {}}
-            result, cache_kind, meta = catalog_event_values(form, warehouse.run)
+            result, cache_kind, meta = await run_in_threadpool(
+                catalog_event_values, form, warehouse.run
+            )
         else:
             sql = event_values_sql(form)
-            result = warehouse.run(sql)
+            result = await run_in_threadpool(warehouse.run, sql)
             meta = None
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
@@ -335,7 +338,7 @@ async def api_install_extra(request: Request) -> JSONResponse:
             {"ok": False, "error": "unknown warehouse extra"},
             status_code=400,
         )
-    result = run_install(kind)
+    result = await run_in_threadpool(run_install, kind)
     status = 200 if result.get("ok") else 400
     return JSONResponse(result, status_code=status)
 
@@ -439,8 +442,8 @@ async def api_estimate(request: Request) -> JSONResponse:
             )
         conn = connection_from_form(form)
         sql = events_sql_from_form(form)
-        warehouse = connect(kind, **conn)
-        result = warehouse.run(sql, dry_run=True)
+        warehouse = await run_in_threadpool(connect, kind, **conn)
+        result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
     except BytesCapError as exc:
         return JSONResponse(
             _estimate_payload(
@@ -466,8 +469,8 @@ async def api_run(request: Request) -> JSONResponse:
         sql = events_sql_from_form(form)
         conn = connection_from_form(form)
         save(form)
-        warehouse = connect(form_kind(form), **conn)
-        result = warehouse.run(sql)
+        warehouse = await run_in_threadpool(connect, form_kind(form), **conn)
+        result = await run_in_threadpool(warehouse.run, sql)
     except BytesCapError as exc:
         return _fail(exc, sql)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
