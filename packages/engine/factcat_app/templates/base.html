@@ -225,10 +225,12 @@
       .save-toast { left: 1.25rem; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .loading { animation: none; border-top-color: var(--fc-ochre); }
+      /* Progress spinners are status, not decoration: keep turning, slowly.
+         A frozen ring reads as hung. Decorative motion stays off. */
+      .loading, .save-toast.saving::before { animation-duration: 1.2s; }
       .save-toast { transition: none; transform: none; }
-      .save-toast.saving::before { animation: none; }
     }
+    .refresh-busy { display: none !important; }
     table { border-collapse: collapse; margin-top: 1rem; font-size: 0.85rem; }
     td, th { border-bottom: 1px solid var(--fc-line); padding: 0.25rem 0.75rem 0.25rem 0; text-align: left; }
     details { margin-top: 0.75rem; font-size: 0.75rem; }

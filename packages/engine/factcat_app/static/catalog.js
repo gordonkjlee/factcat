@@ -17,6 +17,8 @@ function bindCachedList(options) {
       const hint = document.getElementById(el.id + "-loading");
       if (hint) hint.hidden = !on;
     });
+    // Class, not `hidden`: other chrome (write-dest, split chevron) owns hidden.
+    buttons.forEach((btn) => btn.classList.toggle("refresh-busy", on));
     if (statusEl) {
       statusEl.hidden = !on;
       statusEl.textContent = on && options.statusText ? options.statusText(!!user) : "";
