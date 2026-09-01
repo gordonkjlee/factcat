@@ -253,6 +253,10 @@ EVENTS_BREAKDOWN_MIXED = EventsSpec(
     top_n=8,
 )
 
+# The two property-measure composition specs below are compile-only in
+# this walk; distinct+carried also executes on DuckDB in
+# test_events_breakdowns, median+carried is transpile-covered only (the
+# median splice is dialect-specific and has no portable execute fixture).
 EVENTS_BREAKDOWN_CARRIED_MEDIAN = EventsSpec(
     table="events",
     entity="entity_id",

@@ -220,6 +220,13 @@ def _carried_ctes(
     # group, then FIRST_VALUE per (entity, group) is the group's stamp.
     # ONE stamp scan serves every carried column; metric rows with a NULL
     # instant sort into group 0 and carry NULL, but the row survives.
+    # The stamp branch pairs bare NULLs against the needle branch's typed
+    # columns. That is valid on the union type resolution of every
+    # SUPPORTED family, and was verified live on BigQuery (the strictest):
+    # dry-run of carried / mixed / property / backfill specs against a
+    # real DATETIME-bucketed table validated and returned byte estimates
+    # (2026-09-01). Do not "harden" this to CAST(NULL AS ...) — the
+    # caller expressions' types are unknown by design.
     stamp_selects: list[str] = []
     stamp_preds: list[str] = []
     for i, bd in carried:
@@ -346,7 +353,10 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
             entry_by_index[i] = f"attr_{i}.fc_bd_{i}"
     if carried_items:
         # The metric rows come back out of the union stream; rows-mode
-        # expressions were evaluated in the needle branch.
+        # expressions were evaluated in the needle branch. Invariant: on
+        # this path sliced carries ONLY fc_* columns (fc_bucket,
+        # fc_entity, fc_of, fc_bd_*) — the rows path keeps base.* but
+        # nothing downstream of sliced may rely on source columns.
         for i, _ in carried_items:
             entry_by_index[i] = f"fc_locf.fc_bd_{i}"
         for i, _ in rows_items:

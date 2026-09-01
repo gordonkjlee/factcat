@@ -501,6 +501,27 @@ def test_carried_fill_from_excludes_other_stamps(subs):
     assert without[("2026-01-02", "enterprise")] == 1.0
 
 
+def test_attr_fill_from_excludes_other_stamps(subs):
+    """S5's enterprise lives on profile_update; fill_from must drop it on
+    the first/last path too, not only under carried.
+
+    Mutation: drop the fill_from condition from the attr CTE's WHERE.
+    """
+    spec = _subs_spec(
+        Breakdown(
+            "plan_tier",
+            at="last",
+            fill_from="event_name = 'subscription_started'",
+        )
+    )
+    got = {(d, t): v for d, t, v in _rows(subs, spec)}
+    assert got[("2026-01-02", None)] == 1.0  # S5: no authoritative stamp
+    without = {(d, t): v for d, t, v in _rows(subs, _subs_spec(
+        Breakdown("plan_tier", at="last")
+    ))}
+    assert without[("2026-01-02", "enterprise")] == 1.0
+
+
 def test_carried_slices_sum_to_unsplit_total(subs):
     """Attribution assigns groups; it must not invent or drop rows.
 
