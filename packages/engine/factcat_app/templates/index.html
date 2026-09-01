@@ -128,7 +128,21 @@
     }
     .empty-state[hidden], canvas[hidden], .empty-state img[hidden] { display: none; }
     .empty-state img { width: 10rem; height: 10rem; object-fit: contain; margin-bottom: 0.75rem; }
-    #sql { margin: 0; min-height: 100%; box-sizing: border-box; }
+    #sql { margin: 0; min-height: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.78rem; }
+    code.fc-sql {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+      font-weight: 650;
+      background: var(--fc-ochre-wash);
+      padding: 0.08em 0.28em;
+      border-radius: 0.2rem;
+    }
+    html[data-vocab="sql"] .series-measure,
+    html[data-vocab="sql"] .filter-op,
+    html[data-vocab="sql"] #measure {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.78rem;
+    }
     .summary { font-size: 0.75rem; color: var(--fc-slate); margin: 0 0 0.75rem; }
     .pane-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding-right: 0.5rem; }
     .pane-head h2 { border-bottom: none; padding: 0.45rem 0.75rem; }
@@ -221,13 +235,86 @@
     #breakdown-extra .range-row { margin-top: 0.5rem; }
     .breakdown-slot { margin-top: 0.45rem; }
     .breakdown-slot:first-child { margin-top: 0; }
-    #add-breakdown { margin-top: 0.35rem; }
+    .fc-plus {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.65rem;
+      height: 1.65rem;
+      margin: 0;
+      padding: 0;
+      background: var(--fc-snow);
+      color: var(--fc-ochre-deep);
+      border: 1px solid var(--fc-line);
+      border-radius: 999px;
+      cursor: pointer;
+      box-shadow: 0 1px 0 rgba(28, 25, 23, 0.06);
+    }
+    .fc-plus:hover {
+      border-color: var(--fc-ochre);
+      color: var(--fc-ink);
+      background: var(--fc-paper);
+    }
+    .fc-plus svg { width: 0.82rem; height: 0.82rem; display: block; }
+    .fc-plus-row {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 0.3rem 0 0.05rem;
+    }
+    .event-group-members .fc-plus-row { margin: 0.2rem 0; }
+    .fc-or {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      margin: 0.1rem 0.4rem;
+      color: var(--fc-slate);
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      user-select: none;
+    }
+    .fc-or::before, .fc-or::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: var(--fc-line);
+    }
+    #add-breakdown-row[hidden], #add-event-row[hidden], .fc-plus-row[hidden] { display: none !important; }
+    .breakdown-slot-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin: 0.65rem 0 0.2rem;
+    }
+    .breakdown-slot-head label { margin: 0; }
+    .breakdown-slot-head .linkish { margin-left: 0; }
+    .breakdown-slot-row,
+    .series-bd-slot:not(:first-child) .series-bd-row {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+    }
+    .breakdown-slot-row select,
+    .series-bd-slot:not(:first-child) .series-bd-row select {
+      flex: 1;
+      min-width: 0;
+      width: auto;
+      margin: 0;
+    }
+    .breakdown-slot-row .linkish,
+    .series-bd-slot:not(:first-child) .series-bd-row .linkish {
+      margin: 0;
+      flex: 0 0 auto;
+    }
+    #breakdown-more .breakdown-slot { margin-top: 0.35rem; }
     .series-bd-slot { margin-top: 0.35rem; }
     .series-bd .remove-breakdown { margin-left: 0.4rem; }
     #of-wrap[hidden] { display: none !important; }
     #events-band { margin: 0 0 1rem; }
     .band-head {
-      display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem;
+      display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
       font-size: 0.7rem; font-weight: 600; margin: 0 0 0.45rem;
       flex-wrap: wrap;
     }
@@ -240,6 +327,32 @@
     }
     .band-head-actions {
       display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    }
+    .fc-plus-labeled {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      width: 100%;
+      margin: 0.35rem 0 0;
+      padding: 0;
+      background: none;
+      border: none;
+      color: var(--fc-ochre-deep);
+      font: inherit;
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .fc-plus-labeled .fc-plus {
+      cursor: inherit;
+      box-shadow: none;
+    }
+    .fc-plus-labeled:hover { color: var(--fc-ink); }
+    .fc-plus-labeled:hover .fc-plus {
+      border-color: var(--fc-ochre);
+      color: var(--fc-ink);
+      background: var(--fc-paper);
     }
     .event-card, .event-group {
       border: 1px solid var(--fc-line); background: var(--fc-paper);
@@ -256,7 +369,11 @@
     }
     .event-group-title { font-size: 0.75rem; font-weight: 600; color: var(--fc-slate); flex: 0 0 auto; }
     .event-card-filters {
-      margin: 0.35rem 0 0 0.15rem; padding-left: 0.55rem;
+      margin: 0.2rem 0 0;
+    }
+    .event-card-filters:has(.filter-line) {
+      margin-left: 0.15rem;
+      padding-left: 0.55rem;
       border-left: 2px solid var(--fc-line);
     }
     .filter-line {
@@ -314,9 +431,10 @@
     .filter-line input[type="date"], .filter-line input[type="time"],
     .filter-line input[type="number"] { flex: 0 1 8rem; }
     .event-group-members .event-card {
-      background: var(--fc-snow); margin: 0.4rem 0 0;
+      background: var(--fc-snow); margin: 0;
     }
     .card-actions { margin-top: 0.35rem; }
+    .add-card-filter { margin: 0.2rem 0 0 0; }
     .series-bd { margin-top: 0.45rem; }
     .series-bd[hidden], #breakdown-chart[hidden] { display: none !important; }
     .series-bd label { font-size: 0.75rem; font-weight: 400; }
@@ -335,10 +453,11 @@
     #result-table tr.incomplete td { color: var(--fc-slate); font-style: italic; }
     #custom-snap-hint { margin: 0.35rem 0 0; }
     .linkish {
-      background: none; border: none; padding: 0; margin-left: 0.5rem;
+      background: none; border: none; padding: 0; margin: 0 0 0 0.5rem;
       color: var(--fc-ochre-deep); text-decoration: underline; font-size: 0.75rem;
       font-weight: 400; cursor: pointer;
     }
+    .event-card-filters .add-card-filter { margin: 0.2rem 0 0 0; }
 {% endblock %}
 {% block body %}
 <main class="workspace">
@@ -405,8 +524,13 @@
         </span>
       </div>
       <div id="event-cards"></div>
-      <div class="card-actions">
-        <button type="button" id="add-event" class="linkish">Add series</button>
+      <div id="add-event-row">
+        <button type="button" id="add-event" class="fc-plus-labeled" title="Add series" aria-label="Add series">
+          <span class="fc-plus" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          </span>
+          Add series
+        </button>
       </div>
     </div>
 
@@ -414,20 +538,20 @@
     <label for="measure">Measure</label>
     <select name="measure" id="measure">
       <optgroup label="Event">
-        <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>{{ filter_ui.chrome.volume }}</option>
-        <option value="uniques" title="Count distinct of the mapped entity id" {% if (config.on != "property") and (config.measure == "uniques" or not config.measure) %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.unique }}{% else %}{{ filter_ui.chrome.unique.replace("{plural}", config.entity_label_plural or "Users") }}{% endif %}</option>
-        <option value="average" title="Volume divided by unique entities" {% if config.on != "property" and config.measure == "average" %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.average_per }}{% else %}{{ filter_ui.chrome.average_per.replace("{singular}", config.entity_label or "User") }}{% endif %}</option>
+        <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>{{ filter_ui.chrome.volume | sql_plain }}</option>
+        <option value="uniques" title="Count distinct of the mapped entity id" {% if (config.on != "property") and (config.measure == "uniques" or not config.measure) %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.unique | sql_plain }}{% else %}{{ filter_ui.chrome.unique.replace("{plural}", config.entity_label_plural or "Users") }}{% endif %}</option>
+        <option value="average" title="Volume divided by unique entities" {% if config.on != "property" and config.measure == "average" %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.average_per | sql_plain }}{% else %}{{ filter_ui.chrome.average_per.replace("{singular}", config.entity_label or "User") }}{% endif %}</option>
       </optgroup>
-      <optgroup label="Property">
-        <option value="sum" title="Sum of a numeric column" {% if config.measure == "sum" %}selected{% endif %}>Sum</option>
-        <option value="property_average" title="Average of a numeric column" {% if config.on == "property" and config.measure == "average" %}selected{% endif %}>Average</option>
-        <option value="median" title="Median of a numeric column" {% if config.measure == "median" %}selected{% endif %}>Median</option>
-        <option value="distinct" title="Mean distinct values of a column per entity" {% if config.measure == "distinct" %}selected{% endif %}>Distinct per {{ config.entity_label or "User" }}</option>
+      <optgroup label="Property value">
+        <option value="sum" title="Sum of a numeric column" {% if config.measure == "sum" %}selected{% endif %}>{{ filter_ui.chrome.property_sum | sql_plain }}</option>
+        <option value="property_average" title="Average of a numeric column" {% if config.on == "property" and config.measure == "average" %}selected{% endif %}>{{ filter_ui.chrome.property_average | sql_plain }}</option>
+        <option value="median" title="Median of a numeric column" {% if config.measure == "median" %}selected{% endif %}>{{ filter_ui.chrome.property_median | sql_plain }}</option>
+        <option value="distinct" title="Mean distinct values of a column per entity" {% if config.measure == "distinct" %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.property_distinct | sql_plain }}{% else %}{{ filter_ui.chrome.property_distinct.replace("{singular}", config.entity_label or "User") }}{% endif %}</option>
       </optgroup>
     </select>
     <input type="hidden" name="on" id="on" value="{{ config.on or 'events' }}">
     <div id="of-wrap" {% if config.on != "property" %}hidden{% endif %}>
-      <label for="of_column">{{ filter_ui.chrome.of }} <span id="of_column-loading" class="loading" hidden aria-label="Loading"></span>
+      <label for="of_column">{{ filter_ui.chrome.of | sql_chrome }} <span id="of_column-loading" class="loading" hidden aria-label="Loading"></span>
         <button type="button" id="refresh-of" class="linkish">Refresh list</button>
       </label>
       <select name="of_column" id="of_column"></select>
@@ -437,7 +561,7 @@
         <span class="hint">Dotted path in this JSON column (plan or user.plan).</span>
       </div>
       <div id="of-expr-wrap" hidden>
-        <label for="of_expr">{{ filter_ui.chrome.sql_expr }}</label>
+        <label for="of_expr">{{ filter_ui.chrome.sql_expr | sql_chrome }}</label>
         <input id="of_expr" name="of_expr" autocomplete="off" value="{{ config.of_expr }}" placeholder="revenue">
         <span class="hint">Fills of=. Sum / Average / Median need a number. Distinct also allows STRING.</span>
       </div>
@@ -455,13 +579,14 @@
     <div id="breakdown-band">
     <div class="row">
       <input name="breakdown_by_series" type="checkbox" id="breakdown_by_series" {% if config.breakdown_by_series %}checked{% endif %} style="width:auto">
-      <label for="breakdown_by_series" style="margin:0">{{ filter_ui.chrome.breakdown_each }}</label>
+      <label for="breakdown_by_series" style="margin:0">{{ filter_ui.chrome.breakdown_each | sql_chrome }}</label>
     </div>
     <div id="breakdown-chart">
     <div class="breakdown-slot" data-slot="0">
-    <label for="breakdown_column">{{ filter_ui.chrome.breakdown }} <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span>
+    <div class="breakdown-slot-head">
+      <label for="breakdown_column">{{ filter_ui.chrome.breakdown | sql_chrome }} <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span></label>
       <button type="button" id="refresh-columns" class="linkish">Refresh list</button>
-    </label>
+    </div>
     <select name="breakdown_column" id="breakdown_column"></select>
     <div id="breakdown-json-wrap" hidden>
       <label for="breakdown_json_key">JSON key</label>
@@ -469,13 +594,17 @@
       <span class="hint">Dotted path in this JSON column (plan or user.plan).</span>
     </div>
     <div id="breakdown-expr-wrap" hidden>
-      <label for="breakdown_expr">{{ filter_ui.chrome.sql_expr }}</label>
+      <label for="breakdown_expr">{{ filter_ui.chrome.sql_expr | sql_chrome }}</label>
       <input id="breakdown_expr" name="breakdown_expr" autocomplete="off" value="{{ config.breakdown_expr }}" placeholder="country">
       <span class="hint">Fills the spec expression. Does not replace it with a property store.</span>
     </div>
     </div>
     <div id="breakdown-more"></div>
-    <button type="button" id="add-breakdown" class="linkish">Add breakdown</button>
+    <div class="fc-plus-row" id="add-breakdown-row">
+      <button type="button" id="add-breakdown" class="fc-plus" title="{{ filter_ui.chrome.add_breakdown | sql_plain }}" aria-label="{{ filter_ui.chrome.add_breakdown | sql_plain }}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </div>
     </div>
     <div id="breakdown-extra" hidden>
       <span class="hint" id="breakdown-hint">Value on each event in this date range. First/last for an entity (chart window vs all history vs cohort) is a later control — it is not this dropdown.</span>
@@ -649,7 +778,7 @@
           <thead>
             <tr>
               <th data-key="bucket">Day <span class="grip" data-col="0"></span></th>
-              <th data-key="series" id="th-series" hidden>{{ filter_ui.chrome.breakdown_th }} <span class="grip" data-col="1"></span></th>
+              <th data-key="series" id="th-series" hidden>{{ filter_ui.chrome.breakdown_th | sql_chrome }} <span class="grip" data-col="1"></span></th>
               <th data-key="value">Volume <span class="grip" data-col="2"></span></th>
             </tr>
           </thead>
@@ -914,6 +1043,28 @@ function fillEventNameSelect(sel, selected) {
 function topSeriesCount() {
   return eventCardsEl.querySelectorAll(":scope > .event-series").length;
 }
+function eventPicked(card) {
+  if (!eventColumnEl.value) return true;
+  const sel = card.querySelector(".event-card-name");
+  return !!(sel && (sel.value || "").trim());
+}
+function syncCombinePlus(card) {
+  const row = card.querySelector(":scope > .fc-plus-row");
+  if (!row) return;
+  row.hidden = !eventPicked(card);
+}
+function syncSeriesChrome() {
+  const n = topSeriesCount();
+  document.querySelectorAll("#event-cards > .event-series").forEach((host) => {
+    const btn = host.querySelector(
+      ":scope > .event-card-head > .event-card-remove, :scope > .event-group-head > .event-group-remove"
+    );
+    if (btn) btn.hidden = n < 2;
+    if (host.classList.contains("event-card")) syncCombinePlus(host);
+  });
+  const add = document.getElementById("add-event-row");
+  if (add) add.hidden = n >= SERIES_CAP;
+}
 function fillSelect(sel, items, selected, blankLabel) {
   const cur = selected || sel.value;
   sel.innerHTML = "";
@@ -1110,8 +1261,8 @@ function chartSlotCount() {
   return 1 + document.querySelectorAll("#breakdown-more .breakdown-slot").length;
 }
 function syncAddBreakdownBtn() {
-  const btn = document.getElementById("add-breakdown");
-  if (btn) btn.hidden = chartSlotCount() >= BREAKDOWN_SLOT_CAP;
+  const row = document.getElementById("add-breakdown-row");
+  if (row) row.hidden = chartSlotCount() >= BREAKDOWN_SLOT_CAP;
 }
 function addChartBreakdownSlot(init) {
   if (chartSlotCount() >= BREAKDOWN_SLOT_CAP) return;
@@ -1119,12 +1270,13 @@ function addChartBreakdownSlot(init) {
   const wrap = document.createElement("div");
   wrap.className = "breakdown-slot";
   wrap.innerHTML = (
-    "<label>" + t("breakdown") + "</label>"
+    '<div class="breakdown-slot-row">'
     + '<select class="bd-column" aria-label="' + t("breakdown") + '"></select>'
     + '<button type="button" class="linkish remove-breakdown">Remove</button>'
+    + "</div>"
     + '<div class="bd-json-wrap" hidden><label>JSON key</label>'
     + '<input class="bd-json" autocomplete="off" placeholder="plan" aria-label="JSON key"></div>'
-    + '<div class="bd-expr-wrap" hidden><label>' + t("sql_expr") + "</label>"
+    + '<div class="bd-expr-wrap" hidden><label>' + tHtml("sql_expr") + "</label>"
     + '<input class="bd-expr" autocomplete="off" placeholder="country" aria-label="Breakdown SQL"></div>'
   );
   document.getElementById("breakdown-more").appendChild(wrap);
@@ -1206,9 +1358,25 @@ function paintColumns(columns) {
 }
 const CUSTOM_FILTER = "__expr__";
 const FILTER_UI = {{ filter_ui|tojson }};
+function sqlPlain(s) {
+  return String(s || "").replace(/`/g, "");
+}
 function t(key) {
   const chrome = FILTER_UI.chrome || {};
-  return chrome[key] || key;
+  return sqlPlain(chrome[key] || key);
+}
+function tHtml(key) {
+  const mapped = (FILTER_UI.chrome_html || {})[key];
+  if (mapped) return mapped;
+  return String((FILTER_UI.chrome || {})[key] || key).replace(/`([^`]+)`/g, '<code class="fc-sql">$1</code>');
+}
+const PLUS_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+function plusBtn(aria, cls) {
+  const extra = cls ? " " + cls : "";
+  return '<button type="button" class="fc-plus' + extra + '" title="' + aria + '" aria-label="' + aria + '">' + PLUS_ICON + "</button>";
+}
+function plusRowHtml(aria, cls) {
+  return '<div class="fc-plus-row">' + plusBtn(aria, cls) + "</div>";
 }
 function thousandChar() {
   const v = FILTER_UI.thousand_sep || "comma";
@@ -1737,7 +1905,9 @@ function addFilterLine(host, init) {
   } else {
     caseBox.checked = defaultCaseSensitive(data.op || "is");
   }
-  host.appendChild(row);
+  const addBtn = host.querySelector(":scope > .add-card-filter");
+  if (addBtn) host.insertBefore(row, addBtn);
+  else host.appendChild(row);
   filterListSeq += 1;
   const listId = "filter-enum-list-" + filterListSeq;
   row.querySelector(".filter-enum-list").id = listId;
@@ -1855,10 +2025,13 @@ function applyMeasureLabels(sel) {
       o.textContent = sql ? t("average_per") : t("average_per").replace("{singular}", w);
       o.title = "Volume divided by unique " + p.toLowerCase();
     }
-    else if (o.value === "sum") { o.textContent = "Sum"; o.title = "Sum of a numeric column"; }
-    else if (o.value === "property_average") { o.textContent = "Average"; o.title = "Average of a numeric column"; }
-    else if (o.value === "median") { o.textContent = "Median"; o.title = "Median of a numeric column"; }
-    else if (o.value === "distinct") { o.textContent = "Distinct per " + w; o.title = "Mean distinct values of a column per " + w.toLowerCase(); }
+    else if (o.value === "sum") { o.textContent = t("property_sum"); o.title = "Sum of a numeric column"; }
+    else if (o.value === "property_average") { o.textContent = t("property_average"); o.title = "Average of a numeric column"; }
+    else if (o.value === "median") { o.textContent = t("property_median"); o.title = "Median of a numeric column"; }
+    else if (o.value === "distinct") {
+      o.textContent = sql ? t("property_distinct") : t("property_distinct").replace("{singular}", w);
+      o.title = "Mean distinct values of a column per " + w.toLowerCase();
+    }
   }
 }
 function seriesMeasureSelect(host) {
@@ -1931,7 +2104,7 @@ function attachSeriesMeasure(host, data) {
   const ofWrap = document.createElement("div");
   ofWrap.className = "series-of";
   ofWrap.innerHTML = (
-    "<label>" + t("of") + "</label>"
+    "<label>" + tHtml("of") + "</label>"
     + '<select class="series-of-column" aria-label="' + t("of") + '"></select>'
     + '<input class="series-of-json" placeholder="JSON key" autocomplete="off" aria-label="Of JSON key">'
     + '<input class="series-of-expr" placeholder="' + t("sql_expr") + '" autocomplete="off" aria-label="Of SQL">'
@@ -1962,10 +2135,13 @@ function addSeriesBdSlot(wrap, init) {
   const data = normalizeBreakdownSlot(init);
   const slot = document.createElement("div");
   slot.className = "series-bd-slot";
+  const extra = seriesBdSlotCount(wrap) > 0;
   slot.innerHTML = (
-    "<label>" + t("breakdown") + "</label>"
+    (extra ? "" : "<label>" + tHtml("breakdown") + "</label>")
+    + '<div class="series-bd-row">'
     + '<select class="series-bd-column" aria-label="' + t("breakdown") + '"></select>'
-    + (seriesBdSlotCount(wrap) ? '<button type="button" class="linkish remove-breakdown">Remove</button>' : "")
+    + (extra ? '<button type="button" class="linkish remove-breakdown">Remove</button>' : "")
+    + "</div>"
     + '<input class="series-bd-json" placeholder="JSON key" autocomplete="off" aria-label="JSON key">'
     + '<input class="series-bd-expr" placeholder="' + t("sql_expr") + '" autocomplete="off" aria-label="Breakdown SQL">'
   );
@@ -1991,14 +2167,14 @@ function addSeriesBdSlot(wrap, init) {
   syncSeriesBdAdd(wrap);
 }
 function syncSeriesBdAdd(wrap) {
-  const btn = wrap.querySelector(".add-series-bd");
-  if (btn) btn.hidden = seriesBdSlotCount(wrap) >= BREAKDOWN_SLOT_CAP;
+  const row = wrap.querySelector(":scope > .fc-plus-row");
+  if (row) row.hidden = seriesBdSlotCount(wrap) >= BREAKDOWN_SLOT_CAP;
 }
 function attachSeriesBd(host, init) {
   const data = init || {};
   const wrap = document.createElement("div");
   wrap.className = "series-bd";
-  wrap.innerHTML = '<div class="series-bd-list"></div><button type="button" class="linkish add-series-bd">Add breakdown</button>';
+  wrap.innerHTML = '<div class="series-bd-list"></div>' + plusRowHtml(t("add_breakdown"), "add-series-bd");
   host.appendChild(wrap);
   const slots = Array.isArray(data.breakdowns) && data.breakdowns.length
     ? data.breakdowns.map(normalizeBreakdownSlot)
@@ -2055,10 +2231,8 @@ function addEventCard(init, parent, before) {
     + '<select class="event-card-name" aria-label="Event"></select>'
     + '<button type="button" class="linkish event-card-remove">Remove</button>'
     + "</div>"
-    + '<div class="event-card-filters"></div>'
-    + '<div class="card-actions">'
-    + '<button type="button" class="linkish add-card-filter">' + t("add_filter") + "</button>"
-    + (nested ? "" : '<button type="button" class="linkish event-card-combine">' + t("combine") + "</button>")
+    + '<div class="event-card-filters">'
+    + '<button type="button" class="linkish add-card-filter">' + tHtml("add_filter") + "</button>"
     + "</div>"
   );
   const host = parent || eventCardsEl;
@@ -2068,17 +2242,27 @@ function addEventCard(init, parent, before) {
   const nameSel = card.querySelector(".event-card-name");
   fillEventNameSelect(nameSel, data.event || "");
   nameSel.hidden = !eventColumnEl.value;
-  (data.filters || []).forEach((f) => addFilterLine(card.querySelector(".event-card-filters"), f));
+  const filtersEl = card.querySelector(".event-card-filters");
+  (data.filters || []).forEach((f) => addFilterLine(filtersEl, f));
   if (!nested) {
     attachSeriesMeasure(card, data);
+    const combineRow = document.createElement("div");
+    combineRow.className = "fc-plus-row";
+    combineRow.innerHTML = plusBtn(t("combine"), "event-card-combine");
+    card.appendChild(combineRow);
+    combineRow.querySelector(".event-card-combine").addEventListener("click", () => combineCard(card));
     attachSeriesBd(card, data);
+    nameSel.addEventListener("change", () => {
+      syncCombinePlus(card);
+      scheduleEstimate();
+      syncStaleNotes();
+    });
+    syncCombinePlus(card);
   }
   card.querySelector(".add-card-filter").addEventListener("click", () => {
-    addFilterLine(card.querySelector(".event-card-filters"));
+    addFilterLine(filtersEl);
     scheduleEstimate();
   });
-  const combineBtn = card.querySelector(".event-card-combine");
-  if (combineBtn) combineBtn.addEventListener("click", () => combineCard(card));
   card.querySelector(".event-card-remove").addEventListener("click", () => {
     const nest = card.parentElement;
     const root = nest === eventCardsEl;
@@ -2087,37 +2271,63 @@ function addEventCard(init, parent, before) {
     else if (!root && nest && nest.classList.contains("event-group-members")
       && nest.querySelectorAll(":scope > .event-card").length < 2) {
       splitGroup(nest.parentElement);
+    } else if (!root && nest && nest.classList.contains("event-group-members")) {
+      syncGroupJoins(nest.parentElement);
     }
     scheduleEstimate();
     syncStaleNotes();
     syncBreakdownMode();
+    syncSeriesChrome();
   });
   syncBreakdownMode();
+  syncSeriesChrome();
   return card;
+}
+function syncGroupJoins(group) {
+  const nest = group.querySelector(".event-group-members");
+  if (!nest) return;
+  nest.querySelectorAll(":scope > .fc-plus-row, :scope > .fc-or").forEach((el) => el.remove());
+  const cards = [...nest.querySelectorAll(":scope > .event-card")];
+  cards.forEach((card, i) => {
+    if (i < cards.length - 1) {
+      const or = document.createElement("div");
+      or.className = "fc-or";
+      or.innerHTML = tHtml("event_or");
+      card.after(or);
+    }
+  });
+  const last = cards[cards.length - 1];
+  if (!last) return;
+  const row = document.createElement("div");
+  row.className = "fc-plus-row";
+  row.innerHTML = plusBtn(t("add_group_event"), "add-group-event");
+  last.after(row);
+  row.querySelector(".add-group-event").addEventListener("click", () => {
+    addEventCard({}, nest);
+    syncGroupJoins(group);
+    scheduleEstimate();
+  });
 }
 function addAnyOf(members, bd, before) {
   const group = document.createElement("section");
   group.className = "event-group event-series";
   group.innerHTML = (
     '<div class="event-group-head">'
-    + '<span class="event-group-title">Any of</span>'
+    + '<span class="event-group-title">' + tHtml("any_of") + "</span>"
     + '<button type="button" class="linkish event-group-split">Split</button>'
     + '<button type="button" class="linkish event-group-remove">Remove</button>'
     + "</div>"
     + '<div class="event-group-members"></div>'
-    + '<div class="card-actions"><button type="button" class="linkish add-group-event">Add event</button></div>'
   );
   if (before) eventCardsEl.insertBefore(group, before);
   else eventCardsEl.appendChild(group);
   const nest = group.querySelector(".event-group-members");
   const seed = members && members.length ? members : [{}, {}];
   seed.forEach((m) => addEventCard(m, nest));
+  if (FILTER_UI.vocab === "sql") group.querySelector(".event-group-title").hidden = true;
   attachSeriesMeasure(group, bd || {});
   attachSeriesBd(group, bd || {});
-  group.querySelector(".add-group-event").addEventListener("click", () => {
-    addEventCard({}, nest);
-    scheduleEstimate();
-  });
+  syncGroupJoins(group);
   group.querySelector(".event-group-split").addEventListener("click", () => splitGroup(group));
   group.querySelector(".event-group-remove").addEventListener("click", () => {
     group.remove();
@@ -2125,8 +2335,10 @@ function addAnyOf(members, bd, before) {
     scheduleEstimate();
     syncStaleNotes();
     syncBreakdownMode();
+    syncSeriesChrome();
   });
   syncBreakdownMode();
+  syncSeriesChrome();
   return group;
 }
 function combineCard(card) {
@@ -2137,6 +2349,7 @@ function combineCard(card) {
   scheduleEstimate();
   syncStaleNotes();
   syncBreakdownMode();
+  syncSeriesChrome();
 }
 function splitGroup(group) {
   if (!group || !group.classList.contains("event-group")) return;
@@ -2150,6 +2363,7 @@ function splitGroup(group) {
   scheduleEstimate();
   syncStaleNotes();
   syncBreakdownMode();
+  syncSeriesChrome();
 }
 function collectSeries() {
   const units = [];
@@ -2229,6 +2443,7 @@ document.getElementById("add-event").addEventListener("click", () => {
   if (breakdownBySeries()) copyBreakdownToSeries();
   scheduleEstimate();
   syncStaleNotes();
+  syncSeriesChrome();
 });
 seedSeries();
 document.getElementById("breakdown_by_series").addEventListener("change", () => {
@@ -2299,6 +2514,7 @@ const eventNameList = bindCachedList({
   paint: (items) => {
     eventNameCache = items || [];
     document.querySelectorAll(".event-card-name").forEach((sel) => fillEventNameSelect(sel, sel.value));
+    syncSeriesChrome();
   },
   loadingFor: [document.getElementById("event_value")],
   refreshButtons: [document.getElementById("refresh-events")],
@@ -2758,6 +2974,9 @@ function measureTitle() {
   if (!of) return label;
   if (sel.value === "distinct" && FILTER_UI.vocab !== "sql") {
     return label.replace(/^Distinct per /, "Distinct " + of + " per ");
+  }
+  if (sel.value === "distinct" && FILTER_UI.vocab === "sql") {
+    return label.replace("(DISTINCT x)", "(DISTINCT " + of + ")");
   }
   return label + " " + of;
 }

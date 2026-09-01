@@ -330,7 +330,8 @@ list** reads `fc_event_names` (created on first miss as a materialized
 view, or a table if the source cannot back a view). Lookback does not apply
 while that cache is in use. Week start and reporting
 timezone stay on Setup (they change SQL). Thousand/decimal separators, wording
-(business user / SQL analyst), weekday/month display, day-of-month pad, hour
+(business user / SQL analyst, with uppercase or lowercase SQL and `<>` or `!=`
+for the analyst), weekday/month display, day-of-month pad, hour
 style (12-hour or 24-hour first, then a short list of complete formats) are
 **Preferences**; number filters
 use those separators, and the SQL pane stays warehouse SQL (period decimal, no

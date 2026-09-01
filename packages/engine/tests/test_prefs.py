@@ -21,6 +21,8 @@ def test_defaults_when_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     data = load()
     assert data["vocab"] == "plain"
+    assert data["sql_case"] == "upper"
+    assert data["sql_neq"] == "<>"
     assert data["thousand_sep"] == "comma"
     assert data["decimal_sep"] == "period"
     assert data["theme"] == "light"
@@ -102,13 +104,46 @@ def test_filter_ui_sql_vocab():
         }
     )
     assert ui["ops"]["is_any_of"]["label"] == "IN"
-    assert ui["ops"]["contains"]["label"] == "LIKE"
-    assert ui["chrome"]["breakdown"] == "GROUP BY"
-    assert ui["chrome"]["add_filter"] == "WHERE"
+    assert ui["ops"]["contains"]["label"] == "LIKE '%s%'"
+    assert ui["ops"]["not_contains"]["label"] == "NOT LIKE '%s%'"
+    assert ui["ops"]["starts_with"]["label"] == "LIKE 's%'"
+    assert ui["ops"]["not_starts_with"]["label"] == "NOT LIKE 's%'"
+    assert ui["ops"]["ends_with"]["label"] == "LIKE '%s'"
+    assert ui["ops"]["not_ends_with"]["label"] == "NOT LIKE '%s'"
+    assert ui["ops"]["is_empty"]["label"] == "= (empty)"
+    assert ui["ops"]["is_not"]["label"] == "<>"
+    assert ui["ops"]["is_not_empty"]["label"] == "<> (empty)"
+    assert ui["numeric_op_labels"]["is_not"] == "<>"
+    assert ui["sql_neq"] == "<>"
+    assert ui["chrome"]["breakdown"] == "`GROUP BY`"
+    assert ui["chrome_plain"]["breakdown"] == "GROUP BY"
+    assert ui["chrome"]["add_breakdown"] == "`GROUP BY`"
+    assert ui["chrome"]["breakdown_each"] == "`GROUP BY` each series"
+    assert ui["chrome_plain"]["breakdown_each"] == "GROUP BY each series"
+    assert ui["chrome"]["any_of"] == "`OR`"
+    assert ui["chrome"]["event_or"] == "`OR`"
+    assert ui["chrome"]["add_group_event"] == "Add event"
+    assert ui["chrome"]["add_filter"] == "`WHERE`"
+    assert ui["chrome"]["combine"] == "`OR`"
+    assert ui["chrome"]["of"] == "of"
+    assert ui["chrome"]["volume"] == "`COUNT(*)`"
+    assert ui["chrome_plain"]["volume"] == "COUNT(*)"
+    assert ui["chrome"]["unique"] == "`COUNT(DISTINCT id)`"
+    assert ui["chrome"]["average_per"] == "`COUNT(*)`/`COUNT(DISTINCT id)`"
+    assert ui["chrome"]["property_sum"] == "`SUM(x)`"
+    assert ui["chrome"]["property_average"] == "`AVERAGE(x)`"
+    assert ui["chrome"]["property_median"] == "`MEDIAN(x)`"
+    assert ui["chrome"]["property_distinct"] == "`AVG(COUNT(DISTINCT x))`"
+    assert "fc-sql" in ui["chrome_html"]["breakdown_each"]
+    assert "each series" in ui["chrome_html"]["breakdown_each"]
+    assert ui["sql_case"] == "upper"
     assert ui["weekdays"][0] == "Mon"
     assert ui["months"][0] == "Jan"
     hour = next(p for p in ui["date_parts"] if p["id"] == "hour_of_day")
     assert "00" in hour["label"]
+    assert hour["group"] == "EXTRACT"
+    trunc = next(p for p in ui["date_parts"] if p["id"] == "day")
+    assert trunc["group"] == "DATE_TRUNC"
 
 
 def test_filter_ui_plain_default():
@@ -122,7 +157,60 @@ def test_filter_ui_plain_default():
     )
     assert ui["ops"]["is_any_of"]["label"] == "is any of"
     assert ui["chrome"]["breakdown"] == "Break down by"
+    assert ui["chrome"]["of"] == "Of"
+    assert ui["chrome"]["property_sum"] == "Sum"
+    assert ui["chrome"]["add_breakdown"] == "Add breakdown"
+    assert ui["chrome"]["any_of"] == "Any of"
+    assert ui["chrome"]["event_or"] == "or"
     assert ui["weekdays"][0] == "Monday"
+    hour = next(p for p in ui["date_parts"] if p["id"] == "hour_of_day")
+    assert hour["group"] == "Extract"
+
+
+def test_filter_ui_sql_case_lower():
+    ui = filter_ui(
+        {
+            "vocab": "sql",
+            "sql_case": "lower",
+            "weekday_style": "short",
+            "month_style": "short",
+        }
+    )
+    assert ui["chrome"]["add_filter"] == "`where`"
+    assert ui["chrome"]["combine"] == "`or`"
+    assert ui["chrome"]["event_or"] == "`or`"
+    assert ui["chrome"]["breakdown"] == "`group by`"
+    assert ui["chrome"]["add_breakdown"] == "`group by`"
+    assert ui["chrome"]["breakdown_each"] == "`group by` each series"
+    assert ui["chrome"]["add_group_event"] == "Add event"
+    assert ui["chrome_plain"]["volume"] == "count(*)"
+    assert ui["chrome_plain"]["unique"] == "count(distinct id)"
+    assert ui["chrome"]["property_sum"] == "`sum(x)`"
+    assert ui["chrome"]["property_distinct"] == "`avg(count(distinct x))`"
+    assert ui["chrome"]["of"] == "of"
+    assert ui["ops"]["contains"]["label"] == "like '%s%'"
+    assert ui["ops"]["is_null"]["label"] == "is null"
+    assert ui["ops"]["is_empty"]["label"] == "= (empty)"
+    assert ui["ops"]["is_not"]["label"] == "<>"
+    assert ui["sql_case"] == "lower"
+    hour = next(p for p in ui["date_parts"] if p["id"] == "hour_of_day")
+    assert hour["group"] == "extract"
+
+
+def test_filter_ui_sql_neq_bang():
+    ui = filter_ui(
+        {
+            "vocab": "sql",
+            "sql_neq": "!=",
+            "sql_case": "upper",
+        }
+    )
+    assert ui["ops"]["is_not"]["label"] == "!="
+    assert ui["ops"]["is_not_empty"]["label"] == "!= (empty)"
+    assert ui["numeric_op_labels"]["is_not"] == "!="
+    assert ui["ops"]["lt"]["label"] == "<"
+    assert ui["ops"]["lte"]["label"] == "<="
+    assert ui["sql_neq"] == "!="
 
 
 def test_pad_calendar_migrates_to_pad_day_and_hour_format(tmp_path, monkeypatch):
@@ -176,3 +264,4 @@ def test_parse_hour_display_tokens():
     assert parse_hour("15h") == 15
     with pytest.raises(ValueError):
         parse_hour("25")
+

@@ -96,6 +96,10 @@
       font-size: 0.85rem;
       color: var(--fc-ink-soft);
     }
+    #sql-options-wrap[hidden] { display: none !important; }
+    #sql-options-wrap {
+      margin: 0.85rem 0 0;
+    }
     .vocab-cards {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -167,6 +171,18 @@
       <img src="/static/cat-analyst.jpg" alt="" width="256" height="256">
       <span>I'm an analyst familiar with SQL</span>
     </button>
+  </div>
+  <div id="sql-options-wrap" {% if prefs.vocab != 'sql' %}hidden{% endif %}>
+    <label for="sql_case">SQL letter case</label>
+    <select id="sql_case" name="sql_case">
+      <option value="upper" {% if prefs.sql_case != "lower" %}selected{% endif %}>Uppercase (COUNT(*), WHERE)</option>
+      <option value="lower" {% if prefs.sql_case == "lower" %}selected{% endif %}>Lowercase (count(*), where)</option>
+    </select>
+    <label for="sql_neq">Not equal</label>
+    <select id="sql_neq" name="sql_neq">
+      <option value="<>" {% if prefs.sql_neq != "!=" %}selected{% endif %}>&lt;&gt;</option>
+      <option value="!=" {% if prefs.sql_neq == "!=" %}selected{% endif %}>!=</option>
+    </select>
   </div>
 
   <h2>Numbers</h2>
@@ -279,14 +295,20 @@ function setHourClock(clock) {
 document.querySelectorAll(".hour-clock-btn").forEach((btn) => {
   btn.addEventListener("click", () => setHourClock(btn.getAttribute("data-clock")));
 });
+const sqlOptionsWrap = document.getElementById("sql-options-wrap");
+function syncSqlOptions() {
+  sqlOptionsWrap.hidden = vocabEl.value !== "sql";
+}
 document.querySelectorAll(".vocab-card").forEach((btn) => {
   btn.addEventListener("click", () => {
     vocabEl.value = btn.getAttribute("data-vocab");
     document.querySelectorAll(".vocab-card").forEach((el) => {
       el.setAttribute("aria-pressed", el === btn ? "true" : "false");
     });
+    syncSqlOptions();
   });
 });
+syncSqlOptions();
 async function applyTheme(next) {
   themeEl.value = next;
   themeBtn.setAttribute("data-theme", next);
