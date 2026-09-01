@@ -1880,6 +1880,10 @@ function syncNullNudge(rows) {
   nudgeSlotEl = null;
   if (breakdownBySeries()) return;
   if (!Array.isArray(rows) || !rows.length) return;
+  // The 80% share is only meaningful for additive measures; a Median or
+  // Distinct sum is not a share of events.
+  const measure = (collectSeries()[0] || {}).measure || "uniques";
+  if (measure !== "total" && measure !== "uniques") return;
   for (const [slotEl, s] of chartBreakdownSlotPairs()) {
     if (!slotEl || !s.breakdown_column || s.breakdown_expr || s.breakdown_json_key) continue;
     if (s.value_at !== "event" || s.if_missing !== "null") continue;

@@ -2346,6 +2346,49 @@ def test_breakdown_default_slot_stays_plain_string():
     assert isinstance(spec.breakdowns[0], str)
 
 
+def test_explicit_slot_choice_beats_legacy_breakdown_at():
+    """An explicit each-event + leave slot must stay rows even when a
+    legacy spec-level breakdown_at says first — the plain-string entry
+    must never be re-promoted by the forwarded field."""
+    spec = spec_from_form(
+        _form(
+            breakdown_at="first",
+            breakdowns=[
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "event",
+                    "if_missing": "null",
+                }
+            ],
+        )
+    )
+    assert spec.breakdowns == ("plan",)
+    assert spec.resolved_breakdowns()[0].at == "rows"
+
+
+def test_default_slot_sql_is_byte_identical_to_plain_breakdowns():
+    """The byte-identity promise at the SQL level, not just the spec
+    level: a slot carrying the default control keys emits the same SQL
+    as a bare string breakdown."""
+    with_controls = spec_from_form(
+        _form(
+            breakdowns=[
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "event",
+                    "if_missing": "null",
+                    "fill_from_event": "",
+                    "fill_from_expr": "",
+                }
+            ]
+        )
+    )
+    bare = spec_from_form(_form(breakdown_column="plan"))
+    assert events_sql(with_controls, dialect="bigquery") == events_sql(
+        bare, dialect="bigquery"
+    )
+
+
 def test_breakdown_legacy_breakdown_at_folds_per_slot():
     for legacy, at in (("first", "first"), ("last", "last"), ("carried", "carried")):
         bd = spec_from_form(

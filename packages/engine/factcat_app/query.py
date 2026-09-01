@@ -1680,8 +1680,10 @@ def spec_from_form(
 
     breakdowns, breakdown_labels = _breakdown_from_form(form, unit=unit)
     # Legacy payloads still send a spec-level breakdown_at; slots without
-    # a value_at already folded it in (_slot_breakdown), so the spec keeps
-    # the default and the field is validated only for junk.
+    # a value_at already folded it in (_slot_breakdown). The spec must NOT
+    # receive the legacy value: a plain-string entry means an explicit
+    # each-event + leave choice, and forwarding "first" would silently
+    # promote it. Validate the incoming field for junk, forward "rows".
     breakdown_at = str(form.get("breakdown_at") or "rows").strip().lower()
     if breakdown_at not in BREAKDOWN_AT:
         raise ValueError("breakdown_at must be rows, first, last, or carried")
@@ -1707,7 +1709,7 @@ def spec_from_form(
         where=" AND ".join(clauses),
         exact=exact,
         breakdowns=breakdowns,
-        breakdown_at=breakdown_at,  # type: ignore[arg-type]
+        breakdown_at="rows",
         breakdown_labels=breakdown_labels,
         top_n=_top_n(form),
         include_other=_bool(form, "include_other", True),
