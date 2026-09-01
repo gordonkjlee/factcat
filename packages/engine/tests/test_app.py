@@ -328,6 +328,18 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "All events" not in res.text
     assert "Pick an event." in res.text
     assert "Running…" in res.text
+    assert 'id="col-divider"' in res.text
+    assert 'id="config-toggle"' in res.text
+    assert 'id="row-divider"' in res.text
+    assert res.text.count("pane-toggle") >= 3
+    assert 'class="pane pane-sql closed"' in res.text
+    assert 'class="pane pane-chart closed"' not in res.text
+    assert 'class="pane pane-table closed"' not in res.text
+    assert "setPaneOpen" in res.text
+    assert "bindDivider" in res.text
+    assert "setConfigCollapsed" in res.text
+    assert "layout_config_px" in res.text
+    assert "layout_chart_px" in res.text
     assert "startRunButtonDots" in res.text
     assert "cancelEstimate();" in res.text
     assert "Querying…" not in res.text
@@ -1925,6 +1937,34 @@ def test_event_name_column_is_string():
     assert column_fits("STRING", "event_column")
     assert not column_fits("INT64", "event_column")
     assert not column_fits("TIMESTAMP", "event_column")
+
+
+def test_layout_state_roundtrips(monkeypatch, tmp_path):
+    _map_cfg(tmp_path, monkeypatch)
+    client = TestClient(app)
+    res = client.post(
+        "/api/save",
+        json={
+            "pane_sql_open": True,
+            "pane_chart_open": False,
+            "layout_config_px": 300,
+            "layout_config_collapsed": True,
+            "layout_chart_px": 260,
+        },
+    )
+    assert res.status_code == 200
+    stored = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert stored["pane_sql_open"] is True
+    assert stored["pane_chart_open"] is False
+    assert stored["layout_config_px"] == 300
+    assert stored["layout_config_collapsed"] is True
+    assert stored["layout_chart_px"] == 260
+    html = client.get("/events").text
+    assert "workspace-form config-collapsed" in html
+    assert "--fc-config-col: 300px" in html
+    assert "--fc-chart-px: 260px" in html
+    assert 'class="pane pane-chart closed"' in html
+    assert 'class="pane pane-sql closed"' not in html
 
 
 def test_blocking_endpoints_use_threadpool():
