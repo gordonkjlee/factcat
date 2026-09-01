@@ -15,6 +15,7 @@ from factcat_app.query import (
     event_name_cache_rebuild_sql,
     event_values_sql,
     events_sql_from_form,
+    fill_cyclic_buckets,
     job_bytes_cap,
     query_row_limit,
     spec_from_form,
@@ -1836,7 +1837,8 @@ def test_utc_kind_isolates_column_in_window():
     assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'UTC')" in sql
     assert "CAST(occurred_at AS TIMESTAMP) >=" not in sql
     assert "DATETIME(TIMESTAMP(" in sql
-    assert "CAST(fc_bucket AS DATE) AS bucket" in sql
+    assert "fc_bucket AS bucket" in sql
+    assert "CAST(fc_bucket AS DATE) AS bucket" not in sql
 
 
 def test_unknown_timezone_is_rejected():
@@ -1891,3 +1893,221 @@ def test_annotate_incomplete_uses_iana_today():
         _form(grain="day", reporting_timezone="Europe/Berlin"),
     )
     assert rows[0]["incomplete"] is False
+
+
+def test_hour_bucket_is_not_cast_as_date():
+    spec = spec_from_form(_form(grain="hour"))
+    assert "factcat_hour_trunc(fc_event_ts" in spec.bucket
+    assert "CAST(" not in spec.bucket
+    sql = events_sql(spec, dialect="bigquery")
+    assert "DATETIME_TRUNC" in sql.upper()
+    assert "CAST(fc_bucket AS DATE)" not in sql
+    wrap = events_sql_from_form(_form(grain="hour"))
+    assert "CAST(bucket AS DATE)" not in wrap
+    assert "ORDER BY bucket" in wrap
+    assert "LIMIT" in wrap
+
+
+def test_hour_last_24_hours_is_rolling():
+    spec = spec_from_form(
+        _form(grain="hour", range_mode="last", range_n=24, range_unit="hour")
+    )
+    assert "factcat_hours_ago(24, 'UTC', 'utc')" in spec.where
+
+
+def test_hour_exclude_current_uses_reporting_zone():
+    spec = spec_from_form(
+        _form(
+            grain="hour",
+            range_mode="last",
+            range_n=24,
+            range_unit="hour",
+            include_current=False,
+            reporting_timezone="Europe/Berlin",
+        )
+    )
+    assert "factcat_hours_ago(24, 'Europe/Berlin', 'utc')" in spec.where
+    assert "factcat_current_hour_start('Europe/Berlin', 'utc')" in spec.where
+    assert "factcat_hour_trunc(CURRENT_TIMESTAMP()" not in spec.where
+
+
+def test_hour_last_30_days_keeps_day_window():
+    spec = spec_from_form(
+        _form(grain="hour", range_mode="last", range_n=30, range_unit="day")
+    )
+    assert _shifted("current_date", "day", -30) in spec.where
+
+
+def test_day_of_week_bucket_is_integer_extract():
+    spec = spec_from_form(_form(grain="day_of_week", week_start="monday"))
+    assert "factcat_dow(fc_event_ts" in spec.bucket
+    sql = events_sql(spec, dialect="bigquery")
+    assert "DAYOFWEEK" in sql.upper() or "MOD(" in sql.upper()
+    wrap = events_sql_from_form(_form(grain="day_of_week", query_row_limit=12))
+    assert "CAST(bucket AS DATE)" not in wrap
+    assert "LIMIT 12" in wrap
+    assert "ORDER BY bucket" in wrap
+    compact = " ".join(wrap.split()).upper()
+    assert compact.index("LIMIT 12") < compact.rindex("ORDER BY BUCKET")
+
+
+def test_hour_of_day_range_is_not_locked_to_hour():
+    spec = spec_from_form(
+        _form(
+            grain="hour_of_day",
+            range_mode="last",
+            range_n=14,
+            range_unit="day",
+        )
+    )
+    assert "factcat_hour_of_day(fc_event_ts" in spec.bucket
+    assert _shifted("current_date", "day", -14) in spec.where
+
+
+def test_day_of_week_last_six_months_excludes_current():
+    spec = spec_from_form(
+        _form(
+            grain="day_of_week",
+            range_mode="last",
+            range_n=6,
+            range_unit="month",
+            include_current=False,
+        )
+    )
+    assert "factcat_dow(fc_event_ts" in spec.bucket
+    assert _shifted("current_date", "month", -6) in spec.where
+    assert _shifted("current_date", "month", 0) in spec.where
+
+
+def test_hour_of_day_last_three_quarters_include_current():
+    spec = spec_from_form(
+        _form(
+            grain="hour_of_day",
+            range_mode="last",
+            range_n=3,
+            range_unit="quarter",
+            include_current=True,
+        )
+    )
+    assert _shifted("current_date", "quarter", -2) in spec.where
+    assert _shifted("current_date", "quarter", 0) not in spec.where
+
+
+def test_cyclic_last_months_exclude_current_by_default():
+    spec = spec_from_form(
+        _form(
+            grain="hour_of_day",
+            range_mode="last",
+            range_n=6,
+            range_unit="month",
+        )
+    )
+    assert _shifted("current_date", "month", -6) in spec.where
+    assert _shifted("current_date", "month", 0) in spec.where
+
+
+def test_day_of_week_this_quarter_is_a_filter_window():
+    spec = spec_from_form(
+        _form(
+            grain="day_of_week",
+            range_mode="this",
+            range_unit="quarter",
+        )
+    )
+    assert _shifted("current_date", "quarter") in spec.where
+    assert "factcat_dow(fc_event_ts" in spec.bucket
+
+
+def test_cyclic_relative_custom_uses_range_unit():
+    spec = spec_from_form(
+        _form(
+            grain="day_of_week",
+            range_mode="custom",
+            custom_kind="relative",
+            range_unit="month",
+            rel_start_n=6,
+            rel_end_n=0,
+        )
+    )
+    assert _shifted("current_date", "month", -6) in spec.where
+    assert _shifted("current_date", "week", -6) not in spec.where
+
+
+def test_cyclic_fill_keeps_breakdown_groups_apart():
+    rows = fill_cyclic_buckets(
+        [
+            {"bucket": "0", "value": 1, "country": "UK"},
+            {"bucket": "0", "value": 2, "country": "IE"},
+        ],
+        _form(grain="day_of_week", week_start="monday"),
+    )
+    mondays = [r for r in rows if r["bucket"] == "0"]
+    assert sorted(r["country"] for r in mondays) == ["IE", "UK"]
+    assert {r["value"] for r in mondays} == {1, 2}
+    uk_sun = next(
+        r for r in rows if r["bucket"] == "6" and r["country"] == "UK"
+    )
+    ie_sun = next(
+        r for r in rows if r["bucket"] == "6" and r["country"] == "IE"
+    )
+    assert uk_sun["value"] == 0
+    assert ie_sun["value"] == 0
+
+
+def test_cyclic_fill_keeps_extra_columns_on_zeros():
+    rows = fill_cyclic_buckets(
+        [{"bucket": "0", "value": 4, "series": "paid", "plan": "pro"}],
+        _form(grain="day_of_week", week_start="monday"),
+    )
+    monday = next(r for r in rows if r["bucket"] == "0")
+    sunday = next(r for r in rows if r["bucket"] == "6")
+    assert monday["plan"] == "pro"
+    assert sunday["value"] == 0
+    assert sunday["plan"] == "pro"
+    assert sunday["series"] == "paid"
+
+
+def test_cyclic_fill_includes_missing_sunday():
+    rows = fill_cyclic_buckets(
+        [{"bucket": "0", "value": 4}],
+        _form(grain="day_of_week", week_start="monday"),
+    )
+    assert [r["bucket"] for r in rows] == [str(i) for i in range(7)]
+    assert rows[6]["value"] == 0
+    sun = fill_cyclic_buckets(
+        [{"bucket": "0", "value": 1}],
+        _form(grain="day_of_week", week_start="sunday"),
+    )
+    assert [r["bucket"] for r in sun] == ["6", "0", "1", "2", "3", "4", "5"]
+
+
+def test_hour_as_date_trunc_day_is_not_the_bucket():
+    spec = spec_from_form(_form(grain="hour"))
+    assert "date_trunc('day'" not in spec.bucket.lower()
+    assert "CAST(" not in spec.bucket
+
+
+def test_dow_is_not_week_trunc():
+    spec = spec_from_form(_form(grain="day_of_week"))
+    assert "date_trunc('week'" not in spec.bucket.lower()
+    assert "WEEK(" not in spec.bucket
+
+
+def test_hour_filter_parses_12_hour_clock():
+    spec = spec_from_form(
+        _form(
+            event_column="event_name",
+            event_value="paid",
+            filters=[
+                {
+                    "column": "occurred_at",
+                    "op": "is",
+                    "date_part": "hour_of_day",
+                    "value": "3 pm",
+                    "type": "TIMESTAMP",
+                }
+            ],
+        )
+    )
+    assert "EXTRACT(HOUR" in spec.where
+    assert "= 15" in spec.where or "=15" in spec.where.replace(" ", "")

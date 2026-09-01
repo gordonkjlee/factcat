@@ -218,10 +218,20 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Time grain" in res.text
     assert "writeDestReady" in res.text
     assert "function writeDestReady" in res.text
+    assert "Day of week" in res.text
+    assert "Hour of day" in res.text
+    assert "Last 24 hours" in res.text
+    assert "results-toolbar" in res.text
     assert "<label>Bucket</label>" not in res.text
     assert "Last 30 days" in res.text
     assert "Last 8 weeks" in res.text
     assert "Last 6 months" in res.text
+    assert "Last 3 quarters" in res.text
+    assert "last:6:month" in res.text
+    assert "last:3:quarter" in res.text
+    assert "this:quarter" in res.text
+    assert "Include this quarter" in res.text
+    assert "rangeIncludeEl.hidden = cyclic" not in res.text
     assert "This week" in res.text
     assert "Last week" in res.text
     assert "Yesterday" in res.text
@@ -391,7 +401,7 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "filter-week-n" in res.text
     assert "filter-quarter-q" in res.text
     assert "2026 week 21" in res.text
-    assert "Hour of day (0-23)" in res.text
+    assert "Hour of day" in res.text
     assert "Day of month (1-31)" in res.text
     assert "Month of year (e.g. May)" in res.text
     assert "Month (e.g. May 2026)" in res.text
@@ -1493,8 +1503,20 @@ def test_preferences_renders(monkeypatch, tmp_path):
     assert ">Mon<" in res.text
     assert "January" in res.text
     assert ">Jan<" in res.text
-    assert "1–31 / 0–23" in res.text
-    assert "01–31 / 00–23" in res.text
+    assert "Day of month" in res.text
+    assert ">1–31<" in res.text
+    assert ">01–31<" in res.text
+    assert "Time of day" in res.text
+    assert "12-hour" in res.text
+    assert "24-hour" in res.text
+    assert "hour-clock-btn" in res.text
+    assert ">3pm<" in res.text or ">3pm</span>" in res.text
+    assert "03:00" in res.text
+    assert "15:00" in res.text
+    assert "3:00pm" not in res.text
+    assert "0h" in res.text
+    assert 'name="hour_style"' in res.text
+    assert "hour-ticks" in res.text
     assert 'id="theme-btn"' in res.text
     assert "the palette is not applied yet" not in res.text
     assert "<h1>Project setup</h1>" not in res.text
@@ -1553,7 +1575,7 @@ def test_events_sql_vocab(monkeypatch, tmp_path):
     assert "Break down by" not in html
     assert "is any of" not in html
     assert '"label": "IN"' in html
-    assert "Hour of day (00-23)" in html
+    assert "Hour of day" in html
     assert "Day of month (01-31)" in html
     assert ">Mon<" in html or '"Mon"' in html
 

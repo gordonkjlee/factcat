@@ -128,9 +128,9 @@ class EventsSpec:
     Uniques is never a column called ``user_id``. Min/max of a property are
     not measures here.
 
-    The x-axis is ``bucket``, a SQL expression. Day/week/month buttons in a
-    later UI fill ``date_trunc(...)``. There is no ``period: day|week|month``
-    field.
+    The x-axis is ``bucket``, a SQL expression. Day/week/month/hour (and
+    cyclic weekday / hour-of-day) UI sugar fills ``date_trunc`` or an
+    extract. There is no ``period: day|week|month`` field.
 
     Attributes:
         table:      source relation.

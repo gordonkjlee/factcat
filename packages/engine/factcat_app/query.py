@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -39,13 +40,28 @@ _JSON_KEY = re.compile(
 )
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _ISO_TIME = re.compile(r"^\d{2}:\d{2}(?::\d{2})?$")
-_GRAINS = ("day", "week", "month")
+_GRAINS = ("day", "week", "month", "hour", "day_of_week", "hour_of_day")
+_CHRONO_GRAINS = frozenset({"day", "week", "month", "hour"})
+_CYCLIC_GRAINS = frozenset({"day_of_week", "hour_of_day"})
+_RANGE_COUPLED = frozenset({"day", "week", "month"})
 _GRAIN_RANK = {"day": 0, "week": 1, "month": 2, "quarter": 3, "year": 4}
-_UNITS = frozenset({"day", "week", "month", "quarter", "year"})
+_UNITS = frozenset({"day", "week", "month", "quarter", "year", "hour"})
 _MODES = frozenset({"last", "this", "previous", "custom"})
 _LAST_N = frozenset({"7", "30", "90", "365"})
 # Last-N defaults when the saved window unit does not match the chart grain.
-_DEFAULT_LAST = {"day": 30, "week": 8, "month": 6}
+_DEFAULT_LAST = {
+    "day": 30,
+    "week": 8,
+    "month": 6,
+    "hour": 30,
+    "day_of_week": 8,
+    "hour_of_day": 14,
+}
+_RANGE_WINDOW = {
+    "hour": "day",
+    "day_of_week": "week",
+    "hour_of_day": "day",
+}
 EVENT_VALUE_LIMIT = 1000
 # Crash fuse, not a display cap. Slice-and-dice (grain × property)
 # is routinely tens of thousands of rows; grouping by a near-unique
@@ -167,7 +183,9 @@ def _event_time_kind(form: dict[str, Any]) -> str:
 def _range_unit(form: dict[str, Any], default: str = "day") -> str:
     raw = str(form.get("range_unit") or default).strip().lower()
     if raw not in _UNITS:
-        raise ValueError("range_unit must be day, week, month, quarter, or year")
+        raise ValueError(
+            "range_unit must be day, week, month, quarter, year, or hour"
+        )
     return raw
 
 
@@ -200,36 +218,53 @@ def _rel_n(form: dict[str, Any], key: str, default: int) -> int:
 def _grain(form: dict[str, Any]) -> str:
     raw = str(form.get("grain") or "day").strip().lower()
     if raw not in _GRAINS:
-        raise ValueError("grain must be day, week, or month")
+        raise ValueError(
+            "grain must be day, week, month, hour, day_of_week, or hour_of_day"
+        )
     return raw
 
 
-def _include_current(form: dict[str, Any], grain: str) -> bool:
-    """Last-N: include the in-progress grain (today / this week / this month).
+def _window_grain(grain: str) -> str:
+    """Calendar unit used to bound the query. Cyclic grains use a date filter."""
+    return _RANGE_WINDOW.get(grain, grain)
 
-    Unset defaults: day includes today; week and month are complete periods.
-    Not a library period enum.
+
+def _include_current(
+    form: dict[str, Any], grain: str, unit: str | None = None
+) -> bool:
+    """Last-N: include the in-progress *window* (today / this month / …).
+
+    Unset defaults follow the effective window unit, not a mismatched form
+    unit: day and hour include the current period; week / month / quarter /
+    year are complete. Cyclic grains still honour this — it is the filter
+    window, not a trailing bar. Not a library period enum.
     """
     raw = form.get("include_current")
     if raw is not None and raw != "":
         return raw in (True, "true", "on", "1", 1)
     if "exclude_current" in form:
         return form.get("exclude_current") not in (True, "true", "on", "1", 1)
-    return grain == "day"
+    effective = (unit or str(form.get("range_unit") or "")).strip().lower()
+    if effective in {"day", "hour"}:
+        return True
+    if effective in {"week", "month", "quarter", "year"}:
+        return False
+    return grain in {"day", "hour", "hour_of_day"}
 
 
-def _exclude_current(form: dict[str, Any]) -> bool:
+def _exclude_current(form: dict[str, Any], unit: str | None = None) -> bool:
     """Last-N complete periods. Inverse of ``_include_current``."""
     grain = str(form.get("grain") or "day").strip().lower()
     if grain not in _GRAINS:
         grain = "day"
-    return not _include_current(form, grain)
+    return not _include_current(form, grain, unit)
 
 
 def _grain_start(d: date, grain: str, week_start: str) -> date:
-    if grain == "day":
+    snap = grain if grain in {"day", "week", "month"} else "day"
+    if snap == "day":
         return d
-    if grain == "month":
+    if snap == "month":
         return d.replace(day=1)
     weekday = d.weekday()
     delta = (weekday + 1) % 7 if week_start == "sunday" else weekday
@@ -237,10 +272,11 @@ def _grain_start(d: date, grain: str, week_start: str) -> date:
 
 
 def _grain_next(d: date, grain: str, week_start: str) -> date:
-    start = _grain_start(d, grain, week_start)
-    if grain == "day":
+    snap = grain if grain in {"day", "week", "month"} else "day"
+    start = _grain_start(d, snap, week_start)
+    if snap == "day":
         return start + timedelta(days=1)
-    if grain == "week":
+    if snap == "week":
         return start + timedelta(days=7)
     month = 1 if start.month == 12 else start.month + 1
     year = start.year + 1 if start.month == 12 else start.year
@@ -319,6 +355,7 @@ def _normalize_range(
     grain = str(form.get("grain") or "day").strip().lower()
     if grain not in _GRAINS:
         grain = "day"
+    window = _window_grain(grain)
     mode = str(form.get("range_mode") or "").strip().lower()
     if mode not in _MODES:
         preset = str(form.get("range_preset") or "").strip()
@@ -333,24 +370,43 @@ def _normalize_range(
         else:
             mode, unit, n = "last", "day", _lookback_days(form)
     else:
-        unit = _range_unit(form)
+        unit = _range_unit(form, default=window)
         n = _range_n(form) if mode == "last" else 1
     if mode == "custom":
-        return mode, grain, 1
+        kind = str(form.get("custom_kind") or "absolute").strip().lower()
+        if kind == "relative":
+            unit = _range_unit(form, default=window)
+            if grain in _RANGE_COUPLED:
+                unit = grain
+            elif unit not in {"day", "week", "month", "quarter", "year"}:
+                unit = window if window in _UNITS else "day"
+            return mode, unit, 1
+        snap = grain if grain in _RANGE_COUPLED else window
+        if snap not in {"day", "week", "month"}:
+            snap = "day"
+        return mode, snap, 1
     if mode == "last":
-        if unit != grain:
+        if unit == "hour":
+            if grain != "hour":
+                unit, n = window, _DEFAULT_LAST[grain]
+            return mode, unit, n
+        if grain in _RANGE_COUPLED and unit != grain:
             n = _DEFAULT_LAST[grain]
-        return mode, grain, n
+            return mode, grain, n
+        if grain not in _RANGE_COUPLED and unit not in {"day", "week", "month", "quarter", "year"}:
+            unit, n = window, _DEFAULT_LAST[grain]
+        return mode, unit, n
     # this / previous: window may be coarser than the chart grain
     # (this week, daily bars). A finer window than the grain is the
-    # partial-bucket trap — bump it up.
-    if _GRAIN_RANK.get(unit, -1) < _GRAIN_RANK.get(grain, 0):
-        unit = grain
+    # partial-bucket trap — bump it up. Cyclic / hour windows are dates.
+    rank_grain = window if grain not in _RANGE_COUPLED else grain
+    if _GRAIN_RANK.get(unit, -1) < _GRAIN_RANK.get(rank_grain, 0):
+        unit = rank_grain
     return mode, unit, 1
 
 
 def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
-    """Sugar on event_time. Window unit follows the chart grain."""
+    """Sugar on event_time. Window unit is the range filter, not always the grain."""
     mode, unit, n = _normalize_range(form)
     lhs = _window_time_lhs(event_time, form)
     if mode == "custom":
@@ -401,16 +457,23 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
             f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, -1), form)}",
             f"{lhs} < {_as_event_time(_ps('current_date', unit, form, 0), form)}",
         ]
+    if unit == "hour":
+        tz = _sql_string(_reporting_timezone(form))
+        kind = _event_time_kind(form)
+        clauses = [f"{lhs} >= factcat_hours_ago({n}, {tz}, '{kind}')"]
+        if _exclude_current(form, unit):
+            clauses.append(f"{lhs} < factcat_current_hour_start({tz}, '{kind}')")
+        return clauses
     if unit == "day":
         clauses = [
             f"{lhs} >= {_as_event_time(_ps('current_date', 'day', form, -n), form)}"
         ]
-        if _exclude_current(form):
+        if _exclude_current(form, unit):
             clauses.append(
                 f"{lhs} < {_as_event_time(_today_sql(form), form)}"
             )
         return clauses
-    if _exclude_current(form):
+    if _exclude_current(form, unit):
         return [
             f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, -n), form)}",
             f"{lhs} < {_as_event_time(_ps('current_date', unit, form, 0), form)}",
@@ -420,6 +483,34 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
     ]
 
 
+def _now_in_zone(form: dict[str, Any]) -> datetime:
+    tz = _reporting_timezone(form)
+    if tz == "UTC":
+        return datetime.now(timezone.utc)
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo(tz))
+
+
+def _parse_hour_bucket(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    raw = raw.replace("T", " ").replace("Z", "+00:00")
+    for fmt, n in (("%Y-%m-%d %H:%M:%S", 19), ("%Y-%m-%d %H:%M", 16)):
+        try:
+            return datetime.strptime(raw[:n], fmt)
+        except ValueError:
+            continue
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        return parsed.replace(tzinfo=None)
+    return parsed
+
+
 def annotate_incomplete(
     rows: list[dict[str, Any]],
     form: dict[str, Any],
@@ -427,23 +518,37 @@ def annotate_incomplete(
     today: date | None = None,
 ) -> list[dict[str, Any]]:
     """Mark the current grain when the window includes it. Trailing only."""
-    if today is None:
-        tz = _reporting_timezone(form)
-        if tz == "UTC":
-            today = datetime.now(timezone.utc).date()
-        else:
-            from zoneinfo import ZoneInfo
-
-            today = datetime.now(ZoneInfo(tz)).date()
     grain = str(form.get("grain") or "day").strip().lower()
     if grain not in _GRAINS:
         grain = "day"
-    current = _grain_start(today, grain, _week_start(form))
-    mode, _unit, _n = _normalize_range(form)
+    if grain in _CYCLIC_GRAINS:
+        return [dict(row, incomplete=False) for row in rows]
+    now = _now_in_zone(form)
+    if today is None:
+        today = now.date()
+    mode, unit, _n = _normalize_range(form)
     hide_current = mode == "previous" or (
-        mode == "last" and not _include_current(form, grain)
+        mode == "last" and not _include_current(form, grain, unit)
     )
     out: list[dict[str, Any]] = []
+    if grain == "hour":
+        current = now.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+        for row in rows:
+            bucket = _parse_hour_bucket(row.get("bucket"))
+            item = dict(row)
+            marked = False
+            if bucket is not None and not hide_current:
+                b = bucket.replace(minute=0, second=0, microsecond=0, tzinfo=None)
+                marked = b == current.replace(tzinfo=None) or (
+                    b.year,
+                    b.month,
+                    b.day,
+                    b.hour,
+                ) == (current.year, current.month, current.day, current.hour)
+            item["incomplete"] = marked
+            out.append(item)
+        return out
+    current = _grain_start(today, grain, _week_start(form))
     for row in rows:
         bucket = _parse_bucket(row.get("bucket"))
         item = dict(row)
@@ -451,6 +556,73 @@ def annotate_incomplete(
             bucket is not None and bucket == current and not hide_current
         )
         out.append(item)
+    return out
+
+
+def fill_cyclic_buckets(
+    rows: list[dict[str, Any]], form: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Ensure 7 weekday / 24 hour-of-day keys, missing as 0. Display order."""
+    grain = str(form.get("grain") or "day").strip().lower()
+    if grain not in _CYCLIC_GRAINS:
+        return rows
+
+    def canon(value: Any) -> str:
+        raw = str(value or "").strip()
+        try:
+            return str(int(float(raw)))
+        except (TypeError, ValueError):
+            return raw
+
+    if grain == "hour_of_day":
+        keys = [str(i) for i in range(24)]
+    elif _week_start(form) == "sunday":
+        keys = [str(i) for i in (6, 0, 1, 2, 3, 4, 5)]
+    else:
+        keys = [str(i) for i in range(7)]
+    skip = frozenset({"bucket", "value", "incomplete"})
+
+    def series_key(row: dict[str, Any]) -> str:
+        if "series" in row and row.get("series") not in (None, ""):
+            return str(row["series"])
+        extras = {k: row[k] for k in row if k not in skip}
+        if not extras:
+            return ""
+        return json.dumps(extras, default=str, sort_keys=True)
+
+    grouped: dict[str, dict[str, dict[str, Any]]] = {}
+    series_order: list[str] = []
+    for row in rows:
+        series = series_key(row)
+        if series not in grouped:
+            grouped[series] = {}
+            series_order.append(series)
+        grouped[series][canon(row.get("bucket"))] = row
+    if not series_order:
+        series_order = [""]
+        grouped[""] = {}
+    out: list[dict[str, Any]] = []
+    for series in series_order:
+        got = grouped.get(series) or {}
+        for key in keys:
+            if key in got:
+                item = dict(got[key])
+                item["bucket"] = key
+                item["incomplete"] = False
+                out.append(item)
+                continue
+            template = next(iter(got.values()), {})
+            filled = {
+                k: v
+                for k, v in template.items()
+                if k not in {"bucket", "value", "incomplete"}
+            }
+            filled.update(
+                {"bucket": key, "value": 0, "incomplete": False}
+            )
+            if "series" in template:
+                filled["series"] = template["series"]
+            out.append(filled)
     return out
 
 
@@ -822,6 +994,13 @@ def _part_numeric_lit(row: dict[str, Any], token: str) -> str:
         if not re.fullmatch(r"\d{4}", raw):
             raise ValueError("year must be four digits")
         return raw
+    if meta and meta.get("extract") == "HOUR":
+        from .prefs import parse_hour
+
+        try:
+            return str(parse_hour(token))
+        except ValueError:
+            pass
     integer = False
     lo = hi = None
     if meta and meta.get("extract"):
@@ -1375,6 +1554,16 @@ def spec_from_form(
     if breakdown_at not in BREAKDOWN_AT:
         raise ValueError("breakdown_at must be rows, first, or last")
 
+    tz = _sql_string(_reporting_timezone(form))
+    kind = _event_time_kind(form)
+    if grain == "hour":
+        bucket = f"factcat_hour_trunc(fc_event_ts, {tz}, '{kind}')"
+    elif grain == "hour_of_day":
+        bucket = f"factcat_hour_of_day(fc_event_ts, {tz}, '{kind}')"
+    elif grain == "day_of_week":
+        bucket = f"factcat_dow(fc_event_ts, {tz}, '{kind}')"
+    else:
+        bucket = f"CAST({_ps('fc_event_ts', grain, form, 0)} AS DATE)"
     return EventsSpec(
         table=table,
         entity=entity,
@@ -1382,7 +1571,7 @@ def spec_from_form(
         measure=measure,  # type: ignore[arg-type]
         on=on,  # type: ignore[arg-type]
         of=of,
-        bucket=f"CAST({_ps('fc_event_ts', grain, form, 0)} AS DATE)",
+        bucket=bucket,
         where=" AND ".join(clauses),
         exact=exact,
         breakdowns=breakdowns,
@@ -1470,13 +1659,27 @@ def events_sql_from_form(form: dict[str, Any]) -> str:
         sql = events_sql(spec_from_form(form), dialect=dialect)
     n = query_row_limit(form)
     inner = _indent_sql(sql.rstrip(), 4)
+    grain = str(form.get("grain") or "day").strip().lower()
+    order = (
+        "bucket"
+        if grain == "hour" or grain in _CYCLIC_GRAINS
+        else "CAST(bucket AS DATE)"
+    )
+    if grain in _CYCLIC_GRAINS:
+        return (
+            f"SELECT * FROM (\n"
+            f"  SELECT * FROM (\n{inner}\n  ) AS _fc_inner\n"
+            f"  LIMIT {n}\n"
+            f") AS _fc_recent\n"
+            f"ORDER BY {order}"
+        )
     return (
         f"SELECT * FROM (\n"
         f"  SELECT * FROM (\n{inner}\n  ) AS _fc_inner\n"
-        f"  ORDER BY CAST(bucket AS DATE) DESC\n"
+        f"  ORDER BY {order} DESC\n"
         f"  LIMIT {n}\n"
         f") AS _fc_recent\n"
-        f"ORDER BY CAST(bucket AS DATE)"
+        f"ORDER BY {order}"
     )
 
 

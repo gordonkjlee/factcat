@@ -10,6 +10,48 @@ from typing import Any
 
 PREFS_ENV = "FACTCAT_PREFS"
 
+# One complete format. 12-hour has no leading zeros; 03:00 is the padded 24-hour clock.
+HOUR_STYLES = (
+    "3pm",
+    "3 pm",
+    "3 p.m.",
+    "3PM",
+    "3 PM",
+    "3 P.M.",
+    "3",
+    "3h",
+    "3:00",
+    "03:00",
+)
+HOUR_STYLE_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("12", ("3pm", "3 pm", "3 p.m.", "3PM", "3 PM", "3 P.M.")),
+    ("24", ("3", "3h", "3:00", "03:00")),
+)
+HOUR_PREVIEW = (0, 3, 12, 15)
+_HOUR_STYLE_ALIASES = {
+    "3am": "3 pm",
+    "03am": "3 pm",
+    "3:00am": "3 pm",
+    "03:00am": "3 pm",
+    "3:00pm": "3pm",
+    "3:00 pm": "3 pm",
+    "3:00 p.m.": "3 p.m.",
+    "3:00PM": "3PM",
+    "3:00 PM": "3 PM",
+    "3:00 P.M.": "3 P.M.",
+    "03": "3",
+    "03h": "3h",
+}
+_TWELVE = {
+    "3pm": ("", "am", "pm"),
+    "3 pm": (" ", "am", "pm"),
+    "3 p.m.": (" ", "a.m.", "p.m."),
+    "3PM": ("", "AM", "PM"),
+    "3 PM": (" ", "AM", "PM"),
+    "3 P.M.": (" ", "A.M.", "P.M."),
+}
+HOUR_CLOCK_DEFAULT = {"12": "3pm", "24": "3"}
+
 DEFAULTS: dict[str, Any] = {
     "thousand_sep": "comma",
     "decimal_sep": "period",
@@ -17,7 +59,8 @@ DEFAULTS: dict[str, Any] = {
     "vocab": "plain",
     "weekday_style": "long",
     "month_style": "long",
-    "pad_calendar": False,
+    "pad_day": False,
+    "hour_style": "3",
 }
 
 # Once lived on the project file. Copied into the user file, then stripped.
@@ -40,11 +83,48 @@ def prefs_path() -> Path:
     return Path.home() / ".factcat" / "preferences.json"
 
 
+def _canonical_hour_style(raw: str) -> str:
+    style = _HOUR_STYLE_ALIASES.get(str(raw or "3"), str(raw or "3"))
+    if style in HOUR_STYLES:
+        return style
+    return "3"
+
+
+def _combine_hour_style(shape: str, clock: str) -> str:
+    shape = _canonical_hour_style(shape)
+    if str(clock) == "12":
+        return "3 pm"
+    return shape
+
+
+def _apply_legacy_hour(raw: dict[str, Any], dest: dict[str, Any]) -> None:
+    if "hour_style" in raw:
+        return
+    if "hour_clock" in raw or "hour_format" in raw:
+        dest["hour_style"] = _combine_hour_style(
+            str(raw.get("hour_format") or dest.get("hour_style") or "3"),
+            str(raw.get("hour_clock") or "24"),
+        )
+
+
+def _apply_pad_calendar(raw: dict[str, Any], dest: dict[str, Any]) -> None:
+    if "pad_calendar" not in raw:
+        return
+    if "pad_day" not in raw:
+        dest["pad_day"] = _as_bool(raw.get("pad_calendar"))
+    if "hour_style" not in raw and "hour_format" not in raw:
+        dest["hour_style"] = (
+            "03:00" if _as_bool(dest.get("pad_day", raw.get("pad_calendar"))) else "3"
+        )
+
+
 def _merge(raw: dict[str, Any]) -> dict[str, Any]:
     data = dict(DEFAULTS)
     for key in DEFAULTS:
         if key in raw and raw[key] is not None:
             data[key] = raw[key]
+    _apply_pad_calendar(raw, data)
+    _apply_legacy_hour(raw, data)
     return data
 
 
@@ -69,8 +149,11 @@ def _read_object(path: Path) -> dict[str, Any] | None:
 
 
 def _validate(data: dict[str, Any]) -> dict[str, Any]:
+    incoming = dict(data)
+    _apply_pad_calendar(incoming, incoming)
+    _apply_legacy_hour(incoming, incoming)
     out = dict(DEFAULTS)
-    out.update(data)
+    out.update(incoming)
     thou = str(out.get("thousand_sep") or "comma")
     dec = str(out.get("decimal_sep") or "period")
     if thou not in _SEP_CHAR:
@@ -89,7 +172,17 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
         out["weekday_style"] = "long"
     if str(out.get("month_style") or "") not in {"long", "short"}:
         out["month_style"] = "long"
-    out["pad_calendar"] = _as_bool(out.get("pad_calendar"))
+    out["pad_day"] = _as_bool(out.get("pad_day"))
+    style = str(out.get("hour_style") or "3")
+    if style not in HOUR_STYLES:
+        if "hour_clock" in incoming or "hour_format" in incoming:
+            style = _combine_hour_style(
+                str(incoming.get("hour_format") or style),
+                str(incoming.get("hour_clock") or "24"),
+            )
+        else:
+            style = _canonical_hour_style(style)
+    out["hour_style"] = style if style in HOUR_STYLES else "3"
     return {key: out[key] for key in DEFAULTS}
 
 
@@ -144,7 +237,10 @@ def save(data: dict[str, Any]) -> None:
     raw = _read_object(path)
     if raw is not None:
         existing = _validate(_merge(raw))
-    merged = _validate({**existing, **data})
+    payload = dict(data)
+    _apply_pad_calendar(payload, payload)
+    _apply_legacy_hour(payload, payload)
+    merged = _validate({**existing, **payload})
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
 
@@ -178,3 +274,75 @@ def canonical_number(token: str, data: dict[str, Any] | None = None) -> str:
     if not _CANON_NUMBER.match(raw):
         raise ValueError("filter value must be a number")
     return raw
+
+
+_HOUR_TOKEN = re.compile(
+    r"^\s*(\d{1,2})(?::00)?h?\s*([AaPp]\.?[Mm]\.?)?\s*$",
+)
+
+
+def format_hour(
+    hour: int,
+    style: str | None = None,
+    clock: str | None = None,
+    data: dict[str, Any] | None = None,
+) -> str:
+    """0–23 → display. One complete style, never shape × clock."""
+    prefs = data if data is not None else {}
+    sty = style or str(prefs.get("hour_style") or "")
+    if clock is not None:
+        sty = _combine_hour_style(sty or str(prefs.get("hour_format") or "3"), clock)
+    sty = _canonical_hour_style(sty or str(prefs.get("hour_style") or "3"))
+    h = int(hour) % 24
+    if sty == "3":
+        return str(h)
+    if sty == "3h":
+        return f"{h}h"
+    if sty == "3:00":
+        return f"{h}:00"
+    if sty == "03:00":
+        return f"{h:02d}:00"
+    joiner, am, pm = _TWELVE[sty]
+    h12 = h % 12
+    if h12 == 0:
+        h12 = 12
+    return f"{h12}{joiner}{pm if h >= 12 else am}"
+
+
+def parse_hour(token: str) -> int:
+    """Display or integer → 0–23."""
+    raw = (token or "").strip()
+    if not raw:
+        raise ValueError("filter value must be an hour")
+    match = _HOUR_TOKEN.match(raw)
+    if not match:
+        raise ValueError("filter value must be an hour")
+    n = int(match.group(1))
+    period = (match.group(2) or "").lower().replace(".", "")
+    if period:
+        if n < 1 or n > 12:
+            raise ValueError("filter value must be an hour")
+        if n == 12:
+            n = 0 if period == "am" else 12
+        elif period == "pm":
+            n += 12
+    elif n > 23:
+        raise ValueError("filter value must be an hour")
+    return n
+
+
+def hour_labels(data: dict[str, Any] | None = None) -> list[str]:
+    prefs = data if data is not None else load()
+    return [format_hour(h, data=prefs) for h in range(24)]
+
+
+def hour_style_previews() -> dict[str, list[str]]:
+    return {sty: [format_hour(h, sty) for h in HOUR_PREVIEW] for sty in HOUR_STYLES}
+
+
+def hour_clock_of_style(style: str) -> str:
+    sty = _canonical_hour_style(style)
+    for clock, styles in HOUR_STYLE_GROUPS:
+        if sty in styles:
+            return clock
+    return "24"

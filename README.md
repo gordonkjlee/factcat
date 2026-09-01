@@ -279,8 +279,8 @@ project and dataset; Snowflake: database and schema). Setup is a separate
 control at the bottom of the left rail, not an analysis. **Events** stays
 reachable; until a mapping is ready it shows a prompt, Run is disabled,
 and Setup has a marker. **Preferences** sits above Setup (wording,
-thousand/decimal separators, weekday/month display). Those follow the
-person in `~/.factcat/preferences.json`, not the project file.
+thousand/decimal separators, weekday/month display, time of day). Those
+follow the person in `~/.factcat/preferences.json`, not the project file.
 
 **BigQuery.** After the extra is present: `gcloud auth application-default login`
 and `gcloud config set project YOUR_GCP_PROJECT`. Billing project from ADC,
@@ -311,20 +311,28 @@ into that series (OR); **Split** undoes it. Ungrouped series overlay as
 separate lines. **Break down by** is chart-wide unless **Break down each
 series** is on, in which case each series has its own split. **Refresh list** reloads
 event names for the current lookback (or from `fc_event_names` if you
-gave Factcat a write project and dataset). **Time grain**
-(day / week / month) comes first; **date range** is then in that grain
-(Last 30 days, Last 8 weeks, Last 6 months). Day grain also offers This
-week / Last week / This month as *windows of days*. Week and month last-N
-default to complete periods so the first bar is a full week or month.
-Include this week/month is opt-in and the current bar is marked incomplete.
-Custom is specific dates (snapped to the grain) or relative (12 weeks ago
-to 3 weeks ago; 0 = this grain). Sugar on `event_time`, not a period enum.
-If a write destination is set, **Refresh list** reads `fc_event_names`
-(created on first miss as a materialized view, or a table if the source
-cannot back a view). Lookback does not apply while that cache is in use.
-Week start and reporting
+gave Factcat a write project and dataset). **Time grain** and **date range**
+sit above the chart with **Run** (warehouse cost is explicit). Grain is
+day / week / month / hour / day of week / hour of day; sugar fills
+`EventsSpec.bucket`, not a period enum. Date range is then in that grain
+(Last 30 days, Last 8 weeks, Last 6 months). Hour reuses the day list plus
+Last 24 hours. Day of week and hour of day use the range as a calendar
+filter — last N days, weeks, months, or quarters, not locked to the chart
+grain (default last 8 weeks / last 14 days). Include the current period
+follows the *window* (this month, this quarter, today) on those last-N
+filters. Day grain also offers This week / Last week / This month as
+*windows of days*. Week and month last-N default to complete periods so the
+first bar is a full week or month. Include this week/month is opt-in and the
+current bar is marked incomplete. Custom is specific dates (snapped to the
+grain) or relative (from 12 to 3 weeks ago; 0 = this period). Sugar on
+`event_time`, not a period enum. If a write destination is set, **Refresh
+list** reads `fc_event_names` (created on first miss as a materialized
+view, or a table if the source cannot back a view). Lookback does not apply
+while that cache is in use. Week start and reporting
 timezone stay on Setup (they change SQL). Thousand/decimal separators, wording
-(business user / SQL analyst), and weekday/month display are **Preferences**; number filters
+(business user / SQL analyst), weekday/month display, day-of-month pad, hour
+style (12-hour or 24-hour first, then a short list of complete formats) are
+**Preferences**; number filters
 use those separators, and the SQL pane stays warehouse SQL (period decimal, no
 grouping). Catalog dropdowns are alphabetical.
 Entity lists string and integer columns; timestamp lists TIMESTAMP /

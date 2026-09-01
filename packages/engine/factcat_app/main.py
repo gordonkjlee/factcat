@@ -47,6 +47,7 @@ from .query import (
     event_name_cache_rebuild_sql,
     event_values_sql,
     events_sql_from_form,
+    fill_cyclic_buckets,
     form_kind,
     job_bytes_cap,
     query_row_limit,
@@ -297,12 +298,17 @@ async def api_event_values(request: Request) -> JSONResponse:
 
 @app.get("/preferences", response_class=HTMLResponse)
 def preferences(request: Request) -> HTMLResponse:
+    user = prefs_mod.load()
     return templates.TemplateResponse(
         request,
         "preferences.html",
         {
             "config": load(),
-            "prefs": prefs_mod.load(),
+            "prefs": user,
+            "hour_styles": prefs_mod.HOUR_STYLE_GROUPS,
+            "hour_previews": prefs_mod.hour_style_previews(),
+            "hour_clock": prefs_mod.hour_clock_of_style(user["hour_style"]),
+            "hour_clock_default": prefs_mod.HOUR_CLOCK_DEFAULT,
             "screen": "preferences",
             "mapping_ready": mapping_ready(),
         },
@@ -480,7 +486,7 @@ async def api_run(request: Request) -> JSONResponse:
         item["bucket"] = str(r.get("bucket", ""))
         item["value"] = r.get("value")
         raw_rows.append(item)
-    rows = annotate_incomplete(raw_rows, form)
+    rows = fill_cyclic_buckets(annotate_incomplete(raw_rows, form), form)
     limit = query_row_limit(form)
     return JSONResponse({
         "ok": True,
