@@ -109,9 +109,12 @@ value per entity, whole unfiltered table), the same bounded by ``since`` /
 ``until``), or ``carried`` — the last non-null value at or before each
 row's instant, so a tier stamped only on ``subscription_started`` still
 labels every later login. A row never borrows a future stamp.
-``fill_from`` names which rows may stamp a value; ``backfill=True`` (with
-``until``) falls back to the entity's first recorded value when nothing
-exists by the bound. Attribution always reads the unfiltered table — the
+``fill_from`` names which rows may stamp a value (with
+``own_value_first`` the charted row's own value still outranks the
+narrowed stream); the strict ``before`` bound is the exclusive-boundary
+spelling, so "state at the window end" never reads a stamp at exactly
+the end instant; ``backfill=True`` (with an upper bound) falls back to
+the entity's first recorded value when nothing exists by it. Attribution always reads the unfiltered table — the
 stamp can sit on an event the chart excludes — and none of it replaces
 the expression.
 

@@ -787,7 +787,17 @@ def _slot_breakdown(
         return expr
     fill_from = _slot_fill_from(slot, form)
     if value_at == "event":
-        return Breakdown(expr, at="carried", fill_from=fill_from)
+        # The app's contract is own-value-first: "Value at: each event"
+        # stays literally true even when Fill from names an authoritative
+        # source — the narrowed stream fills only rows with no value of
+        # their own. (With no fill_from the flag is a no-op; omit it so
+        # the plain carried SQL is unchanged.)
+        return Breakdown(
+            expr,
+            at="carried",
+            fill_from=fill_from,
+            own_value_first=fill_from is not None,
+        )
     if value_at == "first_record":
         return Breakdown(expr, at="first", fill_from=fill_from)
     if value_at == "latest_record":

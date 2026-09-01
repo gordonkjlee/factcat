@@ -2255,8 +2255,24 @@ def test_breakdown_value_at_carried_with_fill_from_event():
     assert isinstance(bd, Breakdown)
     assert bd.at == "carried"
     assert bd.fill_from == "event_name = 'O''Brien signup'"
+    # Narrowed Fill from never suppresses the row's own value in the app
+    # contract; without a fill_from the flag is omitted (plain carried).
+    assert bd.own_value_first is True
+    plain = spec_from_form(
+        _form(
+            breakdowns=[
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "event",
+                    "if_missing": "fill",
+                }
+            ]
+        )
+    ).breakdowns[0]
+    assert plain.own_value_first is False
     sql = events_sql(spec, dialect="bigquery")
     assert "fc_stamps" in sql
+    assert "fc_self_0" in sql
     assert "IGNORE NULLS" not in sql.upper()
 
 
