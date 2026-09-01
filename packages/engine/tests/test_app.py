@@ -328,6 +328,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert ".pane-actions button.icon-btn," in res.text
     assert ".pane-actions .format-pop > summary.icon-btn {" in res.text
     assert ".pane-actions details { margin: 0; }" in res.text
+    assert ".row-divider[hidden] + .pane { margin-top: 0.5rem; }" in res.text
+    assert "flex: 0 0 0.5rem" not in res.text
     assert 'id="copy-chart" class="icon-btn" disabled' in res.text
     assert 'id="copy-table" class="icon-btn" disabled' in res.text
     assert 'id="copy-sql" class="icon-btn" disabled' in res.text
