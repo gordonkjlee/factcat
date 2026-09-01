@@ -433,8 +433,6 @@
     .range-row input[type="number"] { width: 4.5rem; }
     #breakdown-extra[hidden] { display: none !important; }
     #breakdown-extra .range-row { margin-top: 0.5rem; }
-    .breakdown-slot { margin-top: 0.45rem; }
-    .breakdown-slot:first-child { margin-top: 0; }
     .fc-plus {
       display: inline-flex;
       align-items: center;
@@ -516,6 +514,9 @@
       padding: 0.5rem 0.55rem 0.4rem; margin: 0 0 0.5rem;
       min-width: 0;
     }
+    /* The toggle row above sits flush (0px) otherwise — invisible before
+       the cards drew a border there. Same 0.5rem rhythm as the seams. */
+    #breakdown-chart .breakdown-slot[data-slot="0"] { margin-top: 0.5rem; }
     .series-bd-slot { background: var(--fc-snow); margin: 0 0 0.35rem; }
     .bd-value-controls { margin-top: 0.3rem; }
     .bd-value-controls[hidden], .bd-fill-wrap[hidden],

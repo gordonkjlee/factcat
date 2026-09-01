@@ -304,6 +304,7 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert '"bd_at_first": "first ever"' in res.text
     assert '"bd_at_latest": "latest ever"' in res.text
     assert '"bd_fill_charted": "Charted events"' in res.text
+    assert "This series" in res.text  # bd_fill_series plain label
     assert "__charted__" in res.text
     assert "__series__" in res.text
     assert "IGNORE NULLS" not in res.text
