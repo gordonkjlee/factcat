@@ -558,7 +558,7 @@ function paintStep(step) {
 function syncRefreshButtons() {
   document.querySelectorAll(".catalog-refresh").forEach((btn) => {
     const step = kindSteps().find((s) => s.id === btn.getAttribute("data-catalog"));
-    btn.hidden = !step || !stepReady(step);
+    btn.hidden = !step || !stepReady(step) || !!loading[step.id];
   });
 }
 function syncCatalogEnabled() {

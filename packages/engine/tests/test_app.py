@@ -135,6 +135,7 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "persistCatalogLists" in res.text
     assert "catalog-refresh" in res.text
     assert "linkish catalog-refresh" in res.text
+    assert "!!loading[step.id]" in res.text
     assert "function invalidateStep" in res.text
     assert "invalidateStep(step.id)" in res.text
     assert 'addEventListener("mousedown"' in res.text
@@ -1041,7 +1042,9 @@ def test_template_ships_with_package():
     static = Path(APP_DIR) / "static"
     assert (static / "logo.png").is_file()
     assert (static / "catalog.js").is_file()
-    assert "bindCachedList" in (static / "catalog.js").read_text(encoding="utf-8")
+    catalog_js = (static / "catalog.js").read_text(encoding="utf-8")
+    assert "bindCachedList" in catalog_js
+    assert 'classList.toggle("refresh-busy", on)' in catalog_js
     assert (static / "save.js").is_file()
     save_js = (static / "save.js").read_text(encoding="utf-8")
     assert "async function post(" in save_js
@@ -1111,6 +1114,8 @@ def test_chrome_uses_tokens_and_empty_state(monkeypatch, tmp_path):
     assert "/static/settled.jpg" in events
     assert "/static/unimpressed.jpg" in events
     assert "prefers-reduced-motion" in events
+    assert "animation-duration: 1.2s" in events
+    assert ".refresh-busy { display: none !important; }" in events
     assert "startRunCat" in events
     assert "startIdleCat" in events
     assert "img.hidden = false" in events
