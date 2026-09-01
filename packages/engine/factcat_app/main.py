@@ -52,6 +52,7 @@ from .query import (
     form_kind,
     job_bytes_cap,
     query_row_limit,
+    stored_event_name_cache,
 )
 
 APP_DIR = Path(__file__).resolve().parent
@@ -247,7 +248,10 @@ async def api_event_values(request: Request) -> JSONResponse:
         warehouse = await run_in_threadpool(connect, form_kind(form), **conn)
         if catalog:
             cfg = load()
-            if "event_name_cache" not in form:
+            # The config file owns the cache fingerprint. The client's copy is
+            # a mirror for status wording; an empty mirror (fresh page) must
+            # not force a rebuild.
+            if not stored_event_name_cache(form):
                 form = {**form, "event_name_cache": cfg.get("event_name_cache") or {}}
             result, cache_kind, meta = await run_in_threadpool(
                 catalog_event_values, form, warehouse.run
@@ -269,8 +273,12 @@ async def api_event_values(request: Request) -> JSONResponse:
         saved = {
             "event_names": values,
             "catalog_lookback_days": 0 if days is None else days,
-            "event_name_cache": meta or {},
         }
+        # The lookback fallback returns meta None. A degraded load must not
+        # destroy the stored fingerprint - that wipe is what locked the page
+        # into "Creating event-name cache…" on every visit.
+        if meta is not None:
+            saved["event_name_cache"] = meta
         if "write_project" in form:
             saved["write_project"] = (form.get("write_project") or "").strip()
         if "write_dataset" in form:
@@ -285,6 +293,19 @@ async def api_event_values(request: Request) -> JSONResponse:
         payload["cache"] = cache_kind
     if meta and meta.get("kind"):
         payload["kind"] = meta["kind"]
+    if catalog and cache_kind is None and meta is None:
+        dest_set = bool(
+            (
+                str(form.get("write_project") or "").strip()
+                and str(form.get("write_dataset") or "").strip()
+            )
+            or (
+                str(form.get("write_database") or "").strip()
+                and str(form.get("write_schema") or "").strip()
+            )
+        )
+        if dest_set:
+            payload["fallback"] = "lookback"
     return JSONResponse(payload)
 
 

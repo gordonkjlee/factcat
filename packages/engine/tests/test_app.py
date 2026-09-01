@@ -343,6 +343,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert 'id="config-default"' in res.text
     assert 'id="config-wide"' in res.text
     assert "Drag to resize" not in res.text
+    assert "loadOnStart" not in res.text
+    assert 'id="event-names-fallback"' in res.text
     assert "setConfigCollapsed" in res.text
     assert "layout_config_px" in res.text
     assert "layout_chart_px" in res.text
@@ -1653,6 +1655,76 @@ def test_event_values_write_cache_falls_back_to_distinct(monkeypatch, tmp_path):
     body = res.json()
     assert body["values"] == ["paid"]
     assert "cache" not in body
+    assert body.get("fallback") == "lookback"
+
+
+def test_event_values_lookback_fallback_keeps_stored_meta(monkeypatch, tmp_path):
+    """A degraded load must not destroy the cache fingerprint.
+
+    The wipe locked Events into re-querying with "Creating event-name
+    cache…" on every visit.
+    """
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    meta = {
+        "v": 1,
+        "table": "analytics.events",
+        "event_column": "event_name",
+        "kind": "table",
+    }
+    (tmp_path / "cfg.json").write_text(
+        json.dumps({"event_name_cache": meta}), encoding="utf-8"
+    )
+    warehouse = MagicMock()
+
+    def fake_run(sql, **_kw):
+        upper = sql.upper()
+        if "CREATE" in upper:
+            raise AdapterError("permission denied")
+        if "FC_EVENT_NAMES" in upper:
+            raise AdapterError("not found")
+        return QueryResult(rows=[{"fc_value": "opened"}])
+
+    warehouse.run.side_effect = fake_run
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post(
+        "/api/event_values",
+        json={**_catalog_write_body(), "event_name_cache": {}},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["values"] == ["opened"]
+    assert body.get("fallback") == "lookback"
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert saved["event_name_cache"] == meta
+
+
+def test_event_values_empty_client_meta_uses_stored(monkeypatch, tmp_path):
+    """A fresh page sends an empty meta mirror; the config's fingerprint
+    must still count as a match - no rebuild, one cheap read."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    meta = {
+        "v": 1,
+        "table": "analytics.events",
+        "event_column": "event_name",
+        "kind": "materialized_view",
+    }
+    (tmp_path / "cfg.json").write_text(
+        json.dumps({"event_name_cache": meta}), encoding="utf-8"
+    )
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(rows=[{"fc_value": "paid"}])
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    client = TestClient(app)
+    res = client.post(
+        "/api/event_values",
+        json={**_catalog_write_body(), "event_name_cache": {}},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["cache"] == "cached"
+    assert warehouse.run.call_count == 1
+    assert "CREATE" not in warehouse.run.call_args.args[0].upper()
 
 
 def test_non_catalog_event_values_do_not_write_cache(monkeypatch, tmp_path):
