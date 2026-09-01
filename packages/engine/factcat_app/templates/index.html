@@ -322,7 +322,7 @@
     #exact-wrap[hidden] { display: none !important; }
     #run-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; flex-wrap: wrap; }
     #run-row button { margin-top: 0; }
-    #run-status, #run-estimate { font-size: 0.8rem; color: var(--fc-slate); }
+    #run-estimate, #table-count { font-size: 0.8rem; color: var(--fc-slate); }
     #run-estimate-wrap { display: inline-flex; align-items: center; gap: 0.4rem; }
     #run-estimate-wrap[hidden] { display: none !important; }
     #run-estimate-bar[hidden] { display: none !important; }
@@ -1003,7 +1003,6 @@
         </div>
       </div>
       <div id="run-row">
-        <span id="run-status"></span>
         <span id="run-estimate-wrap" hidden>
           <span id="run-estimate-bar" aria-hidden="true"><span id="run-estimate-fill"></span></span>
           <span id="run-estimate"></span>
@@ -1089,6 +1088,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
         </button>
         <h2>Table</h2>
+        <span id="table-count"></span>
         <span class="pane-actions">
           <button type="button" id="copy-table" class="icon-btn" disabled title="Copy table" aria-label="Copy table">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -3747,7 +3747,7 @@ function estimateKey(body) {
     body.event_value, body.grain, body.range_mode, body.range_n,
     body.range_unit, body.include_current, body.measure, body.custom_kind,
     body.start_date, body.end_date, body.rel_start_n, body.rel_end_n,
-    body.override_cap, body.bytes_cap_gb,
+    body.bytes_cap_gb,
     body.on, body.of_column, body.of_expr, body.of_json_key,
     body.breakdown_column, body.breakdown_expr, body.breakdown_json_key,
     JSON.stringify(body.breakdowns || []),
@@ -3759,6 +3759,9 @@ let lastEstimateKey = "";
 // same fingerprint the estimate uses. Written by an over-cap estimate and by a
 // cap-rejected run; null means no known condition, never "unknown".
 let capBlock = null;
+// The last dry run's bytes, keyed by the same fingerprint. Bytes are
+// cap-independent, so this outlives any change to the cap.
+let lastEstimate = null;
 let runInFlight = false;
 // An exact figure, so it drops formatBytes' "~". Forcing GB here printed a
 // 50 MB cap as "0 GB"; unit choice has one owner and it is formatBytes.
@@ -3793,10 +3796,12 @@ function syncCostGate() {
 // gauge against the Setup cap so the warn/hot ladder keeps escalating - dropping
 // the ceiling and the warning together left a plain grey byte count as the only
 // signal on the largest queries, which is when the cue matters most.
-function estimateGauge(cap) {
-  if (cap != null) return cap;
+function setupCapBytes() {
   const gb = parseFloat(document.getElementById("bytes_cap_gb").value);
-  return gb > 0 ? gb * 1024 * 1024 * 1024 : null;   // Setup cap 0 = no reference
+  return gb > 0 ? Math.floor(gb * 1024 * 1024 * 1024) : null;   // 0 = unlimited
+}
+function estimateGauge(cap) {
+  return cap != null ? cap : setupCapBytes();   // no ceiling still has a scale
 }
 function paintEstimate(bytes, cap, overCap) {
   const wrap = document.getElementById("run-estimate-wrap");
@@ -3856,10 +3861,11 @@ async function runEstimate() {
       return;
     }
     lastEstimateKey = key;
+    lastEstimate = {key: key, bytes: data.bytes};
     paintEstimate(data.bytes, data.cap, !!data.over_cap);
-    // Only an estimate for the SAME request may retire a verdict. An uncapped
-    // estimate (the ticked-override one) is not evidence about the capped
-    // query, and clearing on its key flickered Run and the tickbox on untick.
+    // The server's verdict wins where it has one: only it saw the warehouse.
+    // An uncapped estimate carries no verdict about the capped query, so it
+    // must not retire one - that cleared the block and flickered the controls.
     if (data.over_cap) {
       capBlock = {key: key, bytes: data.bytes, cap: data.cap};
     } else if (data.cap != null && (!capBlock || capBlock.key === key)) {
@@ -3928,6 +3934,8 @@ form.addEventListener("change", (e) => {
     compileSql();
     return;
   }
+  // Has its own listener, and toggling it cannot change the bytes scanned.
+  if (e.target && e.target.id === "override_cap") return;
   scheduleEstimate();
 });
 form.addEventListener("input", (e) => {
@@ -3938,9 +3946,22 @@ form.addEventListener("input", (e) => {
   }
   scheduleEstimate();
 });
+// Toggling the override changes the ceiling, not the bytes the query scans, so
+// there is nothing new to ask the warehouse: re-derive the verdict from the
+// estimate already in hand. Only fall back to a dry run when we have none.
+function reverdictFromLastEstimate() {
+  if (!lastEstimate) return false;
+  const key = estimateKey(payload());
+  if (lastEstimate.key !== key) return false;
+  const cap = document.getElementById("override_cap").checked ? null : setupCapBytes();
+  const overCap = cap != null && lastEstimate.bytes > cap;
+  paintEstimate(lastEstimate.bytes, cap, overCap);
+  capBlock = overCap ? {key: key, bytes: lastEstimate.bytes, cap: cap} : null;
+  return true;
+}
 document.getElementById("override_cap").addEventListener("change", () => {
+  if (!reverdictFromLastEstimate()) scheduleEstimate();
   syncCostGate();
-  scheduleEstimate();
 });
 function csvCell(value) {
   const s = String(value ?? "");
@@ -4609,6 +4630,13 @@ function startRunCat() {
   }
   catTimer = setTimeout(step, 280);
 }
+function chartPaneClosed() {
+  const pane = document.querySelector(".pane-chart");
+  return !!pane && pane.classList.contains("closed");
+}
+// The reason a run failed, shown under the fail cat. Null means no failure
+// stands, which is why starting a run and finishing one both clear it.
+let failCopy = null;
 function setChartEmpty(kind) {
   const empty = document.getElementById("chart-empty");
   const img = document.getElementById("waiting-cat");
@@ -4622,7 +4650,7 @@ function setChartEmpty(kind) {
   empty.hidden = false;
   img.hidden = false;
   if (kind === "running") setRunningCopy(copy);
-  else if (kind === "fail") copy.textContent = "Query failed.";
+  else if (kind === "fail") copy.textContent = failCopy || "Query failed.";
   else if (kind === "empty") copy.textContent = "Nothing to `cat`.";
   else if (document.getElementById("needs-setup")) copy.textContent = "Map a table on Setup before Events can run.";
   else copy.textContent = "No rows yet. The cat is waiting.";
@@ -4877,9 +4905,10 @@ form.addEventListener("submit", async (e) => {
   }
   cancelEstimate();
   const runBtn = document.getElementById("run");
-  const runStatus = document.getElementById("run-status");
+  const tableCount = document.getElementById("table-count");
   const hadChart = !!chart || tableRows.length;
   runInFlight = true;
+  failCopy = null;
   syncCostGate();
   startRunButtonDots();
   if (!hadChart) setChartEmpty("running");
@@ -4906,11 +4935,11 @@ form.addEventListener("submit", async (e) => {
           msg = "Over the job scan cap. " + capAdvice();
         }
       }
-      setError(msg);
+      failCopy = msg;
       const tableEmpty = document.getElementById("table-empty");
       tableEmpty.hidden = false;
       tableEmpty.classList.add("fail");
-      tableEmpty.textContent = msg;
+      tableEmpty.textContent = "No rows.";
       document.getElementById("result-table").hidden = true;
       setTableActions("error");
       tableRows = [];
@@ -4921,12 +4950,15 @@ form.addEventListener("submit", async (e) => {
       }
       document.getElementById("chart").hidden = true;
       setChartEmpty("fail");
+      // Never let a collapsed chart pane swallow the only explanation.
+      setError(chartPaneClosed() ? msg : "");
       setExportEnabled("copy-chart", "chart-export", false);
       showLimitNote(false, 0);
-      runStatus.textContent = "";
+      tableCount.textContent = "";
       return;
     }
     capBlock = null;
+    failCopy = null;
     if (titleLockedEl.value !== "true") titleEl.value = body.chart_title || defaultTitle();
     const tableEmpty = document.getElementById("table-empty");
     tableEmpty.hidden = true;
@@ -4956,7 +4988,7 @@ form.addEventListener("submit", async (e) => {
     drawChart();
     syncNullNudge(data.rows || []);
     showLimitNote(!!data.truncated, data.limit || effectiveRowLimit());
-    runStatus.textContent = tableRows.length + " row" + (tableRows.length === 1 ? "" : "s");
+    tableCount.textContent = tableRows.length + " row" + (tableRows.length === 1 ? "" : "s");
   } finally {
     stopRunButtonDots();
     runInFlight = false;

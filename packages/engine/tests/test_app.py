@@ -443,6 +443,13 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "icon-btn" in res.text
     assert "estimateKey" in res.text
     assert "syncCostGate" in res.text
+    # The row count belongs to the table it counts, not the toolbar.
+    assert 'id="table-count"' in res.text
+    assert 'id="run-status"' not in res.text
+    assert html.find('<h2>Table</h2>') < html.find('id="table-count"')
+    # Toggling the override must not cost a dry run: bytes are cap-independent,
+    # so the override is not part of the estimate fingerprint.
+    assert "reverdictFromLastEstimate" in res.text
     # Cost -> consent -> action: Run is last so it stays flush right.
     assert html.find('id="run-estimate-wrap"') < html.find('id="cap-override"') < html.find('id="run"')
     assert 'e.target.id === "exact"' in res.text
