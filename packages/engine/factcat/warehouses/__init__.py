@@ -166,7 +166,17 @@ class DryRunNotSupported(AdapterError):
 
 
 class BytesCapError(AdapterError):
-    """The query exceeded (or would exceed) a scan cap."""
+    """The query exceeded (or would exceed) a scan cap.
+
+    ``bytes_processed`` means two slightly different things by path, and
+    ``QueryResult`` above keeps the two words apart deliberately. On the
+    estimate path it is ``total_bytes_processed`` from the dry run. On a
+    rejected job it is what the warehouse said it *would bill* - rounded up,
+    so it can exceed the dry-run figure for the same SQL. It is still the
+    number to show someone deciding whether to override, which is why it
+    rides this field rather than a fourth one. Both figures are optional: a
+    reworded rejection must still raise this class, with ``None``.
+    """
 
     def __init__(
         self,

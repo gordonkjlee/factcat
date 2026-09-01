@@ -3765,6 +3765,14 @@ let runInFlight = false;
 function bytesLabel(n) {
   return formatBytes(n).replace("~", "");
 }
+// With Override already ticked our cap is off, so a rejection came from the
+// project's own cost control. Telling that user to tick the box they ticked is
+// the advice bug this avoids.
+function capAdvice() {
+  return document.getElementById("override_cap").checked
+    ? "Factcat's cap is already off, so this is your BigQuery project's own limit."
+    : "Tick Override cap to run it.";
+}
 function capBlocked() {
   if (!CAPABILITIES.has("scan_cap") || !capBlock) return false;
   if (document.getElementById("override_cap").checked) return false;
@@ -3781,27 +3789,37 @@ function syncCostGate() {
   document.getElementById("run").disabled =
     !MAPPING_READY || runInFlight || blocked;
 }
+// The bar needs a denominator, not necessarily a ceiling. With the cap off we
+// gauge against the Setup cap so the warn/hot ladder keeps escalating - dropping
+// the ceiling and the warning together left a plain grey byte count as the only
+// signal on the largest queries, which is when the cue matters most.
+function estimateGauge(cap) {
+  if (cap != null) return cap;
+  const gb = parseFloat(document.getElementById("bytes_cap_gb").value);
+  return gb > 0 ? gb * 1024 * 1024 * 1024 : null;   // Setup cap 0 = no reference
+}
 function paintEstimate(bytes, cap, overCap) {
   const wrap = document.getElementById("run-estimate-wrap");
   const el = document.getElementById("run-estimate");
   const bar = document.getElementById("run-estimate-bar");
   const fill = document.getElementById("run-estimate-fill");
   const uncapped = cap == null;
+  const gauge = estimateGauge(cap);
   wrap.hidden = false;
-  // A proportion bar with no denominator has nothing to show.
-  bar.hidden = uncapped;
-  const frac = uncapped ? 0 : bytes / cap;
-  fill.style.width = uncapped ? "0" : Math.min(100, Math.max(2, frac * 100)) + "%";
+  bar.hidden = gauge == null;
+  const frac = gauge ? bytes / gauge : 0;
+  fill.style.width = gauge ? Math.min(100, Math.max(2, frac * 100)) + "%" : "0";
   wrap.classList.toggle("over-cap", !!overCap);
-  wrap.classList.toggle("hot", !overCap && !uncapped && frac >= 0.25);
-  wrap.classList.toggle("warn", !overCap && !uncapped && frac >= 0.05 && frac < 0.25);
+  wrap.classList.toggle("hot", !overCap && !!gauge && frac >= 0.25);
+  wrap.classList.toggle("warn", !overCap && !!gauge && frac >= 0.05 && frac < 0.25);
   el.textContent = formatBytes(bytes)
     + (overCap && !uncapped ? " / " + bytesLabel(cap) + " cap" : "")
-    + (uncapped ? " · no cap this run" : "");
+    + (uncapped ? " · cap off" : "");
   el.title = overCap
     ? "Over the job scan cap. Tick Override cap to run it anyway."
     : (uncapped
-        ? "Estimated bytes scanned (free dry run). No cap this run."
+        ? ("Estimated bytes scanned (free dry run). Cap off while Override cap is "
+           + "ticked" + (gauge ? "; the bar is against your " + bytesLabel(gauge) + " Setup cap." : "."))
         : "Estimated bytes scanned (free dry run). Cap " + bytesLabel(cap) + ".");
 }
 async function runEstimate() {
@@ -3839,9 +3857,14 @@ async function runEstimate() {
     }
     lastEstimateKey = key;
     paintEstimate(data.bytes, data.cap, !!data.over_cap);
-    // A fresh estimate for this query supersedes any earlier verdict on it,
-    // including one a rejected run left behind.
-    capBlock = data.over_cap ? {key: key, bytes: data.bytes, cap: data.cap} : null;
+    // Only an estimate for the SAME request may retire a verdict. An uncapped
+    // estimate (the ticked-override one) is not evidence about the capped
+    // query, and clearing on its key flickered Run and the tickbox on untick.
+    if (data.over_cap) {
+      capBlock = {key: key, bytes: data.bytes, cap: data.cap};
+    } else if (data.cap != null && (!capBlock || capBlock.key === key)) {
+      capBlock = null;
+    }
     syncCostGate();
   } catch (err) {
     if (gen !== estimateGen) return;
@@ -4878,9 +4901,9 @@ form.addEventListener("submit", async (e) => {
           paintEstimate(data.bytes, data.cap, true);
           msg = "Needs " + bytesLabel(data.bytes)
             + (data.cap != null ? ", over the " + bytesLabel(data.cap) + " cap" : ", over the job scan cap")
-            + ". Tick Override cap to run it.";
+            + ". " + capAdvice();
         } else {
-          msg = "Over the job scan cap. Tick Override cap to run it.";
+          msg = "Over the job scan cap. " + capAdvice();
         }
       }
       setError(msg);
