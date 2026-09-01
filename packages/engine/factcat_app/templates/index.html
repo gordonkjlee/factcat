@@ -514,7 +514,7 @@
     .bd-fill-expr-wrap[hidden], .bd-ever-note[hidden],
     #bd-null-nudge[hidden] { display: none !important; }
     .bd-value-row {
-      display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: flex-end;
+      display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: flex-start;
     }
     .bd-value-pair {
       display: flex; flex-direction: column; flex: 1 1 9rem; min-width: 7rem;
@@ -532,7 +532,11 @@
     .bd-fill-wrap select, .bd-fill-wrap input {
       width: auto; flex: 1 1 8rem; font-size: 0.75rem; margin: 0;
     }
-    .bd-fill-expr-wrap { flex: 1 1 100%; }
+    /* Column flex so the label and input stretch to the wrap's width; the
+       input opts back out of the row rule above (flex-basis would become
+       HEIGHT in a column context) and takes the full line. */
+    .bd-fill-expr-wrap { flex: 1 1 100%; display: flex; flex-direction: column; }
+    .bd-fill-expr-wrap input { flex: 0 0 auto; width: 100%; }
     #bd-null-nudge { margin-top: 0.35rem; }
     #bd-null-nudge .linkish { margin-left: 0; }
     .series-bd-slot { margin-top: 0.35rem; }
@@ -1636,9 +1640,12 @@ function valueControlsHtml() {
     + '<div class="bd-value-pair">'
     + "<label>" + tHtml("bd_if_missing") + "</label>"
     + '<select class="bd-if-missing"></select>'
+    // Inside the pair so the copy visibly scopes to the disabled control
+    // above it, not the live Fill from below; one string (EVER_TITLE)
+    // serves both the title and the visible note.
+    + '<span class="hint bd-ever-note" hidden>' + EVER_TITLE + "</span>"
     + "</div>"
     + "</div>"
-    + '<span class="hint bd-ever-note" hidden>All history is searched — nothing further to fill from.</span>'
     + '<div class="bd-fill-wrap" hidden>'
     + "<label>" + tHtml("bd_fill_from") + "</label>"
     + '<select class="bd-fill-event"></select>'
@@ -1880,9 +1887,11 @@ function syncNullNudge(rows) {
   nudgeSlotEl = null;
   if (breakdownBySeries()) return;
   if (!Array.isArray(rows) || !rows.length) return;
-  // The 80% share is only meaningful for additive measures; a Median or
-  // Distinct sum is not a share of events.
-  const measure = (collectSeries()[0] || {}).measure || "uniques";
+  // The 80% share is only meaningful for additive measures; summing
+  // Median / Average / Distinct-per-entity values is not a share of
+  // anything. Fallback matches syncExact's source for the same fact.
+  const measure = (collectSeries()[0] || {}).measure
+    || (form.measure ? form.measure.value : "uniques");
   if (measure !== "total" && measure !== "uniques") return;
   for (const [slotEl, s] of chartBreakdownSlotPairs()) {
     if (!slotEl || !s.breakdown_column || s.breakdown_expr || s.breakdown_json_key) continue;

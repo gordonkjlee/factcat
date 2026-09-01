@@ -296,7 +296,7 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "in this date range" not in res.text
     assert "folds the rest into (other)" in res.text
     assert "(null) stays its own group" in res.text
-    assert "All history is searched — nothing further to fill from." in res.text
+    assert "All history is already searched — nothing further to fill from." in res.text
     assert "bd-value-pair" in res.text
     assert "IGNORE NULLS" not in res.text
     assert 'id="bd-null-nudge"' in res.text
