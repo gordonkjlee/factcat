@@ -511,7 +511,7 @@
     #breakdown-more .breakdown-slot { margin-top: 0.35rem; }
     .bd-value-controls { margin-top: 0.3rem; }
     .bd-value-controls[hidden], .bd-fill-wrap[hidden],
-    .bd-fill-expr-wrap[hidden], .bd-ever-note[hidden],
+    .bd-fill-expr-wrap[hidden], .bd-value-pair[hidden],
     #bd-null-nudge[hidden] { display: none !important; }
     .bd-value-row {
       display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: flex-start;
@@ -1612,7 +1612,6 @@ function normalizeBreakdownSlot(s) {
   };
 }
 const VALUE_ATS = ["event", "range_start", "range_end", "first_record", "latest_record"];
-const EVER_TITLE = "All history is already searched — nothing further to fill from.";
 const FILL_FROM_TITLE = "Which events count as the value's source. Any event: any row where it is set.";
 function entityWord() {
   const el = document.getElementById("entity_label");
@@ -1644,10 +1643,6 @@ function valueControlsHtml() {
     + '<div class="bd-value-pair">'
     + "<label>" + tHtml("bd_if_missing") + "</label>"
     + '<select class="bd-if-missing"></select>'
-    // Inside the pair so the copy visibly scopes to the disabled control
-    // above it, not the live Fill from below; one string (EVER_TITLE)
-    // serves both the title and the visible note.
-    + '<span class="hint bd-ever-note" hidden>' + EVER_TITLE + "</span>"
     + "</div>"
     + "</div>"
     + '<div class="bd-fill-wrap" hidden>'
@@ -1755,11 +1750,13 @@ function syncValueControls(slotEl) {
   block.hidden = !slotColumnValue(slotEl);
   const atSel = block.querySelector(".bd-value-at");
   const missSel = block.querySelector(".bd-if-missing");
+  // The ever anchors already search all history, so If missing has no
+  // job there: hide the pair rather than explain a disabled control.
+  // disabled stays set so readValueControls keeps reporting "null".
   const ever = atSel.value === "first_record" || atSel.value === "latest_record";
   missSel.disabled = ever;
-  missSel.title = ever ? EVER_TITLE : "";
-  const note = block.querySelector(".bd-ever-note");
-  if (note) note.hidden = !ever;
+  const missPair = missSel.closest(".bd-value-pair");
+  if (missPair) missPair.hidden = ever;
   const fillWrap = block.querySelector(".bd-fill-wrap");
   fillWrap.hidden = atSel.value === "event" && missSel.value !== "fill";
   const fillSel = block.querySelector(".bd-fill-event");
