@@ -23,6 +23,7 @@ from .retention import build_sql as retention_sql
 from .spec import (
     EVENT_MEASURES,
     PROPERTY_MEASURES,
+    Breakdown,
     EventsSpec,
     FunnelSpec,
     RetentionSpec,
@@ -30,6 +31,7 @@ from .spec import (
 
 __all__ = [
     "EVENT_MEASURES",
+    "Breakdown",
     "EventsSpec",
     "FunnelSpec",
     "PROPERTY_MEASURES",

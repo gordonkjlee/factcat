@@ -12,14 +12,113 @@ from typing import Literal
 
 On = Literal["events", "property"]
 Measure = Literal["total", "uniques", "average", "sum", "median", "distinct"]
-BreakdownAt = Literal["rows", "first", "last"]
-BREAKDOWN_AT: tuple[BreakdownAt, ...] = ("rows", "first", "last")
+BreakdownAt = Literal["rows", "first", "last", "carried"]
+BREAKDOWN_AT: tuple[BreakdownAt, ...] = ("rows", "first", "last", "carried")
 OTHER_LABEL = "(other)"
 
 # UI labels live in the README. Two families so "Average" is not two APIs.
 EVENT_MEASURES: tuple[Measure, ...] = ("total", "uniques", "average")
 PROPERTY_MEASURES: tuple[Measure, ...] = ("sum", "average", "median", "distinct")
 ONS: tuple[On, ...] = ("events", "property")
+
+
+@dataclass(frozen=True)
+class Breakdown:
+    """One breakdown column: a caller SQL expression plus its value semantics.
+
+    The expression is one general form; this config is the other. A scalar
+    expression's scope is the ``where``-filtered relation, so no expression
+    written into the slot can reach unfiltered history — the config names the
+    relation scope and bounds an expression cannot (ADR-12, amended).
+
+    Attributes:
+        expr:      caller SQL expression over source columns. Interpolated,
+                   never rewritten.
+        at:        value semantics for this column.
+                   ``rows``    — the expression on the metric row (filtered table).
+                   ``first``   — first non-null by ``event_time`` per entity,
+                                 unfiltered table.
+                   ``last``    — latest non-null by ``event_time`` per entity,
+                                 unfiltered table.
+                   ``carried`` — for each metric row, the last non-null value of
+                                 the expression at or before that row's
+                                 ``event_time``, over the entity's unfiltered
+                                 history (a stamp before the chart window still
+                                 resolves). A row never borrows a future stamp.
+        fill_from: caller SQL boolean narrowing which unfiltered rows may stamp
+                   a value (e.g. ``"event_name = 'subscription_started'"``).
+                   Any mode except ``rows``.
+        since:     caller SQL timestamp expression; stamps at or after it count
+                   (``event_time >= since``). ``first`` / ``last`` only.
+        until:     caller SQL timestamp expression; stamps at or before it count
+                   (``event_time <= until``). ``first`` / ``last`` only.
+                   "State as of the window start" is ``at="last",
+                   until=<window-start SQL>``.
+        before:    caller SQL timestamp expression; stamps strictly before it
+                   count (``event_time < before``). ``first`` / ``last`` only.
+                   The bound for an EXCLUSIVE boundary — "state at the window
+                   end" is ``at="last", before=<exclusive-end SQL>``, so a
+                   stamp at exactly that instant (a midnight snapshot job)
+                   stays outside the window it closes.
+        backfill:  only with ``at="last"`` and an upper bound (``until`` or
+                   ``before``): entities with no value by the bound fall back
+                   to their first recorded value ever. It never overrides a
+                   real as-of value.
+        own_value_first: ``carried`` only. The metric row's own non-null
+                   value wins even when ``fill_from`` excludes that row —
+                   the narrowed stream then only fills rows with no value
+                   of their own. Off (default), ``fill_from`` names the
+                   single source of truth: a speculative stamp on the
+                   charted row itself is ignored too. With no ``fill_from``
+                   the two agree (the row is in the stream and a stamp at
+                   its own instant wins).
+
+    Same-instant rules, shared by every non-``rows`` mode: a stamp at exactly
+    the row's (or bound's) instant is seen; duplicate stamps at one instant
+    resolve to the greatest expression value.
+    """
+
+    expr: str
+    at: BreakdownAt = "rows"
+    fill_from: str | None = None
+    since: str | None = None
+    until: str | None = None
+    before: str | None = None
+    backfill: bool = False
+    own_value_first: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.expr or not self.expr.strip():
+            raise ValueError("Breakdown.expr must be a SQL expression")
+        if self.at not in BREAKDOWN_AT:
+            raise ValueError(
+                "Breakdown.at must be 'rows', 'first', 'last', or 'carried'"
+            )
+        for name in ("fill_from", "since", "until", "before"):
+            value = getattr(self, name)
+            if value is not None and not value.strip():
+                raise ValueError(f"Breakdown.{name} must be SQL if set")
+        if self.at == "rows":
+            if self.fill_from is not None:
+                raise ValueError("fill_from does not apply to at='rows'")
+        if self.at not in ("first", "last"):
+            if (
+                self.since is not None
+                or self.until is not None
+                or self.before is not None
+            ):
+                raise ValueError(
+                    "since/until/before apply only to at='first' or 'last'"
+                )
+        if self.backfill and not (
+            self.at == "last"
+            and (self.until is not None or self.before is not None)
+        ):
+            raise ValueError(
+                "backfill requires at='last' with until or before set"
+            )
+        if self.own_value_first and self.at != "carried":
+            raise ValueError("own_value_first applies only to at='carried'")
 
 
 @dataclass(frozen=True)
@@ -147,12 +246,17 @@ class EventsSpec:
                     COUNT DISTINCT / PERCENTILE_CONT / GROUP BY LIMIT.
                     One chart toggle sets this. Total / Sum / property Average
                     stay exact; the time axis is always exact GROUP BY bucket.
-        breakdowns: caller SQL expressions to split the series. Empty is today's
-                    one-line chart. Interpolated, never rewritten.
-        breakdown_at: ``rows`` (value on the metric row), ``first`` / ``last``
-                    (one non-null value per entity from the unfiltered table,
-                    ordered by ``event_time``). Ignored when ``breakdowns`` is empty.
-                    Sugar; does not replace the expression.
+        breakdowns: caller SQL expressions to split the series — plain strings,
+                    or ``Breakdown`` entries carrying per-column value semantics
+                    (``at``, ``fill_from``, ``since``/``until`` bounds,
+                    ``backfill``). Empty is today's one-line chart. Expressions
+                    are interpolated, never rewritten.
+        breakdown_at: default ``at`` for plain-string entries. ``rows`` (value
+                    on the metric row), ``first`` / ``last`` (one non-null value
+                    per entity from the unfiltered table, ordered by
+                    ``event_time``), ``carried`` (last non-null at or before the
+                    row's instant, unfiltered history). Ignored when
+                    ``breakdowns`` is empty.
         breakdown_labels: public column names. Default ``breakdown_0``, …
         top_n:      fold the category axis to this many values plus ``(other)``.
                     Default 8. Ignored when ``breakdowns`` is empty.
@@ -169,7 +273,7 @@ class EventsSpec:
     bucket: str | None = None
     where: str | None = None
     exact: bool = False
-    breakdowns: tuple[str, ...] = ()
+    breakdowns: tuple[str | Breakdown, ...] = ()
     breakdown_at: BreakdownAt = "rows"
     breakdown_labels: tuple[str, ...] | None = None
     top_n: int = 8
@@ -194,15 +298,19 @@ class EventsSpec:
         if self.bucket is not None and not self.bucket.strip():
             raise ValueError("bucket must be a SQL expression if set")
         if self.breakdown_at not in BREAKDOWN_AT:
-            raise ValueError("breakdown_at must be 'rows', 'first', or 'last'")
+            raise ValueError(
+                "breakdown_at must be 'rows', 'first', 'last', or 'carried'"
+            )
         if self.breakdown_labels is not None and len(self.breakdown_labels) != len(
             self.breakdowns
         ):
             raise ValueError("breakdown_labels must match breakdowns in length")
         if self.top_n < 1:
             raise ValueError("top_n must be >= 1")
-        for expr in self.breakdowns:
-            if not expr or not str(expr).strip():
+        for entry in self.breakdowns:
+            if isinstance(entry, Breakdown):
+                continue  # Breakdown validates itself
+            if not entry or not str(entry).strip():
                 raise ValueError("breakdowns must be SQL expressions")
 
     def bucket_sql(self) -> str:
@@ -214,3 +322,13 @@ class EventsSpec:
         if self.breakdown_labels is not None:
             return self.breakdown_labels
         return tuple(f"breakdown_{i}" for i in range(len(self.breakdowns)))
+
+    def resolved_breakdowns(self) -> tuple[Breakdown, ...]:
+        """Every breakdown as a ``Breakdown``; plain strings inherit
+        ``breakdown_at``."""
+        return tuple(
+            entry
+            if isinstance(entry, Breakdown)
+            else Breakdown(expr=entry, at=self.breakdown_at)
+            for entry in self.breakdowns
+        )

@@ -101,22 +101,49 @@ column per breakdown.
 
 Split a series by caller expressions. ``top_n`` (default 8) folds a long
 tail into ``(other)``; set ``include_other=False`` to drop the tail instead.
-``breakdown_at`` is ``rows`` (the value on the event), ``first``, or ``last``
-(one non-null value per entity). It does not replace the expression.
+Each column carries its own value semantics: a plain string means
+``breakdown_at`` (default ``rows`` — the value on the event); a
+``Breakdown`` entry can instead take ``first`` / ``last`` (one non-null
+value per entity, whole unfiltered table), the same bounded by ``since`` /
+``until`` timestamp expressions ("as of the window start" is ``last`` plus
+``until``), or ``carried`` — the last non-null value at or before each
+row's instant, so a tier stamped only on ``subscription_started`` still
+labels every later login. A row never borrows a future stamp.
+``fill_from`` names which rows may stamp a value; ``backfill=True`` (with
+``until``) falls back to the entity's first recorded value when nothing
+exists by the bound. Attribution always reads the unfiltered table — the
+stamp can sit on an event the chart excludes — and none of it replaces
+the expression.
 
 ```python
+from factcat import Breakdown
+
 print(events_sql(EventsSpec(
     table="analytics.fct_events",
     entity="subscription_id",
     event_time="occurred_at",
     measure="uniques",
     where="event_name = 'paid'",
-    breakdowns=("country", "browser"),
-    breakdown_at="rows",
+    breakdowns=(
+        Breakdown(
+            "subscription_tier",
+            at="carried",
+            fill_from="event_name = 'subscription_started'",
+        ),
+        "country",
+    ),
     top_n=8,
-    include_other=True,
 ), dialect="bigquery"))
 ```
+
+Two honest costs. The stamp scan is unbounded history by design (a
+pre-window stamp must resolve): on BigQuery that is the referenced
+columns' full history in bytes, and ``fill_from`` prunes rows, not bytes —
+a column you break down every week belongs as an as-of column in your
+mart, with ``carried`` as the exploration mode. And under ``rows`` /
+``carried``, Uniques slices can sum to more than the unsplit line (an
+entity whose value changes inside a bucket counts in both groups); the
+one-value-per-entity modes partition entities instead.
 
 Uniques, Distinct, and Median default to **approx** (`exact=False`).
 **Break down by** picks the top-N series the same way (labels only; measures

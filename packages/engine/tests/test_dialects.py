@@ -14,6 +14,7 @@ import pytest
 
 from factcat import (
     SUPPORTED,
+    Breakdown,
     EventsSpec,
     FunnelSpec,
     RetentionSpec,
@@ -156,6 +157,149 @@ EVENTS_BREAKDOWN_TRIPLE = EventsSpec(
     top_n=8,
 )
 
+# Value-semantics specs. FIRST closes an old gap: the attr CTE was never
+# in the walk. CARRIED and friends walk the counting-trick stream (there
+# is no portable IGNORE NULLS; sqlglot silently strips it for Postgres).
+EVENTS_BREAKDOWN_FIRST = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=("country",),
+    breakdown_at="first",
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_CARRIED = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=(
+        # own_value_first walks the COALESCE(fc_self, ...) shape too;
+        # CARRIED_PAIR below keeps the plain shape in the walk.
+        Breakdown(
+            "plan",
+            at="carried",
+            fill_from="event_name = 'plan_set'",
+            own_value_first=True,
+        ),
+    ),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_CARRIED_PAIR = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=(
+        Breakdown("plan", at="carried"),
+        Breakdown("country", at="carried"),
+    ),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_ASOF = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=(
+        Breakdown("plan", at="last", until="TIMESTAMP '2026-01-01'"),
+    ),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_ASOF_BACKFILL = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=(
+        # before (strict) + backfill: the range-end shape the app emits.
+        Breakdown(
+            "plan", at="last", before="TIMESTAMP '2026-02-01'", backfill=True
+        ),
+    ),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_WINDOWED_FIRST = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=(
+        Breakdown(
+            "plan",
+            at="first",
+            since="TIMESTAMP '2026-01-01'",
+            until="TIMESTAMP '2026-02-01'",
+        ),
+    ),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_MIXED = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=(
+        Breakdown("plan", at="carried"),
+        "country",
+        Breakdown("browser", at="last"),
+    ),
+    top_n=8,
+)
+
+# The two property-measure composition specs below are compile-only in
+# this walk; distinct+carried also executes on DuckDB in
+# test_events_breakdowns, median+carried is transpile-covered only (the
+# median splice is dialect-specific and has no portable execute fixture).
+EVENTS_BREAKDOWN_CARRIED_MEDIAN = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="median",
+    of="amount",
+    breakdowns=(Breakdown("plan", at="carried"),),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_CARRIED_DISTINCT = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="distinct",
+    of="country",
+    breakdowns=(Breakdown("plan", at="carried"),),
+    top_n=8,
+)
+
+# Regression: rows-mode distinct + breakdown emitted a missing comma
+# before per_entity; nothing walked the combination.
+EVENTS_BREAKDOWN_DISTINCT = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    on="property",
+    measure="distinct",
+    of="country",
+    breakdowns=("plan",),
+    top_n=8,
+)
+
 EVENTS_WEEK = EventsSpec(
     table="events",
     entity="entity_id",
@@ -267,10 +411,46 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS_BREAKDOWN_SUM_APPROX, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_PAIR, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_TRIPLE, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_FIRST, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_CARRIED, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_CARRIED_PAIR, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_ASOF, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_ASOF_BACKFILL, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_WINDOWED_FIRST, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_MIXED, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_CARRIED_MEDIAN, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_CARRIED_DISTINCT, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_DISTINCT, dialect=dialect)
 
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
     )
+
+
+def test_carried_shares_one_stamp_scan():
+    """Two carried columns must not scan the table twice for stamps: the
+    raw table appears exactly twice (src, fc_stamps)."""
+    sql = events_sql(EVENTS_BREAKDOWN_CARRIED_PAIR, dialect="duckdb")
+    assert sql.count("FROM events") == 2
+
+
+def test_bigquery_carried_has_no_ignore_nulls_and_clean_windows():
+    """The counting trick, not LAST_VALUE IGNORE NULLS (Postgres lacks it;
+    sqlglot strips it silently). BigQuery forbids NULLS LAST inside
+    aggregate windows; explicit NULLS FIRST in the source keeps it out."""
+    sql = events_sql(EVENTS_BREAKDOWN_CARRIED, dialect="bigquery")
+    assert "IGNORE NULLS" not in sql.upper()
+    start = 0
+    while True:
+        pos = sql.find("OVER (", start)
+        if pos == -1:
+            break
+        depth, j = 1, pos + len("OVER (")
+        while depth and j < len(sql):
+            depth += {"(": 1, ")": -1}.get(sql[j], 0)
+            j += 1
+        assert "NULLS LAST" not in sql[pos:j]
+        start = j
 
 
 def test_hour_trunc_rejects_non_iana_timezone():
