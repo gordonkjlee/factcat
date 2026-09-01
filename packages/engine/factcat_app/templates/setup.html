@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Factcat — Setup{% endblock %}
+{% block extra_head %}
+    <script src="/static/save.js"></script>
+{% endblock %}
 {% block extra_css %}
     .setup-page {
       flex: 1;
@@ -53,26 +56,6 @@
       border-radius: 0.4rem;
       overflow: auto;
       font-size: 0.8rem;
-    }
-    .save-toast {
-      position: fixed;
-      z-index: 30;
-      left: calc(4.5rem + 1.75rem);
-      bottom: 1.25rem;
-      padding: 0.5rem 0.9rem;
-      border-radius: 0.35rem;
-      background: var(--fc-ink);
-      color: var(--fc-snow);
-      font-size: 0.8rem;
-      font-weight: 600;
-      box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--fc-ink) 18%, transparent);
-      pointer-events: none;
-    }
-    .save-toast[hidden] { display: none !important; }
-    .save-toast.saving { background: var(--fc-slate-deep); font-weight: 500; }
-    .save-toast.fail { background: var(--fc-alert); }
-    @media (max-width: 56rem) {
-      .save-toast { left: 1.25rem; }
     }
     #extra-card {
       display: flex;
@@ -378,18 +361,6 @@ const catalogLists = (saved.catalog_lists && typeof saved.catalog_lists === "obj
 let catalogArmed = false;
 let suppressChange = false;
 
-let hideTimer = 0;
-function showToast(text, kind) {
-  clearTimeout(hideTimer);
-  const el = document.getElementById("status");
-  el.hidden = false;
-  el.textContent = text;
-  el.classList.toggle("saving", kind === "saving");
-  el.classList.toggle("fail", kind === "fail");
-  if (kind === "saved") {
-    hideTimer = setTimeout(() => { el.hidden = true; }, 2000);
-  }
-}
 function setError(text) {
   document.getElementById("error").textContent = text || "";
   if (text) showToast(text, "fail");
@@ -719,14 +690,6 @@ function syncKindUi(clearIdentity) {
   syncCatalogEnabled();
   syncManagedChrome();
 }
-async function post(url, body) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(body),
-  });
-  return res.json();
-}
 function snowflakeSignedIn() {
   const account = document.getElementById("account").value.trim();
   const user = document.getElementById("user").value.trim();
@@ -997,50 +960,30 @@ labelChoiceEl.addEventListener("change", () => { syncEntityName(); scheduleSave(
 labelOtherEl.addEventListener("input", () => { syncEntityName(); scheduleSave(); });
 seedEntityName();
 
-let saveTimer = 0;
-let saveGen = 0;
-let savingSince = 0;
-const SAVE_PENDING_MS = 1000;
-async function saveMapping() {
-  syncEntityName();
-  tableEl.value = combinedTable();
-  const body = Object.fromEntries(new FormData(form).entries());
-  body.kind = currentKind();
-  if (Object.prototype.hasOwnProperty.call(body, "event_column") && !body.event_column) {
-    body.event_names = [];
-  }
-  const gen = ++saveGen;
-  try {
-    const data = await post("/api/save", body);
-    if (gen !== saveGen) return;
-    if (!data.ok) {
-      savingSince = 0;
-      setError(data.error || "Could not save mapping");
-      return;
+const autosave = fcAutosave({
+  save: async () => {
+    syncEntityName();
+    tableEl.value = combinedTable();
+    const body = Object.fromEntries(new FormData(form).entries());
+    body.kind = currentKind();
+    if (Object.prototype.hasOwnProperty.call(body, "event_column") && !body.event_column) {
+      body.event_names = [];
     }
-    const wait = SAVE_PENDING_MS - (Date.now() - savingSince);
-    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-    if (gen !== saveGen) return;
-    savingSince = 0;
+    return post("/api/save", body);
+  },
+  onSaved: () => {
     setError("");
     setStatus("Saved");
-  } catch (err) {
-    if (gen !== saveGen) return;
-    savingSince = 0;
-    setError(err && err.message ? err.message : "Could not save mapping");
-  }
-}
+  },
+  onFail: (msg) => setError(msg || "Could not save mapping"),
+  suppressed: () => suppressChange,
+});
 function scheduleSave() {
-  if (suppressChange) return;
-  clearTimeout(saveTimer);
-  if (!savingSince) savingSince = Date.now();
-  showToast("Saving…", "saving");
-  saveTimer = setTimeout(saveMapping, 350);
+  autosave.schedule();
 }
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  clearTimeout(saveTimer);
-  saveMapping();
+  autosave.flush();
 });
 form.addEventListener("change", scheduleSave);
 form.addEventListener("input", (e) => {
