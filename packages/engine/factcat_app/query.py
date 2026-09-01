@@ -10,7 +10,13 @@ from datetime import date, datetime, timedelta, timezone
 
 from factcat import EVENT_MEASURES, PROPERTY_MEASURES, EventsSpec, events_sql
 from factcat.spec import BREAKDOWN_AT
-from factcat.warehouses import CAP_SCAN_CAP, capabilities
+from factcat.warehouses import (
+    AdapterError,
+    CAP_SCAN_CAP,
+    QueryResult,
+    capabilities,
+    is_missing_relation,
+)
 from factcat.warehouses.bigquery import DEFAULT_MAXIMUM_BYTES_BILLED
 from factcat.warehouses.snowflake import passphrase_from_env
 from factcat._emit import transpile
@@ -72,6 +78,7 @@ DEFAULT_QUERY_ROW_LIMIT = 1_000_000
 # job does not use the report scan cap; lookback is the cost control.
 CATALOG_LOOKBACK_DAYS = 90
 EVENT_NAME_CACHE_TABLE = "fc_event_names"
+EVENT_NAME_CACHE_VERSION = 1
 
 
 def _ident_table(value: str, label: str) -> str:
@@ -1765,7 +1772,11 @@ def event_name_cache_rebuild_sql(form: dict[str, Any], *, materialized: bool) ->
         dialect,
     )
     return create_or_replace_relation(
-        _emit_relation(dest, dialect), select, dialect, materialized=materialized
+        _emit_relation(dest, dialect),
+        select,
+        dialect,
+        materialized=materialized,
+        comment=event_name_cache_comment(form),
     )
 
 
@@ -1781,6 +1792,113 @@ def event_name_cache_read_sql(form: dict[str, Any]) -> str:
         f"LIMIT {EVENT_VALUE_LIMIT}"
     )
     return splice_placeholders(transpile(sql, dialect), dialect)
+
+
+def event_name_cache_fingerprint(form: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "v": EVENT_NAME_CACHE_VERSION,
+        "table": str(form.get("table") or "").strip(),
+        "event_column": str(form.get("event_column") or "").strip(),
+    }
+
+
+def event_name_cache_comment(form: dict[str, Any]) -> str:
+    return json.dumps(
+        event_name_cache_fingerprint(form), separators=(",", ":"), sort_keys=True
+    )
+
+
+def stored_event_name_cache(form: dict[str, Any]) -> dict[str, Any]:
+    raw = form.get("event_name_cache")
+    if isinstance(raw, str) and raw.strip():
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    return raw
+
+
+def event_name_cache_matches(
+    stored: dict[str, Any], wanted: dict[str, Any]
+) -> bool:
+    if not stored:
+        return False
+    try:
+        version = int(stored.get("v") or 0)
+    except (TypeError, ValueError):
+        version = 0
+    return (
+        version == int(wanted["v"])
+        and str(stored.get("table") or "") == wanted["table"]
+        and str(stored.get("event_column") or "") == wanted["event_column"]
+    )
+
+
+def catalog_event_values(
+    form: dict[str, Any], run: Any
+) -> tuple[QueryResult, str | None, dict[str, Any] | None]:
+    """Load catalog names: dest cache, or lookback DISTINCT.
+
+    ``run(sql)`` is ``Adapter.run``. Returns ``(result, cache_kind, meta)``.
+    ``cache_kind`` is ``cached`` / ``materialized_view`` / ``table``, or
+    None when the lookback DISTINCT path ran. ``meta`` is the fingerprint
+    plus ``kind`` to persist, or None when dest is unused.
+    """
+    dest = write_cache_table(form)
+    if dest is None:
+        return run(event_values_sql(form)), None, None
+
+    wanted = event_name_cache_fingerprint(form)
+    stored = stored_event_name_cache(form)
+    match = event_name_cache_matches(stored, wanted)
+    kind = str(stored.get("kind") or "")
+    rebuild = form.get("rebuild") in (True, "true", "on", "1", 1)
+
+    def create_then_read(*, prefer_table: bool) -> tuple[QueryResult, str]:
+        order: tuple[tuple[bool, str], ...]
+        if prefer_table:
+            order = ((False, "table"),)
+        else:
+            order = ((True, "materialized_view"), (False, "table"))
+        last: AdapterError | None = None
+        for materialized, name in order:
+            try:
+                run(
+                    event_name_cache_rebuild_sql(form, materialized=materialized)
+                )
+                return run(event_name_cache_read_sql(form)), name
+            except AdapterError as exc:
+                last = exc
+        raise last or AdapterError("could not create event-name cache")
+
+    def lookback() -> tuple[QueryResult, str | None, dict[str, Any] | None]:
+        return run(event_values_sql(form)), None, None
+
+    if rebuild and kind == "table":
+        try:
+            result, name = create_then_read(prefer_table=True)
+        except AdapterError:
+            return lookback()
+        return result, name, {**wanted, "kind": name}
+
+    selected: QueryResult | None = None
+    try:
+        selected = run(event_name_cache_read_sql(form))
+    except AdapterError as exc:
+        if not is_missing_relation(exc):
+            raise
+
+    if selected is not None and match:
+        meta = {**wanted, "kind": kind or "materialized_view"}
+        return selected, "cached", meta
+
+    try:
+        result, name = create_then_read(prefer_table=False)
+    except AdapterError:
+        return lookback()
+    return result, name, {**wanted, "kind": name}
 
 
 def event_values_sql(form: dict[str, Any]) -> str:

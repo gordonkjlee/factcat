@@ -104,6 +104,7 @@
       color: var(--fc-ink);
       cursor: not-allowed;
     }
+    label .catalog-refresh { margin-left: 0.5rem; }
     @media (max-width: 56rem) {
       .setup-page { overflow-y: auto; }
       .setup-cols {
@@ -159,12 +160,12 @@
       <label for="private_key_path">Private key file</label>
       <input id="private_key_path" name="private_key_path" autocomplete="off" value="{{ config.private_key_path }}" placeholder="rsa_key.p8">
     </div>
-    <label for="role">Role (optional) <span id="role-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <label for="role">Role (optional) <span id="role-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="role" hidden>Refresh</button></label>
     <select id="role" name="role" disabled>
       <option value=""></option>
       {% if config.role %}<option value="{{ config.role }}" selected>{{ config.role }}</option>{% endif %}
     </select>
-    <label for="warehouse">Compute warehouse <span id="warehouse-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <label for="warehouse">Compute warehouse <span id="warehouse-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="warehouse" hidden>Refresh</button></label>
     <select id="warehouse" name="warehouse" disabled>
       <option value=""></option>
       {% if config.warehouse %}<option value="{{ config.warehouse }}" selected>{{ config.warehouse }}</option>{% endif %}
@@ -174,32 +175,32 @@
 
   <h2>Table</h2>
   <div id="bq-table">
-    <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <label for="dataset">Dataset <span id="dataset-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="dataset" hidden>Refresh</button></label>
     <select id="dataset" name="dataset" disabled>
       <option value=""></option>
       {% if config.dataset %}<option value="{{ config.dataset }}" selected>{{ config.dataset }}</option>{% endif %}
     </select>
   </div>
   <div id="sf-table" hidden>
-    <label for="database">Database <span id="database-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <label for="database">Database <span id="database-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="database" hidden>Refresh</button></label>
     <select id="database" name="database" disabled>
       <option value=""></option>
       {% if config.database %}<option value="{{ config.database }}" selected>{{ config.database }}</option>{% endif %}
     </select>
-    <label for="schema">Schema <span id="schema-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <label for="schema">Schema <span id="schema-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="schema" hidden>Refresh</button></label>
     <select id="schema" name="schema" disabled>
       <option value=""></option>
       {% if config.schema %}<option value="{{ config.schema }}" selected>{{ config.schema }}</option>{% endif %}
     </select>
   </div>
-  <label for="table_name">Table <span id="table_name-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <label for="table_name">Table <span id="table_name-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="table_name" hidden>Refresh</button></label>
   <select id="table_name" name="table_name" disabled>
     <option value=""></option>
     {% if config.table_name %}<option value="{{ config.table_name }}" selected>{{ config.table_name }}</option>{% endif %}
   </select>
 
   <h2>Grain</h2>
-  <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="_columns" hidden>Refresh</button></label>
   <select id="entity" name="entity" required disabled>
     <option value=""></option>
     {% if config.entity %}<option value="{{ config.entity }}" selected>{{ config.entity }}</option>{% endif %}
@@ -275,16 +276,18 @@
   <label for="query_row_limit">Result row limit</label>
   <input id="query_row_limit" name="query_row_limit" type="number" min="1" step="1" value="{{ config.query_row_limit or 1000000 }}">
   <span class="hint">Crash fuse in SQL after aggregation (most recent rows). A normal chart never hits this; grouping by a high-cardinality property might. It does not reduce bytes scanned. A report can raise it if results are truncated.</span>
-  <label for="catalog_lookback_days">Event name lookback (days)</label>
+  <div id="catalog-lookback-wrap">
+  <label for="catalog_lookback_days">Look back for event names</label>
   <input id="catalog_lookback_days" name="catalog_lookback_days" type="number" min="0" step="1" value="{{ config.catalog_lookback_days if config.catalog_lookback_days is not none else 90 }}">
-  <span class="hint">Window for Events Refresh list. 0 is all time. That job does not use the scan cap; raise the window on Events if a name is missing. Isolates the timestamp column so a date-partitioned table can prune.</span>
+  <span class="hint">How far back to scan the events table to fill the event picker. 0 is all time. This job does not use the scan cap.</span>
+  </div>
 
   <h2>Factcat-managed tables (optional)</h2>
   <div id="write-bq-wrap">
     <span class="hint">Allow Factcat to create and maintain tables in this project and dataset for better performance.</span>
     <label for="write_project">Project</label>
     <input id="write_project" name="write_project" autocomplete="off" value="{{ config.write_project }}" placeholder="GCP project id">
-    <label for="write_dataset">Dataset <span id="write_dataset-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <label for="write_dataset">Dataset <span id="write_dataset-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="write_dataset" hidden>Refresh</button></label>
     <select id="write_dataset" name="write_dataset" disabled>
       <option value=""></option>
       {% if config.write_dataset %}<option value="{{ config.write_dataset }}" selected>{{ config.write_dataset }}</option>{% endif %}
@@ -292,12 +295,12 @@
   </div>
   <div id="write-sf-wrap" hidden>
     <span class="hint">Allow Factcat to create and maintain tables in this database and schema for better performance.</span>
-    <label for="write_database">Database <span id="write_database-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <label for="write_database">Database <span id="write_database-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="write_database" hidden>Refresh</button></label>
     <select id="write_database" name="write_database" disabled>
       <option value=""></option>
       {% if config.write_database %}<option value="{{ config.write_database }}" selected>{{ config.write_database }}</option>{% endif %}
     </select>
-    <label for="write_schema">Schema <span id="write_schema-loading" class="loading" hidden aria-label="Loading"></span></label>
+    <label for="write_schema">Schema <span id="write_schema-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="write_schema" hidden>Refresh</button></label>
     <select id="write_schema" name="write_schema" disabled>
       <option value=""></option>
       {% if config.write_schema %}<option value="{{ config.write_schema }}" selected>{{ config.write_schema }}</option>{% endif %}
@@ -334,6 +337,8 @@ const saved = {
   write_dataset: {{ config.write_dataset|tojson }},
   write_database: {{ config.write_database|tojson }},
   write_schema: {{ config.write_schema|tojson }},
+  columns: {{ (config.columns or [])|tojson }},
+  catalog_lists: {{ (config.catalog_lists or {})|tojson }},
 };
 const form = document.getElementById("f");
 const kindEl = document.getElementById("kind");
@@ -365,6 +370,12 @@ function typeSet(role) {
 }
 const fetched = {};
 const gens = {};
+const loading = {};
+const failed = {};
+const catalogLists = (saved.catalog_lists && typeof saved.catalog_lists === "object")
+  ? Object.assign({}, saved.catalog_lists)
+  : {};
+let catalogArmed = false;
 let suppressChange = false;
 
 let hideTimer = 0;
@@ -456,7 +467,7 @@ function fillSelect(sel, items, selected) {
   suppressChange = false;
   syncCatalogEnabled();
 }
-function seedSelect(sel, value) {
+function seedSelect(sel, value, sync) {
   suppressChange = true;
   sel.innerHTML = "";
   const blank = document.createElement("option");
@@ -470,10 +481,26 @@ function seedSelect(sel, value) {
     sel.value = value;
   }
   suppressChange = false;
-  syncCatalogEnabled();
+  if (sync !== false) syncCatalogEnabled();
 }
 function extraReady() {
   return EXTRAS[kindEl.value] !== false;
+}
+function writeDestReady() {
+  if (currentKind() === "snowflake") {
+    return !!(
+      document.getElementById("write_database").value.trim() &&
+      document.getElementById("write_schema").value.trim()
+    );
+  }
+  return !!(
+    document.getElementById("write_project").value.trim() &&
+    document.getElementById("write_dataset").value.trim()
+  );
+}
+function syncManagedChrome() {
+  const wrap = document.getElementById("catalog-lookback-wrap");
+  if (wrap) wrap.hidden = writeDestReady();
 }
 function kindSteps() {
   return CATALOG[currentKind()] || [];
@@ -492,17 +519,99 @@ function needMet(need) {
 function stepReady(step) {
   return (step.needs || []).every(needMet);
 }
+function stepScope(step) {
+  const snow = currentKind() === "snowflake";
+  if (step.id === "role" || step.id === "warehouse") {
+    return [
+      document.getElementById("account").value.trim(),
+      document.getElementById("user").value.trim(),
+    ].join("\0");
+  }
+  if (step.id === "database" || step.id === "write_database") {
+    return warehouseEl.value.trim();
+  }
+  if (step.id === "schema") return databaseEl.value.trim();
+  if (step.id === "write_schema") {
+    return document.getElementById("write_database").value.trim();
+  }
+  if (step.id === "dataset") return catalogProject();
+  if (step.id === "write_dataset") {
+    return document.getElementById("write_project").value.trim();
+  }
+  if (step.id === "table_name") {
+    return snow
+      ? databaseEl.value.trim() + "." + schemaEl.value.trim()
+      : catalogProject() + "." + datasetEl.value.trim();
+  }
+  if (step.id === "_columns") return combinedTable();
+  return "";
+}
+function persistCatalogLists() {
+  post("/api/save", { catalog_lists: catalogLists });
+}
+function storeCatalogList(step, items) {
+  catalogLists[step.id] = { scope: stepScope(step), items: items || [] };
+  persistCatalogLists();
+}
+function cachedCatalogList(step) {
+  const cached = catalogLists[step.id];
+  if (!cached || cached.scope !== stepScope(step)) return null;
+  if (!Array.isArray(cached.items) || !cached.items.length) return null;
+  return cached.items;
+}
+function paintStep(step) {
+  const items = cachedCatalogList(step);
+  if (items) {
+    if (step.fill) {
+      for (const spec of step.fill) {
+        const el = document.getElementById(spec.id);
+        if (el) fillSelect(el, typedOptions(items, typeSet(spec.filter)), saved[spec.id] || el.value);
+      }
+    } else {
+      const el = document.getElementById(step.id);
+      if (el) fillSelect(el, items, saved[step.id] || el.value);
+    }
+    fetched[step.id] = true;
+    return;
+  }
+  if (step.fill) {
+    for (const spec of step.fill) {
+      const el = document.getElementById(spec.id);
+      if (el) seedSelect(el, saved[spec.id] || "", false);
+    }
+  } else {
+    const el = document.getElementById(step.id);
+    if (el) seedSelect(el, saved[step.id] || "", false);
+  }
+}
+function syncRefreshButtons() {
+  document.querySelectorAll(".catalog-refresh").forEach((btn) => {
+    const step = kindSteps().find((s) => s.id === btn.getAttribute("data-catalog"));
+    btn.hidden = !step || !stepReady(step);
+  });
+}
 function syncCatalogEnabled() {
   for (const step of kindSteps()) {
     const ready = stepReady(step);
+    const busy = !!loading[step.id];
     for (const id of stepTargets(step)) {
       const el = document.getElementById(id);
-      if (el) el.disabled = !ready;
+      if (el) el.disabled = !ready || busy;
+    }
+    if (catalogArmed && ready && !fetched[step.id] && !failed[step.id] && !busy) {
+      requestStep(step);
     }
   }
+  syncRefreshButtons();
+}
+function invalidateStep(id) {
+  fetched[id] = false;
+  failed[id] = false;
+  loading[id] = false;
+  gens[id] = (gens[id] || 0) + 1;
 }
 function resetFetched() {
-  for (const key of Object.keys(fetched)) fetched[key] = false;
+  for (const step of kindSteps()) invalidateStep(step.id);
 }
 function resetFollowing(changedId) {
   const steps = kindSteps();
@@ -512,13 +621,16 @@ function resetFollowing(changedId) {
   if (idx < 0) return;
   for (const step of steps.slice(idx + 1)) {
     if (step.optional) continue;
-    fetched[step.id] = false;
+    invalidateStep(step.id);
+    delete catalogLists[step.id];
     for (const id of stepTargets(step)) {
       const el = document.getElementById(id);
-      if (el) seedSelect(el, "");
+      if (el) seedSelect(el, "", false);
     }
   }
   tableEl.value = combinedTable();
+  persistCatalogLists();
+  syncCatalogEnabled();
 }
 function catalogProject() {
   return dataProjectEl.value.trim() || projectEl.value.trim();
@@ -605,6 +717,7 @@ function syncKindUi(clearIdentity) {
   }
   syncExtraCard();
   syncCatalogEnabled();
+  syncManagedChrome();
 }
 async function post(url, body) {
   const res = await fetch(url, {
@@ -625,7 +738,11 @@ async function loadStep(step) {
   if (!step || !step.endpoint || !stepReady(step)) return;
   const gen = (gens[step.id] = (gens[step.id] || 0) + 1);
   const targets = stepTargets(step).map((id) => document.getElementById(id)).filter(Boolean);
+  loading[step.id] = true;
+  fetched[step.id] = true;
+  failed[step.id] = false;
   targets.forEach((el) => setLoading(el, true));
+  syncCatalogEnabled();
   setError("");
   const payload = {
     ...authBody(),
@@ -640,38 +757,48 @@ async function loadStep(step) {
   if (step.id === "write_schema") {
     payload.database = (document.getElementById("write_database").value || "").trim();
   }
-  const data = await post("/api/" + step.endpoint, payload);
-  if (gen !== gens[step.id]) return;
-  targets.forEach((el) => setLoading(el, false));
-  if (!data.ok) {
-    noteMissingExtra(data);
-    setError(data.error || "Could not load catalog");
-    fetched[step.id] = false;
-    return;
-  }
-  if (data.location) locationEl.value = data.location;
-  if (step.fill) {
-    const cols = data.columns || [];
-    for (const spec of step.fill) {
-      const el = document.getElementById(spec.id);
-      if (!el) continue;
-      fillSelect(el, typedOptions(cols, typeSet(spec.filter)), el.value || saved[spec.id]);
+  try {
+    const data = await post("/api/" + step.endpoint, payload);
+    if (gen !== gens[step.id]) return;
+    if (!data.ok) {
+      noteMissingExtra(data);
+      setError(data.error || "Could not load catalog");
+      fetched[step.id] = false;
+      failed[step.id] = true;
+      return;
     }
-    tableEl.value = combinedTable();
-    return;
+    if (data.location) locationEl.value = data.location;
+    if (step.fill) {
+      const cols = data.columns || [];
+      storeCatalogList(step, cols);
+      for (const spec of step.fill) {
+        const el = document.getElementById(spec.id);
+        if (!el) continue;
+        fillSelect(el, typedOptions(cols, typeSet(spec.filter)), el.value);
+      }
+      tableEl.value = combinedTable();
+      return;
+    }
+    const el = document.getElementById(step.id);
+    if (!el) return;
+    let items = data[step.values] || [];
+    if (step.item) {
+      items = items.map((row) => (typeof row === "string" ? row : row[step.item]));
+    }
+    storeCatalogList(step, items);
+    const pick = el.value || (step.default_key && data[step.default_key]) || "";
+    fillSelect(el, items, pick);
+  } finally {
+    if (gen !== gens[step.id]) return;
+    loading[step.id] = false;
+    targets.forEach((el) => setLoading(el, false));
+    syncCatalogEnabled();
   }
-  const el = document.getElementById(step.id);
-  if (!el) return;
-  let items = data[step.values] || [];
-  if (step.item) {
-    items = items.map((row) => (typeof row === "string" ? row : row[step.item]));
-  }
-  const pick = el.value || saved[step.id] || (step.default_key && data[step.default_key]) || "";
-  fillSelect(el, items, pick);
 }
-function requestStep(step) {
-  if (!step || fetched[step.id]) return;
-  fetched[step.id] = true;
+function requestStep(step, force) {
+  if (!step || !step.endpoint || loading[step.id]) return;
+  if (!force && fetched[step.id]) return;
+  if (!stepReady(step)) return;
   loadStep(step);
 }
 function stepForControl(id) {
@@ -686,8 +813,14 @@ function bindCatalog() {
         seen.add(id);
         const el = document.getElementById(id);
         if (!el) continue;
-        el.addEventListener("mousedown", () => {
-          requestStep(stepForControl(id));
+        el.addEventListener("mousedown", (e) => {
+          const step = stepForControl(id);
+          if (!step) return;
+          if (loading[step.id] || !fetched[step.id]) {
+            e.preventDefault();
+            failed[step.id] = false;
+            requestStep(step, true);
+          }
         });
         el.addEventListener("change", () => {
           if (suppressChange) return;
@@ -695,6 +828,9 @@ function bindCatalog() {
             tableEl.value = combinedTable();
           }
           if (id === "event_time") syncEventTimeKind();
+          if (id === "write_dataset" || id === "write_schema" || id === "write_database") {
+            syncManagedChrome();
+          }
           resetFollowing(id);
         });
       }
@@ -756,15 +892,24 @@ document.getElementById("snowflake_auth").addEventListener("change", () => {
 });
 kindEl.addEventListener("change", () => syncKindUi(true));
 bindCatalog();
+document.querySelectorAll(".catalog-refresh").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const step = kindSteps().find((s) => s.id === btn.getAttribute("data-catalog"));
+    if (!step) return;
+    invalidateStep(step.id);
+    requestStep(step, true);
+  });
+});
 document.getElementById("write_project").addEventListener("input", () => {
-  fetched.write_dataset = false;
+  invalidateStep("write_dataset");
+  delete catalogLists.write_dataset;
   seedSelect(document.getElementById("write_dataset"), "");
-  syncCatalogEnabled();
+  syncManagedChrome();
 });
 document.getElementById("write_database").addEventListener("change", () => {
-  fetched.write_schema = false;
+  invalidateStep("write_schema");
+  delete catalogLists.write_schema;
   seedSelect(document.getElementById("write_schema"), "");
-  syncCatalogEnabled();
 });
 document.getElementById("extra-install").addEventListener("click", async () => {
   const btn = document.getElementById("extra-install");
@@ -794,24 +939,26 @@ document.getElementById("extra-install").addEventListener("click", async () => {
   }
 });
 syncKindUi(false);
-if (currentKind() === "snowflake") {
-  seedSelect(roleEl, saved.role);
-  seedSelect(warehouseEl, saved.warehouse);
-  seedSelect(databaseEl, saved.database);
-  seedSelect(schemaEl, saved.schema);
-} else {
-  seedSelect(datasetEl, saved.dataset);
-}
-seedSelect(tableNameEl, saved.table_name);
-seedSelect(entityEl, saved.entity);
-seedSelect(eventTimeEl, saved.event_time);
-seedSelect(eventColumnEl, saved.event_column);
-seedSelect(document.getElementById("write_dataset"), saved.write_dataset);
-seedSelect(document.getElementById("write_database"), saved.write_database);
-seedSelect(document.getElementById("write_schema"), saved.write_schema);
+kindSteps().forEach((step) => {
+  if (step.id === "table_name" || step.id === "_columns") {
+    tableEl.value = combinedTable();
+  }
+  if (
+    step.id === "_columns"
+    && !cachedCatalogList(step)
+    && Array.isArray(saved.columns)
+    && saved.columns.length
+  ) {
+    catalogLists._columns = { scope: combinedTable(), items: saved.columns };
+  }
+  paintStep(step);
+});
 tableEl.value = combinedTable();
 syncSnowflakeAuthUi();
 syncEventTimeKind();
+catalogArmed = true;
+syncCatalogEnabled();
+syncManagedChrome();
 
 const ENTITY_NAME_PRESETS = {
   User: "Users",

@@ -71,6 +71,8 @@ DEFAULTS: dict[str, Any] = {
     "chart_title": "",
     "chart_title_locked": False,
     "catalog_lookback_days": 90,
+    "event_name_cache": {},
+    "catalog_lists": {},
     "write_project": "",
     "write_dataset": "",
     "write_database": "",

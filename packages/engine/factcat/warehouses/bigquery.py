@@ -137,7 +137,7 @@ def _wrap_google_error(
     name = type(exc).__name__
     if name in {"TimeoutError", "FuturesTimeoutError"} or "timed out" in message.lower():
         return AdapterError(f"BigQuery job timed out after {timeout}s")
-    return AdapterError(message)
+    return AdapterError(message, not_found=name == "NotFound" or "not found:" in message.lower())
 
 
 @dataclass(frozen=True)

@@ -42,17 +42,15 @@ from . import prefs as prefs_mod
 from .query import (
     REPORTING_TIMEZONES,
     annotate_incomplete,
+    catalog_event_values,
     catalog_lookback_days,
     connection_from_form,
-    event_name_cache_read_sql,
-    event_name_cache_rebuild_sql,
     event_values_sql,
     events_sql_from_form,
     fill_cyclic_buckets,
     form_kind,
     job_bytes_cap,
     query_row_limit,
-    write_cache_table,
 )
 
 APP_DIR = Path(__file__).resolve().parent
@@ -246,33 +244,15 @@ async def api_event_values(request: Request) -> JSONResponse:
         catalog = form.get("catalog") in (True, "true", "on", "1", 1)
         conn = connection_from_form(form, apply_scan_cap=not catalog)
         warehouse = connect(form_kind(form), **conn)
-        dest = write_cache_table(form)
-        result = None
-        if dest is not None and catalog:
-            sql = event_name_cache_read_sql(form)
-            try:
-                result = warehouse.run(sql)
-                cache_kind = "cached"
-            except AdapterError:
-                for materialized, kind_name in (
-                    (True, "materialized_view"),
-                    (False, "table"),
-                ):
-                    try:
-                        warehouse.run(
-                            event_name_cache_rebuild_sql(
-                                form, materialized=materialized
-                            )
-                        )
-                        sql = event_name_cache_read_sql(form)
-                        result = warehouse.run(sql)
-                        cache_kind = kind_name
-                        break
-                    except AdapterError:
-                        cache_kind = None
-        if result is None:
+        if catalog:
+            cfg = load()
+            if "event_name_cache" not in form:
+                form = {**form, "event_name_cache": cfg.get("event_name_cache") or {}}
+            result, cache_kind, meta = catalog_event_values(form, warehouse.run)
+        else:
             sql = event_values_sql(form)
             result = warehouse.run(sql)
+            meta = None
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
     seen: set[str] = set()
@@ -281,9 +261,13 @@ async def api_event_values(request: Request) -> JSONResponse:
         if text:
             seen.add(text)
     values = sorted(seen, key=str.lower)
-    if form.get("catalog") in (True, "true", "on", "1", 1):
+    if catalog:
         days = catalog_lookback_days(form)
-        saved = {"event_names": values, "catalog_lookback_days": 0 if days is None else days}
+        saved = {
+            "event_names": values,
+            "catalog_lookback_days": 0 if days is None else days,
+            "event_name_cache": meta or {},
+        }
         if "write_project" in form:
             saved["write_project"] = (form.get("write_project") or "").strip()
         if "write_dataset" in form:
@@ -296,6 +280,8 @@ async def api_event_values(request: Request) -> JSONResponse:
     payload = {"ok": True, "sql": sql, "values": values}
     if cache_kind:
         payload["cache"] = cache_kind
+    if meta and meta.get("kind"):
+        payload["kind"] = meta["kind"]
     return JSONResponse(payload)
 
 

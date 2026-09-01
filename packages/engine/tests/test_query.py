@@ -8,10 +8,15 @@ from datetime import date
 
 from factcat import events_sql
 from factcat_app.filters import FILTER_FAMILY_OPS, FILTER_OP_META
+from factcat.warehouses import AdapterError, QueryResult
 from factcat_app.query import (
     EVENT_VALUE_LIMIT,
     annotate_incomplete,
+    catalog_event_values,
     catalog_lookback_days,
+    event_name_cache_comment,
+    event_name_cache_fingerprint,
+    event_name_cache_matches,
     event_name_cache_rebuild_sql,
     event_values_sql,
     events_sql_from_form,
@@ -419,6 +424,114 @@ def test_event_name_cache_rebuild_is_group_by():
         materialized=True,
     )
     assert "CREATE OR REPLACE MATERIALIZED VIEW" in sf.upper()
+    assert "OPTIONS(description=" in sql.upper() or "OPTIONS(DESCRIPTION=" in sql.upper()
+    assert "COMMENT =" in sf.upper()
+
+
+def test_event_name_cache_fingerprint_match():
+    form = _form(
+        table="analytics.events",
+        event_column="event_name",
+        write_project="dest-proj",
+        write_dataset="analytics",
+    )
+    wanted = event_name_cache_fingerprint(form)
+    assert wanted["v"] == 1
+    assert event_name_cache_matches(wanted, wanted)
+    assert not event_name_cache_matches({}, wanted)
+    assert not event_name_cache_matches(
+        {**wanted, "table": "other.events"}, wanted
+    )
+    note = event_name_cache_comment(form)
+    assert "event_name" in note
+    assert "analytics.events" in note
+
+
+def test_catalog_event_values_dest_paths():
+    form = _form(
+        event_column="event_name",
+        write_project="dest-proj",
+        write_dataset="analytics",
+        event_name_cache={
+            "v": 1,
+            "table": "analytics.events",
+            "event_column": "event_name",
+            "kind": "materialized_view",
+        },
+    )
+    calls: list[str] = []
+
+    def run(sql: str):
+        calls.append(sql)
+        upper = sql.upper()
+        if "CREATE" in upper:
+            raise AssertionError("matched cache must not rebuild")
+        return QueryResult(rows=[{"fc_value": "paid"}])
+
+    result, kind, meta = catalog_event_values(form, run)
+    assert kind == "cached"
+    assert meta["kind"] == "materialized_view"
+    assert result.rows[0]["fc_value"] == "paid"
+    assert len(calls) == 1
+
+    denied = []
+
+    def deny(sql: str):
+        denied.append(sql)
+        raise AdapterError("Access Denied")
+
+    with pytest.raises(AdapterError, match="Access Denied"):
+        catalog_event_values(form, deny)
+    assert not any("CREATE" in sql.upper() for sql in denied)
+
+    stale = _form(
+        event_column="event_name",
+        write_project="dest-proj",
+        write_dataset="analytics",
+        event_name_cache={
+            "v": 1,
+            "table": "old.events",
+            "event_column": "event_name",
+            "kind": "materialized_view",
+        },
+    )
+    calls2: list[str] = []
+
+    def run_mismatch(sql: str):
+        calls2.append(sql)
+        upper = sql.upper()
+        if "CREATE OR REPLACE MATERIALIZED VIEW" in upper:
+            return QueryResult(rows=[])
+        return QueryResult(rows=[{"fc_value": "signup"}])
+
+    result, kind, meta = catalog_event_values(stale, run_mismatch)
+    assert kind == "materialized_view"
+    assert any("CREATE OR REPLACE MATERIALIZED VIEW" in sql.upper() for sql in calls2)
+
+    table_form = _form(
+        event_column="event_name",
+        write_project="dest-proj",
+        write_dataset="analytics",
+        rebuild=True,
+        event_name_cache={
+            "v": 1,
+            "table": "analytics.events",
+            "event_column": "event_name",
+            "kind": "table",
+        },
+    )
+    ddl: list[str] = []
+
+    def run_table(sql: str):
+        ddl.append(sql)
+        upper = sql.upper()
+        if "MATERIALIZED VIEW" in upper:
+            raise AssertionError("table rebuild must not try a view")
+        return QueryResult(rows=[{"fc_value": "paid"}])
+
+    result, kind, meta = catalog_event_values(table_form, run_table)
+    assert kind == "table"
+    assert any("CREATE OR REPLACE TABLE" in sql.upper() for sql in ddl)
 
 
 def test_custom_range_is_inclusive_dates():
