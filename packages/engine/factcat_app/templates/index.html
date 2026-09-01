@@ -6,12 +6,84 @@
 {% endblock %}
 {% block extra_css %}
     main.workspace {
-      display: grid;
-      grid-template-columns: 22rem 1fr;
+      display: block;
       flex: 1;
       min-height: 0;
     }
+    form.workspace-form {
+      display: grid;
+      grid-template-columns: 22rem 1fr;
+      height: 100%;
+      min-height: 0;
+    }
     .filters { background: var(--fc-snow); padding: 1.25rem; border-right: 1px solid var(--fc-line); overflow-y: auto; min-height: 0; }
+    .results-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 0.45rem 0.85rem;
+      padding: 0.2rem 0.35rem 0.45rem;
+    }
+    .results-toolbar .toolbar-field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      min-width: 0;
+    }
+    .results-toolbar .toolbar-field label {
+      display: block;
+      margin: 0;
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--fc-slate);
+    }
+    .results-toolbar select,
+    .results-toolbar input[type="number"],
+    .results-toolbar input[type="date"] {
+      width: auto;
+      margin: 0;
+      font-size: 0.8rem;
+    }
+    .results-toolbar #grain { min-width: 9.75rem; }
+    .results-toolbar #range_choice { min-width: 11.5rem; }
+    .results-toolbar .toolbar-extras {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 0.55rem 0.75rem;
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-x: auto;
+    }
+    .toolbar-cluster {
+      display: flex;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 0.35rem;
+      min-width: 0;
+    }
+    .toolbar-cluster label,
+    .toolbar-cluster span {
+      display: inline;
+      margin: 0;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--fc-ink);
+      white-space: nowrap;
+    }
+    .toolbar-cluster input[type="number"] { width: 4.25rem; }
+    .toolbar-cluster input[type="date"] { width: 9.6rem; }
+    .toolbar-cluster select { width: auto; }
+    .toolbar-cluster input[type="checkbox"] { width: auto; margin: 0; }
+    .results-toolbar #custom_kind { min-width: 8.25rem; }
+    .results-toolbar #run-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 0 0 0 auto;
+      flex-wrap: wrap;
+    }
+    .results-toolbar #run-row button { margin: 0; }
     .results {
       display: flex;
       flex-direction: column;
@@ -137,11 +209,13 @@
     #result-table th .grip:hover {
       background: var(--fc-ochre);
     }
-    #custom-range label { display: inline-block; width: auto; margin-right: 0.35rem; }
-    #custom-range input { width: auto; }
     .range-row { display: flex; gap: 0.4rem; align-items: center; margin-top: 0.35rem; }
-    .range-row[hidden], #range-include[hidden], #custom-range[hidden],
-    #custom-absolute[hidden], #custom-relative[hidden] { display: none !important; }
+    .range-row[hidden],
+    .toolbar-cluster[hidden],
+    #range-include[hidden], #custom-range[hidden],
+    #custom-absolute[hidden], #custom-relative[hidden],
+    #range_n_unit_select[hidden], #rel_unit_select[hidden],
+    #range_n_unit[hidden], #rel_unit_label[hidden] { display: none !important; }
     .range-row input[type="number"] { width: 4.5rem; }
     #breakdown-extra[hidden] { display: none !important; }
     #breakdown-extra .range-row { margin-top: 0.5rem; }
@@ -268,7 +342,8 @@
 {% endblock %}
 {% block body %}
 <main class="workspace">
-  <form id="f" class="filters">
+  <form id="f" class="workspace-form">
+  <div class="filters">
     <h1>Events</h1>
     {% if not mapping_ready %}
     <div id="needs-setup" class="callout">
@@ -377,55 +452,6 @@
       <span class="hint" id="exact-hint">Same bytes scanned; more CPU. Off is HyperLogLog (faster).</span>
     </div>
 
-    <label for="grain">Time grain</label>
-    <select name="grain" id="grain">
-      <option value="day" {% if config.grain == "day" or not config.grain %}selected{% endif %}>Day</option>
-      <option value="week" {% if config.grain == "week" %}selected{% endif %}>Week</option>
-      <option value="month" {% if config.grain == "month" %}selected{% endif %}>Month</option>
-    </select>
-
-    <label for="range_choice">Date range</label>
-    <select id="range_choice"></select>
-    <input type="hidden" name="range_mode" id="range_mode" value="{{ config.range_mode or 'last' }}">
-    <input type="hidden" name="range_unit" id="range_unit" value="{{ config.range_unit or 'day' }}">
-    <div id="range-last" class="range-row" hidden>
-      <span>Last</span>
-      <input id="range_n" name="range_n" type="number" min="1" max="3650" value="{{ config.range_n or 30 }}">
-      <span id="range_n_unit">{% if config.grain == "week" %}weeks{% elif config.grain == "month" %}months{% else %}days{% endif %}</span>
-    </div>
-    <div id="range-include" class="row" hidden>
-      <input name="include_current" type="checkbox" id="include_current" {% if config.include_current %}checked{% endif %} style="width:auto">
-      <label for="include_current" id="include_current_label" style="margin:0">Include today</label>
-    </div>
-    <div id="custom-range" hidden>
-      <select id="custom_kind" name="custom_kind">
-        <option value="absolute" {% if config.custom_kind != "relative" %}selected{% endif %}>Specific dates</option>
-        <option value="relative" {% if config.custom_kind == "relative" %}selected{% endif %}>Relative</option>
-      </select>
-      <div id="custom-absolute">
-        <label for="start_date">From</label>
-        <input id="start_date" name="start_date" type="date" value="{{ config.start_date }}">
-        <label for="end_date">To</label>
-        <input id="end_date" name="end_date" type="date" value="{{ config.end_date }}">
-        <p id="custom-snap-hint" class="summary" hidden></p>
-      </div>
-      <div id="custom-relative" hidden>
-        <div class="range-row">
-          <span>From</span>
-          <input id="rel_start_n" name="rel_start_n" type="number" min="0" max="3650" value="{{ config.rel_start_n or 12 }}">
-          <span id="rel_unit_from">days</span>
-          <span>ago</span>
-        </div>
-        <div class="range-row">
-          <span>To</span>
-          <input id="rel_end_n" name="rel_end_n" type="number" min="0" max="3650" value="{{ config.rel_end_n if config.rel_end_n is not none else 0 }}">
-          <span id="rel_unit_to">days</span>
-          <span>ago</span>
-        </div>
-        <p id="custom-rel-hint" class="summary">0 = this day.</p>
-      </div>
-    </div>
-
     <div id="breakdown-band">
     <div class="row">
       <input name="breakdown_by_series" type="checkbox" id="breakdown_by_series" {% if config.breakdown_by_series %}checked{% endif %} style="width:auto">
@@ -462,24 +488,88 @@
       </div>
     </div>
     </div>
-    <div id="run-row">
-      <button type="submit" id="run"{% if not mapping_ready %} disabled{% endif %}>Run</button>
-      <span id="run-loading" class="loading" hidden aria-label="Running"></span>
-      <span id="run-estimate-wrap" hidden>
-        <span id="run-estimate-bar" aria-hidden="true"><span id="run-estimate-fill"></span></span>
-        <span id="run-estimate"></span>
-      </span>
-      <div id="cap-override" hidden>
-        <input name="override_cap" type="checkbox" id="override_cap" style="width:auto">
-        <label for="override_cap" style="margin:0">Override cap</label>
-        <input id="bytes_cap_override_gb" name="bytes_cap_override_gb" type="number" min="1" max="100000" step="1">
-        <span>GB this run</span>
-      </div>
-      <span id="run-status"></span>
-    </div>
     <p id="error"></p>
-  </form>
+  </div>
   <div class="results">
+    <div class="results-toolbar">
+      <div class="toolbar-field">
+        <label for="grain">Time grain</label>
+        <select name="grain" id="grain">
+          <option value="day" {% if config.grain == "day" or not config.grain %}selected{% endif %}>Day</option>
+          <option value="week" {% if config.grain == "week" %}selected{% endif %}>Week</option>
+          <option value="month" {% if config.grain == "month" %}selected{% endif %}>Month</option>
+          <option value="hour" {% if config.grain == "hour" %}selected{% endif %}>Hour</option>
+          <option value="day_of_week" {% if config.grain == "day_of_week" %}selected{% endif %}>Day of week</option>
+          <option value="hour_of_day" {% if config.grain == "hour_of_day" %}selected{% endif %}>Hour of day</option>
+        </select>
+      </div>
+      <div class="toolbar-field">
+        <label for="range_choice">Date range</label>
+        <select id="range_choice"></select>
+      </div>
+      <input type="hidden" name="range_mode" id="range_mode" value="{{ config.range_mode or 'last' }}">
+      <input type="hidden" name="range_unit" id="range_unit" value="{{ config.range_unit or 'day' }}">
+      <div class="toolbar-extras">
+        <div id="range-last" class="toolbar-cluster" hidden>
+          <span>Last</span>
+          <input id="range_n" name="range_n" type="number" min="1" max="3650" value="{{ config.range_n or 30 }}">
+          <select id="range_n_unit_select" aria-label="Last-N unit" hidden>
+            <option value="day">days</option>
+            <option value="week">weeks</option>
+            <option value="month">months</option>
+            <option value="quarter">quarters</option>
+            <option value="year">years</option>
+          </select>
+          <span id="range_n_unit">{% if config.grain == "week" %}weeks{% elif config.grain == "month" %}months{% else %}days{% endif %}</span>
+        </div>
+        <div id="range-include" class="toolbar-cluster" hidden>
+          <input name="include_current" type="checkbox" id="include_current" {% if config.include_current %}checked{% endif %}>
+          <label for="include_current" id="include_current_label">Include today</label>
+        </div>
+        <div id="custom-range" class="toolbar-cluster" hidden>
+          <select id="custom_kind" name="custom_kind" aria-label="Custom range kind">
+            <option value="absolute" {% if config.custom_kind != "relative" %}selected{% endif %}>Specific dates</option>
+            <option value="relative" {% if config.custom_kind == "relative" %}selected{% endif %}>Relative</option>
+          </select>
+          <div id="custom-absolute" class="toolbar-cluster">
+            <label for="start_date">From</label>
+            <input id="start_date" name="start_date" type="date" value="{{ config.start_date }}">
+            <label for="end_date">to</label>
+            <input id="end_date" name="end_date" type="date" value="{{ config.end_date }}">
+            <span id="custom-snap-hint" hidden></span>
+          </div>
+          <div id="custom-relative" class="toolbar-cluster" hidden title="0 is this period">
+            <label for="rel_start_n">From</label>
+            <input id="rel_start_n" name="rel_start_n" type="number" min="0" max="3650" value="{{ config.rel_start_n or 12 }}">
+            <span>to</span>
+            <input id="rel_end_n" name="rel_end_n" type="number" min="0" max="3650" value="{{ config.rel_end_n if config.rel_end_n is not none else 0 }}">
+            <select id="rel_unit_select" aria-label="Relative unit" hidden>
+              <option value="day">days ago</option>
+              <option value="week">weeks ago</option>
+              <option value="month">months ago</option>
+              <option value="quarter">quarters ago</option>
+              <option value="year">years ago</option>
+            </select>
+            <span id="rel_unit_label">days ago</span>
+          </div>
+        </div>
+      </div>
+      <div id="run-row">
+        <button type="submit" id="run"{% if not mapping_ready %} disabled{% endif %}>Run</button>
+        <span id="run-loading" class="loading" hidden aria-label="Running"></span>
+        <span id="run-estimate-wrap" hidden>
+          <span id="run-estimate-bar" aria-hidden="true"><span id="run-estimate-fill"></span></span>
+          <span id="run-estimate"></span>
+        </span>
+        <div id="cap-override" hidden>
+          <input name="override_cap" type="checkbox" id="override_cap" style="width:auto">
+          <label for="override_cap" style="margin:0">Override cap</label>
+          <input id="bytes_cap_override_gb" name="bytes_cap_override_gb" type="number" min="1" max="100000" step="1">
+          <span>GB this run</span>
+        </div>
+        <span id="run-status"></span>
+      </div>
+    </div>
     <section class="pane pane-chart">
       <div class="pane-head">
         <input id="chart-title" class="chart-title" name="chart_title" value="{{ config.chart_title }}" placeholder="Chart title" spellcheck="false">
@@ -581,6 +671,7 @@
       </div>
     </section>
   </div>
+  </form>
 </main>
 <script>
 const saved = {
@@ -603,12 +694,59 @@ const saved = {
   custom_kind: {{ (config.custom_kind or "absolute")|tojson }},
 };
 const GRAIN_DEFAULTS = {
-  day: { choice: "last:30:day", n: 30, includeCurrent: true },
-  week: { choice: "last:8:week", n: 8, includeCurrent: false },
-  month: { choice: "last:6:month", n: 6, includeCurrent: false },
+  day: { choice: "last:30:day", n: 30, unit: "day", includeCurrent: true },
+  week: { choice: "last:8:week", n: 8, unit: "week", includeCurrent: false },
+  month: { choice: "last:6:month", n: 6, unit: "month", includeCurrent: false },
+  hour: { choice: "last:30:day", n: 30, unit: "day", includeCurrent: true },
+  day_of_week: { choice: "last:8:week", n: 8, unit: "week", includeCurrent: false },
+  hour_of_day: { choice: "last:14:day", n: 14, unit: "day", includeCurrent: true },
 };
+const CYCLIC_RANGE_PRESETS = [
+  { group: "Last" },
+  { value: "last:7:day", label: "Last 7 days" },
+  { value: "last:14:day", label: "Last 14 days" },
+  { value: "last:30:day", label: "Last 30 days" },
+  { value: "last:90:day", label: "Last 90 days" },
+  { value: "last:8:week", label: "Last 8 weeks" },
+  { value: "last:12:week", label: "Last 12 weeks" },
+  { value: "last:3:month", label: "Last 3 months" },
+  { value: "last:6:month", label: "Last 6 months" },
+  { value: "last:12:month", label: "Last 12 months" },
+  { value: "last:3:quarter", label: "Last 3 quarters" },
+  { value: "last:4:quarter", label: "Last 4 quarters" },
+  { value: "last:n", label: "Last N…" },
+  { group: "This" },
+  { value: "this:day", label: "Today" },
+  { value: "this:week", label: "This week" },
+  { value: "this:month", label: "This month" },
+  { value: "this:quarter", label: "This quarter" },
+  { value: "this:year", label: "This year" },
+  { group: "Previous" },
+  { value: "previous:day", label: "Yesterday" },
+  { value: "previous:week", label: "Last week" },
+  { value: "previous:month", label: "Last month" },
+  { value: "previous:quarter", label: "Last quarter" },
+  { value: "previous:year", label: "Last year" },
+  { group: "" },
+  { value: "custom", label: "Custom" },
+];
 const RANGE_PRESETS = {
   day: [
+    { value: "last:7:day", label: "Last 7 days" },
+    { value: "last:14:day", label: "Last 14 days" },
+    { value: "last:30:day", label: "Last 30 days" },
+    { value: "last:90:day", label: "Last 90 days" },
+    { value: "last:n", label: "Last N days…" },
+    { value: "this:day", label: "Today" },
+    { value: "this:week", label: "This week" },
+    { value: "this:month", label: "This month" },
+    { value: "previous:day", label: "Yesterday" },
+    { value: "previous:week", label: "Last week" },
+    { value: "previous:month", label: "Last month" },
+    { value: "custom", label: "Custom" },
+  ],
+  hour: [
+    { value: "last:24:hour", label: "Last 24 hours" },
     { value: "last:7:day", label: "Last 7 days" },
     { value: "last:14:day", label: "Last 14 days" },
     { value: "last:30:day", label: "Last 30 days" },
@@ -640,15 +778,46 @@ const RANGE_PRESETS = {
     { value: "previous:month", label: "Last month" },
     { value: "custom", label: "Custom" },
   ],
+  day_of_week: CYCLIC_RANGE_PRESETS,
+  hour_of_day: CYCLIC_RANGE_PRESETS,
 };
-const NAMED_LAST = { day: ["7", "14", "30", "90"], week: ["4", "8", "12"], month: ["3", "6", "12"] };
-const UNIT_LABEL = { day: "days", week: "weeks", month: "months" };
-const GRAIN_NOUN = { day: "today", week: "this week", month: "this month" };
-const GRAIN_RANK = { day: 0, week: 1, month: 2 };
+const RANGE_UNITS = ["day", "week", "month", "quarter", "year"];
+const UNIT_LABEL = {
+  day: "days", week: "weeks", month: "months", hour: "hours",
+  quarter: "quarters", year: "years",
+};
+const GRAIN_NOUN = {
+  day: "today",
+  week: "this week",
+  month: "this month",
+  hour: "today",
+  day_of_week: "this week",
+  hour_of_day: "today",
+};
+const INCLUDE_LABEL = {
+  hour: "Include current hour",
+  day: "Include today",
+  week: "Include this week",
+  month: "Include this month",
+  quarter: "Include this quarter",
+  year: "Include this year",
+};
+const GRAIN_RANK = { day: 0, week: 1, month: 2, quarter: 3, year: 4 };
+const GRAIN_HEADERS = {
+  day: "Day",
+  week: "Week",
+  month: "Month",
+  hour: "Hour",
+  day_of_week: "Day of week",
+  hour_of_day: "Hour of day",
+};
 const rangeByGrain = {
   day: Object.assign({}, GRAIN_DEFAULTS.day),
   week: Object.assign({}, GRAIN_DEFAULTS.week),
   month: Object.assign({}, GRAIN_DEFAULTS.month),
+  hour: Object.assign({}, GRAIN_DEFAULTS.hour),
+  day_of_week: Object.assign({}, GRAIN_DEFAULTS.day_of_week),
+  hour_of_day: Object.assign({}, GRAIN_DEFAULTS.hour_of_day),
 };
 const form = document.getElementById("f");
 const projectEl = document.getElementById("project");
@@ -673,6 +842,10 @@ const customKindEl = document.getElementById("custom_kind");
 const customAbsoluteEl = document.getElementById("custom-absolute");
 const customRelativeEl = document.getElementById("custom-relative");
 const customSnapHint = document.getElementById("custom-snap-hint");
+const rangeNUnitSelect = document.getElementById("range_n_unit_select");
+const rangeNUnitSpan = document.getElementById("range_n_unit");
+const relUnitSelect = document.getElementById("rel_unit_select");
+const relUnitLabel = document.getElementById("rel_unit_label");
 const startDateEl = document.getElementById("start_date");
 const endDateEl = document.getElementById("end_date");
 const titleEl = document.getElementById("chart-title");
@@ -682,7 +855,7 @@ const cachedColumns = {{ config.columns|tojson }};
 let chart;
 let tableRows = [];
 let lastRun = null;
-let sortKey = "bucket";
+let sortKey = "";
 let sortDir = 1;
 function setError(text) {
   document.getElementById("error").textContent = text || "";
@@ -1404,7 +1577,8 @@ function syncFilterLine(row) {
   const timeFam = !expr && !none && family === "time";
   const numFam = !expr && !none && !list && family === "numeric";
   const enumNames = family === "weekday" ? orderedWeekdays()
-    : (family === "monthname" ? (FILTER_UI.months || []) : []);
+    : (family === "monthname" ? (FILTER_UI.months || [])
+    : (family === "hourname" ? (FILTER_UI.hours || []) : []));
   const showEnum = !expr && !none && kind === "one" && enumNames.length;
   const caseful = !expr && !none && family === "string"
     && op !== "is_empty" && op !== "is_not_empty";
@@ -2205,46 +2379,106 @@ function currentGrain() {
 }
 function fillRangeOptions(grain, selected) {
   rangeChoiceEl.innerHTML = "";
+  let group = null;
   for (const item of RANGE_PRESETS[grain] || RANGE_PRESETS.day) {
+    if (item.group != null) {
+      if (!item.group) {
+        group = null;
+        continue;
+      }
+      group = document.createElement("optgroup");
+      group.label = item.group;
+      rangeChoiceEl.appendChild(group);
+      continue;
+    }
     const opt = document.createElement("option");
     opt.value = item.value;
     opt.textContent = item.label;
-    rangeChoiceEl.appendChild(opt);
+    (group || rangeChoiceEl).appendChild(opt);
   }
   if (selected && [...rangeChoiceEl.options].some((o) => o.value === selected)) {
     rangeChoiceEl.value = selected;
   }
 }
+function rangeWindowUnit(grain) {
+  if (grain === "hour" || grain === "hour_of_day") return "day";
+  if (grain === "day_of_week") return "week";
+  return grain;
+}
+function isCyclicGrain(grain) {
+  return grain === "day_of_week" || grain === "hour_of_day";
+}
+function canPickRangeUnit(grain) {
+  return isCyclicGrain(grain);
+}
+function includeDefaultForUnit(unit) {
+  return unit === "day" || unit === "hour";
+}
+function includeLabelForUnit(unit) {
+  return INCLUDE_LABEL[unit] || "Include today";
+}
+function calendarUnit(unit, fallback) {
+  return RANGE_UNITS.includes(unit) ? unit : fallback;
+}
+function presetsFor(grain) {
+  return (RANGE_PRESETS[grain] || RANGE_PRESETS.day).filter((p) => p.value);
+}
 function choiceFromSaved(grain) {
+  const defs = GRAIN_DEFAULTS[grain] || GRAIN_DEFAULTS.day;
   const mode = saved.range_mode || "last";
-  const n = String(saved.range_n || GRAIN_DEFAULTS[grain].n);
+  const n = String(saved.range_n || defs.n);
+  const unit = saved.range_unit || rangeWindowUnit(grain);
+  const presets = presetsFor(grain);
   if (mode === "custom") return "custom";
-  if (mode === "this" || mode === "previous") return mode + ":" + (saved.range_unit || grain);
-  if (mode === "last" && (NAMED_LAST[grain] || []).includes(n)) return "last:" + n + ":" + grain;
-  if (mode === "last") return "last:n";
-  return GRAIN_DEFAULTS[grain].choice;
+  if (mode === "this" || mode === "previous") {
+    const v = mode + ":" + unit;
+    if (presets.some((p) => p.value === v)) return v;
+    return defs.choice;
+  }
+  if (mode === "last") {
+    const named = "last:" + n + ":" + unit;
+    if (presets.some((p) => p.value === named)) return named;
+    return "last:n";
+  }
+  return defs.choice;
 }
 function saveRangeForGrain(grain) {
   rangeByGrain[grain] = {
     choice: rangeChoiceEl.value || GRAIN_DEFAULTS[grain].choice,
     n: Number(rangeNEl.value) || GRAIN_DEFAULTS[grain].n,
+    unit: rangeUnitEl.value || rangeWindowUnit(grain),
     includeCurrent: includeCurrentEl.checked,
   };
 }
+function setLastNUnitVisible(showSelect, unit) {
+  rangeNUnitSelect.hidden = !showSelect;
+  rangeNUnitSpan.hidden = showSelect;
+  if (showSelect) {
+    rangeNUnitSelect.value = unit;
+  } else {
+    rangeNUnitSpan.textContent = UNIT_LABEL[unit] || "days";
+  }
+}
 function applyRangeChoice() {
   const grain = currentGrain();
-  const choice = rangeChoiceEl.value || GRAIN_DEFAULTS[grain].choice;
+  const defs = GRAIN_DEFAULTS[grain] || GRAIN_DEFAULTS.day;
+  const windowUnit = rangeWindowUnit(grain);
+  const choice = rangeChoiceEl.value || defs.choice;
   const lastN = choice === "last:n";
   const lastNamed = choice.startsWith("last:") && choice !== "last:n";
   const custom = choice === "custom";
-  document.getElementById("range_n_unit").textContent = UNIT_LABEL[grain];
-  includeCurrentLabel.textContent = "Include " + GRAIN_NOUN[grain];
-  rangeLastEl.hidden = !lastN;
-  rangeIncludeEl.hidden = !(lastN || lastNamed);
+  const pickUnit = canPickRangeUnit(grain);
   customRangeEl.hidden = !custom;
+  rangeLastEl.hidden = !lastN;
   if (custom) {
     rangeModeEl.value = "custom";
-    rangeUnitEl.value = grain;
+    if (pickUnit) {
+      rangeUnitEl.value = calendarUnit(rangeUnitEl.value, windowUnit);
+    } else {
+      rangeUnitEl.value = windowUnit;
+    }
+    rangeIncludeEl.hidden = true;
+    setLastNUnitVisible(false, rangeUnitEl.value);
     syncCustomKind();
     snapCustomDates();
     saveRangeForGrain(grain);
@@ -2252,8 +2486,15 @@ function applyRangeChoice() {
   }
   if (lastN) {
     rangeModeEl.value = "last";
-    rangeUnitEl.value = grain;
-    includeCurrentEl.checked = rangeByGrain[grain].includeCurrent;
+    const stored = rangeByGrain[grain] || {};
+    const unit = pickUnit
+      ? calendarUnit(stored.unit || rangeUnitEl.value, windowUnit)
+      : windowUnit;
+    rangeUnitEl.value = unit;
+    setLastNUnitVisible(pickUnit, unit);
+    includeCurrentLabel.textContent = includeLabelForUnit(unit);
+    rangeIncludeEl.hidden = false;
+    includeCurrentEl.checked = stored.includeCurrent;
     saveRangeForGrain(grain);
     return;
   }
@@ -2261,13 +2502,18 @@ function applyRangeChoice() {
   if (parts[0] === "last") {
     rangeModeEl.value = "last";
     rangeNEl.value = parts[1];
-    rangeUnitEl.value = grain;
+    rangeUnitEl.value = parts[2] || windowUnit;
+    setLastNUnitVisible(false, rangeUnitEl.value);
+    includeCurrentLabel.textContent = includeLabelForUnit(rangeUnitEl.value);
+    rangeIncludeEl.hidden = false;
     includeCurrentEl.checked = rangeByGrain[grain].includeCurrent;
     saveRangeForGrain(grain);
     return;
   }
   rangeModeEl.value = parts[0];
-  rangeUnitEl.value = parts[1] || grain;
+  rangeUnitEl.value = parts[1] || windowUnit;
+  rangeIncludeEl.hidden = true;
+  setLastNUnitVisible(false, rangeUnitEl.value);
   saveRangeForGrain(grain);
 }
 function isoDate(d) {
@@ -2284,8 +2530,9 @@ function parseIsoDate(value) {
 }
 function grainStart(d, grain) {
   const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  if (grain === "day") return x;
-  if (grain === "month") return new Date(x.getFullYear(), x.getMonth(), 1);
+  const snap = (grain === "week" || grain === "month") ? grain : "day";
+  if (snap === "day") return x;
+  if (snap === "month") return new Date(x.getFullYear(), x.getMonth(), 1);
   const want = document.getElementById("week_start").value === "sunday" ? 0 : 1;
   const delta = (x.getDay() - want + 7) % 7;
   x.setDate(x.getDate() - delta);
@@ -2293,18 +2540,31 @@ function grainStart(d, grain) {
 }
 function grainEndInclusive(d, grain) {
   const start = grainStart(d, grain);
-  if (grain === "day") return start;
-  if (grain === "week") return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  const snap = (grain === "week" || grain === "month") ? grain : "day";
+  if (snap === "day") return start;
+  if (snap === "week") return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
   return new Date(start.getFullYear(), start.getMonth() + 1, 0);
 }
 function syncCustomKind() {
   const rel = customKindEl.value === "relative";
   customAbsoluteEl.hidden = rel;
   customRelativeEl.hidden = !rel;
-  const unit = UNIT_LABEL[currentGrain()] || "days";
-  document.getElementById("rel_unit_from").textContent = unit;
-  document.getElementById("rel_unit_to").textContent = unit;
-  document.getElementById("custom-rel-hint").textContent = "0 = this " + currentGrain() + ".";
+  const grain = currentGrain();
+  const windowUnit = rangeWindowUnit(grain);
+  const pick = canPickRangeUnit(grain);
+  const unit = pick
+    ? calendarUnit(rangeUnitEl.value, windowUnit)
+    : windowUnit;
+  rangeUnitEl.value = unit;
+  relUnitSelect.hidden = !pick;
+  relUnitLabel.hidden = pick;
+  if (pick) {
+    relUnitSelect.value = unit;
+  } else {
+    relUnitLabel.textContent = (UNIT_LABEL[unit] || "days") + " ago";
+  }
+  const noun = GRAIN_NOUN[grain] || "this period";
+  customRelativeEl.title = "0 = " + (pick ? (UNIT_LABEL[unit] ? "this " + unit : noun) : noun) + ".";
 }
 function snapCustomDates() {
   if (customKindEl.value === "relative") return;
@@ -2321,7 +2581,7 @@ function snapCustomDates() {
   const e = isoDate(snappedEnd);
   startDateEl.value = s;
   endDateEl.value = e;
-  if (grain === "day") {
+  if (grain === "day" || grain === "hour" || isCyclicGrain(grain)) {
     customSnapHint.hidden = true;
     return;
   }
@@ -2332,13 +2592,16 @@ function seedRangeChoice() {
   const grain = currentGrain();
   const unit = saved.range_unit || "day";
   const mode = saved.range_mode || "last";
+  const windowUnit = rangeWindowUnit(grain);
   const coarserThis = (mode === "this" || mode === "previous")
-    && (GRAIN_RANK[unit] || 0) >= (GRAIN_RANK[grain] || 0);
-  if (mode === "custom" || unit === grain || coarserThis) {
+    && (GRAIN_RANK[unit] || 0) >= (GRAIN_RANK[windowUnit] || 0);
+  const cyclicSaved = isCyclicGrain(grain) && RANGE_UNITS.includes(unit);
+  if (mode === "custom" || unit === grain || unit === windowUnit || coarserThis || cyclicSaved) {
     rangeByGrain[grain] = {
       choice: choiceFromSaved(grain),
       n: Number(saved.range_n) || GRAIN_DEFAULTS[grain].n,
-      includeCurrent: grain === "day"
+      unit: unit,
+      includeCurrent: (grain === "day" || grain === "hour" || grain === "hour_of_day")
         ? !!(saved.include_current || !saved.exclude_current)
         : !!saved.include_current,
     };
@@ -2346,30 +2609,82 @@ function seedRangeChoice() {
   const state = rangeByGrain[grain];
   fillRangeOptions(grain, state.choice);
   rangeNEl.value = state.n;
+  if (state.unit) rangeUnitEl.value = state.unit;
   includeCurrentEl.checked = state.includeCurrent;
   applyRangeChoice();
 }
 let activeGrain = currentGrain();
-rangeChoiceEl.addEventListener("change", applyRangeChoice);
+function onRangeChoiceChange() {
+  const grain = currentGrain();
+  const choice = rangeChoiceEl.value || "";
+  const parts = choice.split(":");
+  if (parts[0] === "last") {
+    const unit = parts[2] || (choice === "last:n"
+      ? calendarUnit(rangeByGrain[grain].unit || rangeUnitEl.value, rangeWindowUnit(grain))
+      : rangeWindowUnit(grain));
+    const prevUnit = rangeByGrain[grain].unit || rangeUnitEl.value;
+    if (unit !== prevUnit) {
+      includeCurrentEl.checked = includeDefaultForUnit(unit);
+      rangeByGrain[grain].includeCurrent = includeCurrentEl.checked;
+    }
+    if (parts[2]) rangeByGrain[grain].unit = parts[2];
+  }
+  applyRangeChoice();
+}
+rangeChoiceEl.addEventListener("change", onRangeChoiceChange);
 includeCurrentEl.addEventListener("change", () => saveRangeForGrain(currentGrain()));
 rangeNEl.addEventListener("change", () => saveRangeForGrain(currentGrain()));
+rangeNUnitSelect.addEventListener("change", () => {
+  rangeUnitEl.value = rangeNUnitSelect.value;
+  includeCurrentLabel.textContent = includeLabelForUnit(rangeUnitEl.value);
+  includeCurrentEl.checked = includeDefaultForUnit(rangeUnitEl.value);
+  saveRangeForGrain(currentGrain());
+});
+relUnitSelect.addEventListener("change", () => {
+  rangeUnitEl.value = relUnitSelect.value;
+  syncCustomKind();
+  saveRangeForGrain(currentGrain());
+});
 startDateEl.addEventListener("change", snapCustomDates);
 endDateEl.addEventListener("change", snapCustomDates);
-customKindEl.addEventListener("change", () => { syncCustomKind(); snapCustomDates(); });
+customKindEl.addEventListener("change", () => { syncCustomKind(); snapCustomDates(); saveRangeForGrain(currentGrain()); });
 grainEl.addEventListener("change", () => {
   saveRangeForGrain(activeGrain);
   activeGrain = currentGrain();
   const state = rangeByGrain[activeGrain];
   fillRangeOptions(activeGrain, state.choice);
   rangeNEl.value = state.n;
+  if (state.unit) rangeUnitEl.value = state.unit;
   includeCurrentEl.checked = state.includeCurrent;
   applyRangeChoice();
 });
 seedRangeChoice();
 activeGrain = currentGrain();
 
+function formatHourLabel(h) {
+  const list = FILTER_UI.hours || [];
+  if (list[h] != null) return list[h];
+  return String(h);
+}
+function formatWeekdayLabel(i) {
+  const names = FILTER_UI.weekdays || [];
+  return names[i] || String(i);
+}
 function bucketLabel(raw) {
+  const grain = (typeof resultGrain === "function" && resultGrain()) || currentGrain();
   const s = String(raw ?? "");
+  if (grain === "hour_of_day") {
+    const n = parseInt(s, 10);
+    return Number.isFinite(n) ? formatHourLabel(n) : s;
+  }
+  if (grain === "day_of_week") {
+    const n = parseInt(s, 10);
+    return Number.isFinite(n) ? formatWeekdayLabel(n) : s;
+  }
+  if (grain === "hour") {
+    const hm = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2})/);
+    if (hm) return hm[1] + " " + formatHourLabel(parseInt(hm[2], 10));
+  }
   const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
   return m ? m[1] : s;
 }
@@ -2666,8 +2981,7 @@ function resultKey(body) {
   ].join("\0");
 }
 function draftGrainHeader() {
-  const g = currentGrain();
-  return g ? g.charAt(0).toUpperCase() + g.slice(1) : "Day";
+  return GRAIN_HEADERS[currentGrain()] || "Day";
 }
 function draftValueHeader() {
   const units = collectSeries();
@@ -2825,13 +3139,19 @@ let raiseLimitOnce = false;
 function effectiveRowLimit() {
   return runRowLimit || setupRowLimit();
 }
-function renderTable() {
-  syncTableHeaders();
-  const tbody = document.getElementById("rows");
-  tbody.innerHTML = "";
-  const ranked = [...tableRows].sort((a, b) => {
-    const av = rowSortValue(a, sortKey);
-    const bv = rowSortValue(b, sortKey);
+function rankedTableRows() {
+  if (!sortKey) return tableRows;
+  const grain = resultGrain();
+  return [...tableRows].sort((a, b) => {
+    let av;
+    let bv;
+    if (sortKey === "bucket" && (grain === "day_of_week" || grain === "hour_of_day")) {
+      av = a.bucketRaw;
+      bv = b.bucketRaw;
+    } else {
+      av = rowSortValue(a, sortKey);
+      bv = rowSortValue(b, sortKey);
+    }
     const an = Number(av);
     const bn = Number(bv);
     let cmp;
@@ -2839,6 +3159,12 @@ function renderTable() {
     else cmp = String(av ?? "").localeCompare(String(bv ?? ""), undefined, { numeric: true });
     return cmp * sortDir;
   });
+}
+function renderTable() {
+  syncTableHeaders();
+  const tbody = document.getElementById("rows");
+  tbody.innerHTML = "";
+  const ranked = rankedTableRows();
   const dims = tableDimKeys();
   for (const row of ranked) {
     const tr = document.createElement("tr");
@@ -2911,7 +3237,7 @@ function exportCsv() {
     return;
   }
   const lines = [tableHeaderRow().map(csvCell).join(",")];
-  for (const row of tableRows) {
+  for (const row of rankedTableRows()) {
     const cells = hasSeries()
       ? [row.bucket, row.series, row.value, row.incomplete ? "true" : "false"]
       : [row.bucket, row.value, row.incomplete ? "true" : "false"];
@@ -2957,7 +3283,7 @@ document.getElementById("copy-table").addEventListener("click", async () => {
   const lines = [hasSeries()
     ? grainHeader() + "\t" + seriesHeader() + "\t" + valueHeader()
     : grainHeader() + "\t" + valueHeader()];
-  for (const row of tableRows) {
+  for (const row of rankedTableRows()) {
     lines.push(hasSeries()
       ? displayBucket(row) + "\t" + row.series + "\t" + formatValue(row.value)
       : displayBucket(row) + "\t" + formatValue(row.value));
@@ -3070,6 +3396,7 @@ function seriesNames() {
 function effectiveChartType(n) {
   const chosen = document.getElementById("chart_type").value || "auto";
   if (chosen !== "auto") return chosen;
+  if (isCyclicGrain(resultGrain())) return "bar";
   return n <= 2 ? "bar" : "line";
 }
 function setChartEmpty(kind) {
@@ -3123,8 +3450,9 @@ function drawChart() {
   const hasIncomplete = shown.some((r) => r.incomplete);
   const grain = resultGrain();
   note.hidden = !hasIncomplete;
+  const through = grain === "hour" ? " (through this hour)." : " (through today).";
   note.textContent = hasIncomplete
-    ? (isBar ? "Faded bar is the current " : "Dotted point is the current ") + grain + " (through today)."
+    ? (isBar ? "Faded bar is the current " : "Dotted point is the current ") + grain + through
     : "";
   if (labels.length <= 2 && (document.getElementById("chart_type").value || "auto") === "auto") {
     note.hidden = false;
@@ -3360,6 +3688,7 @@ form.addEventListener("submit", async (e) => {
       });
       return {
         bucket: bucketLabel(row.bucket),
+        bucketRaw: row.bucket,
         value: row.value,
         series: seriesFromRow(row),
         dims,
@@ -3367,6 +3696,8 @@ form.addEventListener("submit", async (e) => {
         incomplete: !!row.incomplete,
       };
     });
+    sortKey = "";
+    sortDir = 1;
     renderTable();
     drawChart();
     showLimitNote(!!data.truncated, data.limit || effectiveRowLimit());

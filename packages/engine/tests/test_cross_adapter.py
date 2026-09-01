@@ -63,6 +63,9 @@ def _form(kind: str, **extra):
 def test_events_sql_from_form_emits_without_warnings(kind, sqlglot_warnings):
     events_sql_from_form(_form(kind))
     events_sql_from_form(_form(kind, grain="week", range_mode="last", range_n=8, range_unit="week"))
+    events_sql_from_form(_form(kind, grain="hour", range_mode="last", range_n=24, range_unit="hour"))
+    events_sql_from_form(_form(kind, grain="day_of_week"))
+    events_sql_from_form(_form(kind, grain="hour_of_day"))
     events_sql_from_form(_form(kind, breakdown_column="country"))
     events_sql_from_form(
         _form(
@@ -76,6 +79,17 @@ def test_events_sql_from_form_emits_without_warnings(kind, sqlglot_warnings):
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned for {kind}: {sqlglot_warnings.messages}"
     )
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
+def test_hour_grains_leave_no_placeholders(kind):
+    for grain, extra in (
+        ("hour", {"range_mode": "last", "range_n": 24, "range_unit": "hour"}),
+        ("day_of_week", {}),
+        ("hour_of_day", {}),
+    ):
+        sql = events_sql_from_form(_form(kind, grain=grain, **extra))
+        assert "FACTCAT_" not in sql.upper(), sql
 
 
 @pytest.mark.parametrize("kind", list(ADAPTERS))

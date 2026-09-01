@@ -28,6 +28,10 @@ window functions. These constructs do not survive cleanly:
    UTC) so partition pruning can fire.
 7. **Catalog cache DDL.** ``CREATE MATERIALIZED VIEW`` / ``CREATE TABLE``
    as a wrapper around a GROUP BY select. Not transpile.
+8. **Hour trunc / hour-of-day / weekday index in a reporting timezone.**
+   sqlglot will not emit BigQuery ``DATETIME(ts, tz)`` plus
+   ``DATETIME_TRUNC(..., HOUR)``, nor Monday=0
+   ``MOD(EXTRACT(DAYOFWEEK) + 5, 7)``. Same splice as calendar dates.
 
 Everything else is one emitter.
 """
@@ -480,9 +484,124 @@ def create_or_replace_relation(
     return f"CREATE OR REPLACE {kind} {dest} AS {select_sql}"
 
 
+def _civil_datetime(expr: str, dialect: str, timezone: str, time_kind: str) -> str:
+    """Wall-clock datetime in ``timezone`` for EXTRACT / hour trunc."""
+    tz = (timezone or "UTC").strip() or "UTC"
+    if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
+        raise ValueError("timezone must be an IANA name")
+    kind = (time_kind or "utc").strip().lower()
+    if kind in UNIX_KINDS:
+        inst = from_unix(expr, dialect, kind)
+        if dialect == "bigquery":
+            return f"DATETIME({inst}, '{tz}')"
+        if dialect == "snowflake":
+            return f"CONVERT_TIMEZONE('{tz}', {inst})"
+        return inst
+    if dialect == "bigquery":
+        if kind == "reporting":
+            return f"CAST({expr} AS DATETIME)"
+        return f"DATETIME(CAST({expr} AS TIMESTAMP), '{tz}')"
+    if dialect == "snowflake":
+        if kind == "reporting":
+            return f"CAST({expr} AS TIMESTAMP_NTZ)"
+        if kind == "instant":
+            return f"CONVERT_TIMEZONE('{tz}', {expr})"
+        return f"CONVERT_TIMEZONE('UTC', '{tz}', {expr})"
+    return f"CAST({expr} AS TIMESTAMP)"
+
+
+def hour_trunc(expr: str, dialect: str, timezone: str, time_kind: str) -> str:
+    """Truncate to the hour in the reporting timezone. Not DATE."""
+    civil = _civil_datetime(expr, dialect, timezone, time_kind)
+    if dialect == "bigquery":
+        return f"DATETIME_TRUNC({civil}, HOUR)"
+    if dialect == "snowflake":
+        return f"DATE_TRUNC('HOUR', {civil})"
+    return f"date_trunc('hour', {civil})"
+
+
+def hour_of_day(expr: str, dialect: str, timezone: str, time_kind: str) -> str:
+    """0–23 in the reporting timezone."""
+    civil = _civil_datetime(expr, dialect, timezone, time_kind)
+    if dialect == "snowflake":
+        return f"HOUR({civil})"
+    return f"EXTRACT(HOUR FROM {civil})"
+
+
+def weekday_index(expr: str, dialect: str, timezone: str, time_kind: str) -> str:
+    """Monday=0 … Sunday=6 in the reporting timezone."""
+    civil = _civil_datetime(expr, dialect, timezone, time_kind)
+    if dialect == "bigquery":
+        return f"MOD(EXTRACT(DAYOFWEEK FROM {civil}) + 5, 7)"
+    if dialect == "snowflake":
+        return f"(DAYOFWEEKISO(CAST({civil} AS DATE)) - 1)"
+    return f"(CAST(EXTRACT(ISODOW FROM {civil}) AS INTEGER) - 1)"
+
+
+def hours_ago(
+    n: int,
+    dialect: str,
+    timezone: str = "UTC",
+    time_kind: str = "utc",
+) -> str:
+    """Now minus *n* hours, same type as event_time ``lhs``."""
+    if type(n) is not int or n < 0:
+        raise ValueError("hours_ago n must be a non-negative int")
+    tz = (timezone or "UTC").strip() or "UTC"
+    if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
+        raise ValueError("timezone must be an IANA name")
+    kind = (time_kind or "utc").strip().lower()
+    if dialect == "bigquery":
+        if kind == "reporting":
+            return (
+                f"DATETIME_SUB(CURRENT_DATETIME('{tz}'), INTERVAL {n} HOUR)"
+            )
+        return f"TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {n} HOUR)"
+    if dialect == "snowflake":
+        if kind == "reporting":
+            return (
+                f"DATEADD('hour', -{n}, CAST(CONVERT_TIMEZONE('{tz}', "
+                f"CURRENT_TIMESTAMP()) AS TIMESTAMP_NTZ))"
+            )
+        if kind == "instant" or kind in UNIX_KINDS:
+            return (
+                f"DATEADD('hour', -{n}, CONVERT_TIMEZONE('{tz}', "
+                f"CURRENT_TIMESTAMP()))"
+            )
+        return (
+            f"DATEADD('hour', -{n}, CONVERT_TIMEZONE('UTC', CURRENT_TIMESTAMP()))"
+        )
+    return f"(CURRENT_TIMESTAMP - INTERVAL {n} HOUR)"
+
+
+def current_hour_start(
+    dialect: str, timezone: str = "UTC", time_kind: str = "utc"
+) -> str:
+    """Start of the current reporting hour, same type as event_time ``lhs``."""
+    tz = (timezone or "UTC").strip() or "UTC"
+    if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
+        raise ValueError("timezone must be an IANA name")
+    kind = (time_kind or "utc").strip().lower()
+    if dialect == "bigquery":
+        civil = f"DATETIME_TRUNC(CURRENT_DATETIME('{tz}'), HOUR)"
+        if kind == "reporting":
+            return civil
+        return f"TIMESTAMP({civil}, '{tz}')"
+    if dialect == "snowflake":
+        civil = (
+            f"DATE_TRUNC('HOUR', CONVERT_TIMEZONE('{tz}', CURRENT_TIMESTAMP()))"
+        )
+        if kind == "reporting":
+            return f"CAST({civil} AS TIMESTAMP_NTZ)"
+        if kind == "instant" or kind in UNIX_KINDS:
+            return civil
+        return f"CONVERT_TIMEZONE('{tz}', 'UTC', {civil})"
+    return "date_trunc('hour', CURRENT_TIMESTAMP)"
+
+
 def bucket_out(expr: str = "fc_bucket") -> str:
-    """Result time-axis column. Always DATE so ORDER BY is not DATETIME/TIMESTAMP."""
-    return f"CAST({expr} AS DATE) AS bucket"
+    """Result time-axis column. Type follows the spec bucket (DATE, timestamp, or int)."""
+    return f"{expr} AS bucket"
 
 
 _PERIOD_RE = re.compile(
@@ -590,4 +709,58 @@ def splice_placeholders(sql: str, dialect: str) -> str:
         kind = parts[2].strip().strip("'").strip('"')
         return timestamp_at_date(parts[0], dialect, tz, kind)
 
-    return _replace_func_calls(sql, "factcat_ts_at_date", ts_at_date)
+    def _tz_kind_call(
+        inner: str, name: str, fn: Callable[[str, str, str, str], str]
+    ) -> str:
+        parts = _split_top_args(inner)
+        if len(parts) != 3:
+            raise ValueError(f"{name} expects expr, timezone, kind")
+        tz = parts[1].strip().strip("'").strip('"')
+        kind = parts[2].strip().strip("'").strip('"')
+        return fn(parts[0], dialect, tz, kind)
+
+    sql = _replace_func_calls(sql, "factcat_ts_at_date", ts_at_date)
+    sql = _replace_func_calls(
+        sql,
+        "factcat_hour_trunc",
+        lambda inner: _tz_kind_call(inner, "factcat_hour_trunc", hour_trunc),
+    )
+    sql = _replace_func_calls(
+        sql,
+        "factcat_hour_of_day",
+        lambda inner: _tz_kind_call(inner, "factcat_hour_of_day", hour_of_day),
+    )
+    sql = _replace_func_calls(
+        sql,
+        "factcat_dow",
+        lambda inner: _tz_kind_call(inner, "factcat_dow", weekday_index),
+    )
+
+    def hours_ago_call(inner: str) -> str:
+        parts = _split_top_args(inner)
+        if not parts:
+            raise ValueError("factcat_hours_ago expects an integer")
+        try:
+            n = int(parts[0].strip())
+        except ValueError as exc:
+            raise ValueError("factcat_hours_ago expects an integer") from exc
+        if len(parts) == 1:
+            return hours_ago(n, dialect)
+        if len(parts) != 3:
+            raise ValueError("factcat_hours_ago expects n, timezone, kind")
+        tz = parts[1].strip().strip("'").strip('"')
+        kind = parts[2].strip().strip("'").strip('"')
+        return hours_ago(n, dialect, tz, kind)
+
+    def current_hour_call(inner: str) -> str:
+        parts = _split_top_args(inner)
+        if len(parts) != 2:
+            raise ValueError("factcat_current_hour_start expects timezone, kind")
+        tz = parts[0].strip().strip("'").strip('"')
+        kind = parts[1].strip().strip("'").strip('"')
+        return current_hour_start(dialect, tz, kind)
+
+    sql = _replace_func_calls(sql, "factcat_hours_ago", hours_ago_call)
+    return _replace_func_calls(
+        sql, "factcat_current_hour_start", current_hour_call
+    )

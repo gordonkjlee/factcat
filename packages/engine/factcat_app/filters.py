@@ -105,6 +105,19 @@ FILTER_FAMILY_OPS: dict[str, tuple[str, ...]] = {
         "is_null",
         "is_not_null",
     ),
+    "hourname": (
+        "is",
+        "is_not",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "between",
+        "is_any_of",
+        "is_none_of",
+        "is_null",
+        "is_not_null",
+    ),
     "monthname": (
         "is",
         "is_not",
@@ -187,7 +200,7 @@ FILTER_DATE_PARTS: tuple[dict[str, Any], ...] = (
         "id": "hour_of_day",
         "label": "Hour of day (0-23)",
         "group": "Extract",
-        "family": "numeric",
+        "family": "hourname",
         "extract": "HOUR",
         "hour": True,
         "min": 0,
@@ -377,14 +390,23 @@ def filter_ui(prefs: dict[str, Any] | None = None) -> dict[str, Any]:
             key: FILTER_OP_SQL_LABELS.get(key, label)
             for key, label in FILTER_OP_NUMERIC_LABELS.items()
         }
-    pad = bool(prefs.get("pad_calendar"))
+    from .prefs import _validate, format_hour, hour_labels
+
+    prefs = _validate(prefs)
+
+    pad_day = bool(prefs.get("pad_day"))
+    hours = hour_labels(prefs)
+    hod_lo = format_hour(0, data=prefs)
+    hod_hi = format_hour(23, data=prefs)
     parts = []
     for item in FILTER_DATE_PARTS:
         row = dict(item)
         if row.get("id") == "hour_of_day":
-            row["label"] = "Hour of day (00-23)" if pad else "Hour of day (0-23)"
+            row["label"] = f"Hour of day ({hod_lo}–{hod_hi})"
         if row.get("id") == "day_of_month":
-            row["label"] = "Day of month (01-31)" if pad else "Day of month (1-31)"
+            row["label"] = (
+                "Day of month (01-31)" if pad_day else "Day of month (1-31)"
+            )
         parts.append(row)
     return {
         "type_family": dict(FILTER_TYPE_FAMILY),
@@ -395,13 +417,16 @@ def filter_ui(prefs: dict[str, Any] | None = None) -> dict[str, Any]:
         "date_parts": parts,
         "weekdays": display_weekdays(str(prefs.get("weekday_style") or "long")),
         "months": display_months(str(prefs.get("month_style") or "long")),
+        "hours": hours,
         "integer_types": sorted(FILTER_INTEGER_TYPES),
         "numeric_op_labels": numeric_labels,
         "chrome": dict(CHROME[vocab]),
         "vocab": vocab,
         "thousand_sep": str(prefs.get("thousand_sep") or "comma"),
         "decimal_sep": str(prefs.get("decimal_sep") or "period"),
-        "pad_calendar": pad,
+        "pad_day": pad_day,
+        "hour_style": str(prefs.get("hour_style") or "3"),
+        "weekday_style": str(prefs.get("weekday_style") or "long"),
     }
 
 

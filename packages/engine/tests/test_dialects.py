@@ -25,6 +25,7 @@ from factcat._emit import GRID_RELATION, transpile_with_grid
 from factcat.dialects import (
     as_instant,
     create_or_replace_relation,
+    hour_trunc,
     period_start_shifted,
     splice_placeholders,
     timestamp_at_date,
@@ -170,6 +171,30 @@ EVENTS_WEEK = EventsSpec(
     ),
 )
 
+EVENTS_HOUR = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="uniques",
+    bucket="factcat_hour_trunc(fc_event_ts, 'UTC', 'utc')",
+)
+
+EVENTS_DOW = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    bucket="factcat_dow(fc_event_ts, 'UTC', 'utc')",
+)
+
+EVENTS_HOD = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    bucket="factcat_hour_of_day(fc_event_ts, 'UTC', 'utc')",
+)
+
 EVENTS_TZ = EventsSpec(
     table="events",
     entity="entity_id",
@@ -234,6 +259,9 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS_UNIQUES_EXACT, dialect=dialect)
     events_sql(EVENTS_WEEK, dialect=dialect)
     events_sql(EVENTS_TZ, dialect=dialect)
+    events_sql(EVENTS_HOUR, dialect=dialect)
+    events_sql(EVENTS_DOW, dialect=dialect)
+    events_sql(EVENTS_HOD, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_APPROX, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_SUM_APPROX, dialect=dialect)
@@ -243,6 +271,47 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
     )
+
+
+def test_hour_trunc_rejects_non_iana_timezone():
+    with pytest.raises(ValueError, match="IANA"):
+        hour_trunc("occurred_at", "bigquery", "UTC'); DROP TABLE t; --", "utc")
+
+
+def test_snowflake_hour_placeholders_are_spliced():
+    hour = events_sql(EVENTS_HOUR, dialect="snowflake")
+    assert "FACTCAT_" not in hour.upper()
+    assert "DATE_TRUNC" in hour.upper()
+    dow = events_sql(EVENTS_DOW, dialect="snowflake")
+    assert "FACTCAT_" not in dow.upper()
+    assert "DAYOFWEEKISO" in dow.upper()
+    hod = events_sql(EVENTS_HOD, dialect="snowflake")
+    assert "FACTCAT_" not in hod.upper()
+    assert "HOUR(" in hod.upper().replace(" ", "")
+
+
+def test_splice_uppercase_hour_trunc_on_snowflake():
+    sql = splice_placeholders(
+        "FACTCAT_HOUR_TRUNC(fc_event_ts, 'UTC', 'utc')",
+        "snowflake",
+    )
+    assert "FACTCAT_" not in sql.upper()
+    assert "DATE_TRUNC" in sql.upper()
+
+
+def test_hours_ago_reporting_is_civil_on_bigquery():
+    sql = splice_placeholders(
+        "factcat_hours_ago(24, 'Europe/Berlin', 'reporting')",
+        "bigquery",
+    )
+    assert "CURRENT_DATETIME('Europe/Berlin')" in sql
+    assert "DATETIME_SUB" in sql
+    bound = splice_placeholders(
+        "factcat_current_hour_start('Europe/Berlin', 'utc')",
+        "bigquery",
+    )
+    assert "TIMESTAMP(" in bound
+    assert "CURRENT_DATETIME('Europe/Berlin')" in bound
 
 
 def test_bigquery_exact_median_uses_percentile_cont():

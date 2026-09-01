@@ -14,7 +14,7 @@
       border: 1px solid var(--fc-line);
       border-radius: 0.75rem;
       padding: 1.4rem 1.5rem 1.6rem;
-      max-width: 38rem;
+      max-width: 42rem;
     }
     .prefs-head {
       display: flex;
@@ -41,6 +41,56 @@
     #theme-btn .icon-moon { display: none; }
     #theme-btn[data-theme="dark"] .icon-sun { display: none; }
     #theme-btn[data-theme="dark"] .icon-moon { display: block; }
+    .hour-clock {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.4rem;
+      margin: 0.15rem 0 0.65rem;
+    }
+    .hour-clock-btn {
+      margin: 0;
+      padding: 0.4rem 0.5rem;
+      background: var(--fc-paper);
+      color: var(--fc-ink);
+      border: 1px solid var(--fc-line);
+      border-radius: 0.35rem;
+      font: inherit;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .hour-clock-btn:hover { border-color: var(--fc-ochre); }
+    .hour-clock-btn[aria-pressed="true"] {
+      border-color: var(--fc-ochre);
+      box-shadow: 0 0 0 1px var(--fc-ochre);
+      background: var(--fc-snow);
+    }
+    .hour-panel[hidden] { display: none !important; }
+    .hour-row {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: 0.55rem;
+      margin: 0 0 0.2rem;
+      padding: 0.35rem 0.45rem;
+      border: 1px solid var(--fc-line);
+      border-radius: 0.35rem;
+      cursor: pointer;
+      font-weight: 400;
+    }
+    .hour-row:has(input:checked) {
+      border-color: var(--fc-ochre);
+      box-shadow: 0 0 0 1px var(--fc-ochre);
+    }
+    .hour-row input { width: auto; margin: 0; }
+    .hour-ticks {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.35rem;
+      font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
+      font-size: 0.8rem;
+    }
     .vocab-lede {
       margin: 0 0 0.75rem;
       font-size: 0.85rem;
@@ -145,11 +195,30 @@
     <option value="long" {% if prefs.month_style != "short" %}selected{% endif %}>January</option>
     <option value="short" {% if prefs.month_style == "short" %}selected{% endif %}>Jan</option>
   </select>
-  <label for="pad_calendar">Day and hour</label>
-  <select id="pad_calendar" name="pad_calendar">
-    <option value="false" {% if not prefs.pad_calendar %}selected{% endif %}>1–31 / 0–23</option>
-    <option value="true" {% if prefs.pad_calendar %}selected{% endif %}>01–31 / 00–23</option>
+  <label for="pad_day">Day of month</label>
+  <select id="pad_day" name="pad_day">
+    <option value="false" {% if not prefs.pad_day %}selected{% endif %}>1–31</option>
+    <option value="true" {% if prefs.pad_day %}selected{% endif %}>01–31</option>
   </select>
+  <label id="hour-style-label">Time of day</label>
+  <div class="hour-clock" role="radiogroup" aria-label="12-hour or 24-hour">
+    <button type="button" class="hour-clock-btn" data-clock="12" aria-pressed="{{ 'true' if hour_clock == '12' else 'false' }}">12-hour</button>
+    <button type="button" class="hour-clock-btn" data-clock="24" aria-pressed="{{ 'true' if hour_clock != '12' else 'false' }}">24-hour</button>
+  </div>
+  {% for clock, styles in hour_styles %}
+  <div class="hour-panel" data-clock="{{ clock }}" role="radiogroup" aria-labelledby="hour-style-label" {% if clock != hour_clock %}hidden{% endif %}>
+    {% for value in styles %}
+    <label class="hour-row">
+      <input type="radio" name="hour_style" value="{{ value }}" {% if prefs.hour_style == value %}checked{% endif %}>
+      <span class="hour-ticks">
+        {% for tick in hour_previews[value] %}
+        <span>{{ tick }}</span>
+        {% endfor %}
+      </span>
+    </label>
+    {% endfor %}
+  </div>
+  {% endfor %}
 
   <button type="submit" id="save">Save</button>
   <p id="status"></p>
@@ -192,6 +261,24 @@ function syncNumExample() {
   document.getElementById(id).addEventListener("change", syncNumExample);
 });
 syncNumExample();
+const HOUR_CLOCK_DEFAULT = {{ hour_clock_default|tojson }};
+function setHourClock(clock) {
+  document.querySelectorAll(".hour-clock-btn").forEach((btn) => {
+    btn.setAttribute("aria-pressed", btn.getAttribute("data-clock") === clock ? "true" : "false");
+  });
+  document.querySelectorAll(".hour-panel").forEach((panel) => {
+    panel.hidden = panel.getAttribute("data-clock") !== clock;
+  });
+  const panel = document.querySelector('.hour-panel[data-clock="' + clock + '"]');
+  const checked = document.querySelector('input[name="hour_style"]:checked');
+  if (!panel || (checked && panel.contains(checked))) return;
+  const pick = panel.querySelector('input[value="' + HOUR_CLOCK_DEFAULT[clock] + '"]')
+    || panel.querySelector('input[name="hour_style"]');
+  if (pick) pick.checked = true;
+}
+document.querySelectorAll(".hour-clock-btn").forEach((btn) => {
+  btn.addEventListener("click", () => setHourClock(btn.getAttribute("data-clock")));
+});
 document.querySelectorAll(".vocab-card").forEach((btn) => {
   btn.addEventListener("click", () => {
     vocabEl.value = btn.getAttribute("data-vocab");
@@ -230,7 +317,7 @@ form.addEventListener("submit", async (e) => {
     return;
   }
   const body = Object.fromEntries(new FormData(form).entries());
-  body.pad_calendar = body.pad_calendar === "true";
+  body.pad_day = body.pad_day === "true";
   const saveBtn = document.getElementById("save");
   saveBtn.disabled = true;
   saveBtn.textContent = "Saving…";
