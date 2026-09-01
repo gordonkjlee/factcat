@@ -1042,6 +1042,16 @@ def test_template_ships_with_package():
     assert not (static / "logo.svg").exists()
     assert not (static / "favicon.ico").exists()
     assert (static / "waiting.jpg").is_file()
+    assert (static / "waiting-blink.jpg").is_file()
+    assert (static / "waiting-glance.jpg").is_file()
+    assert (static / "waiting-glance-mid.jpg").is_file()
+    assert (static / "empty-sniff.jpg").is_file()
+    assert (static / "unimpressed.jpg").is_file()
+    assert (static / "settled.jpg").is_file()
+    assert (static / "running-reach.jpg").is_file()
+    assert (static / "running-mid.jpg").is_file()
+    assert (static / "running-almost.jpg").is_file()
+    assert (static / "running-contact.jpg").is_file()
     assert (static / "cat-business.jpg").is_file()
     assert (static / "cat-analyst.jpg").is_file()
     assert (Path(APP_DIR) / "guides" / "setup-bigquery.md").is_file()
@@ -1082,9 +1092,54 @@ def test_chrome_uses_tokens_and_empty_state(monkeypatch, tmp_path):
     assert "/static/logo.png" in events
     assert 'class="cog"' in events
     assert "/static/waiting.jpg" in events
+    assert "/static/waiting-blink.jpg" in events
+    assert "/static/waiting-glance.jpg" in events
+    assert "/static/empty-sniff.jpg" in events
+    assert "/static/settled.jpg" in events
+    assert "/static/unimpressed.jpg" in events
+    assert "prefers-reduced-motion" in events
+    assert "startRunCat" in events
+    assert "startIdleCat" in events
+    assert "img.hidden = false" in events
+    assert "kind !== \"wait\" && kind !== \"empty\"" not in events
     assert "The cat is waiting." in events
     assert "purrfect" not in events.lower()
     assert "Fc</a>" not in events
+
+
+CHART_POSES = (
+    "waiting.jpg",
+    "waiting-blink.jpg",
+    "waiting-glance.jpg",
+    "waiting-glance-mid.jpg",
+    "empty-sniff.jpg",
+    "unimpressed.jpg",
+    "settled.jpg",
+    "running-reach.jpg",
+    "running-mid.jpg",
+    "running-almost.jpg",
+    "running-contact.jpg",
+)
+
+
+def test_chart_poses_are_served(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    static = Path(APP_DIR) / "static"
+    for name in CHART_POSES:
+        path = static / name
+        assert path.is_file(), name
+        res = client.get("/static/" + name)
+        assert res.status_code == 200, name
+        assert res.content[:2] == b"\xff\xd8"
+
+
+def test_brand_pack_has_chart_pose_masters():
+    root = Path(APP_DIR).resolve().parents[2]
+    brand = root / "brand" / "mascot"
+    assert (root / "brand" / "README.md").is_file()
+    for name in CHART_POSES:
+        assert (brand / name).is_file(), name
 
 
 def test_readme_keeps_slogan_and_points_at_the_mark():

@@ -128,6 +128,9 @@
     }
     .empty-state[hidden], canvas[hidden], .empty-state img[hidden] { display: none; }
     .empty-state img { width: 10rem; height: 10rem; object-fit: contain; margin-bottom: 0.75rem; }
+    @media (prefers-reduced-motion: reduce) {
+      #waiting-cat { animation: none; }
+    }
     #sql { margin: 0; min-height: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 0.78rem; }
     code.fc-sql {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -3763,21 +3766,133 @@ function effectiveChartType(n) {
   if (isCyclicGrain(resultGrain())) return "bar";
   return n <= 2 ? "bar" : "line";
 }
+const CAT = {
+  wait: "/static/waiting.jpg",
+  blink: "/static/waiting-blink.jpg",
+  glanceMid: "/static/waiting-glance-mid.jpg",
+  glance: "/static/waiting-glance.jpg",
+  sniff: "/static/empty-sniff.jpg",
+  fail: "/static/unimpressed.jpg",
+  run: [
+    "/static/settled.jpg",
+    "/static/running-reach.jpg",
+    "/static/running-mid.jpg",
+    "/static/running-almost.jpg",
+    "/static/running-contact.jpg",
+  ],
+};
+let catKind = "";
+let catGen = 0;
+let catTimer = 0;
+function catReduceMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+function prefetchCat() {
+  [CAT.wait, CAT.blink, CAT.glanceMid, CAT.glance, CAT.sniff, CAT.fail].concat(CAT.run).forEach((src) => {
+    const im = new Image();
+    im.src = src;
+  });
+}
+function stopCatMotion() {
+  catGen += 1;
+  if (catTimer) {
+    clearTimeout(catTimer);
+    catTimer = 0;
+  }
+}
+function setCatSrc(src) {
+  const img = document.getElementById("waiting-cat");
+  if (img && img.getAttribute("src") !== src) img.setAttribute("src", src);
+}
+function catLater(gen, ms, fn) {
+  catTimer = setTimeout(() => {
+    if (gen !== catGen) return;
+    fn();
+  }, ms);
+}
+function idleGap() {
+  return 8000 + Math.floor(Math.random() * 4000);
+}
+function playIdleBeat(glance) {
+  const gen = catGen;
+  if (catReduceMotion()) {
+    setCatSrc(CAT.wait);
+    return;
+  }
+  if (glance) {
+    setCatSrc(CAT.glanceMid);
+    catLater(gen, 160, () => {
+      setCatSrc(CAT.glance);
+      catLater(gen, 520, () => {
+        setCatSrc(CAT.glanceMid);
+        catLater(gen, 160, () => {
+          setCatSrc(CAT.wait);
+          catLater(gen, idleGap(), () => playIdleBeat(Math.random() < 0.45));
+        });
+      });
+    });
+  } else {
+    setCatSrc(CAT.blink);
+    catLater(gen, 180, () => {
+      setCatSrc(CAT.wait);
+      catLater(gen, idleGap(), () => playIdleBeat(Math.random() < 0.45));
+    });
+  }
+}
+function startIdleCat() {
+  stopCatMotion();
+  setCatSrc(CAT.wait);
+  if (catReduceMotion()) return;
+  const gen = catGen;
+  catLater(gen, idleGap(), () => playIdleBeat(Math.random() < 0.45));
+}
+function startRunCat() {
+  stopCatMotion();
+  const gen = catGen;
+  const frames = CAT.run;
+  let i = 0;
+  let dir = 1;
+  setCatSrc(frames[0]);
+  if (catReduceMotion()) return;
+  function step() {
+    if (gen !== catGen) return;
+    i += dir;
+    if (i >= frames.length - 1) dir = -1;
+    if (i <= 0) dir = 1;
+    setCatSrc(frames[i]);
+    catTimer = setTimeout(step, 280);
+  }
+  catTimer = setTimeout(step, 280);
+}
 function setChartEmpty(kind) {
   const empty = document.getElementById("chart-empty");
   const img = document.getElementById("waiting-cat");
   const copy = document.getElementById("empty-copy");
   if (kind === "none") {
     empty.hidden = true;
+    stopCatMotion();
+    catKind = "none";
     return;
   }
   empty.hidden = false;
-  img.hidden = kind !== "wait" && kind !== "empty";
+  img.hidden = false;
   if (kind === "running") copy.textContent = "Running…";
   else if (kind === "fail") copy.textContent = "Query failed.";
   else if (kind === "empty") copy.textContent = "Nothing to `cat`.";
   else if (document.getElementById("needs-setup")) copy.textContent = "Map a table on Setup before Events can run.";
   else copy.textContent = "No rows yet. The cat is waiting.";
+  if (kind === catKind) return;
+  catKind = kind;
+  if (kind === "running") startRunCat();
+  else if (kind === "fail") {
+    stopCatMotion();
+    setCatSrc(CAT.fail);
+  } else if (kind === "empty") {
+    stopCatMotion();
+    setCatSrc(CAT.sniff);
+  } else {
+    startIdleCat();
+  }
 }
 function drawChart() {
   const ctx = document.getElementById("chart");
@@ -4076,5 +4191,10 @@ form.addEventListener("submit", async (e) => {
   }
 });
 scheduleEstimate();
+prefetchCat();
+if (!tableRows.length) {
+  const bootCopy = document.getElementById("empty-copy").textContent || "";
+  if (bootCopy !== "Query failed." && bootCopy !== "Running…") setChartEmpty("wait");
+}
 </script>
 {% endblock %}
