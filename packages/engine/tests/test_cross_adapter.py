@@ -199,6 +199,21 @@ def test_scan_cap_rides_the_capability_not_the_kind(kind):
         assert "maximum_bytes_billed" not in conn
 
 
+def test_scan_cap_gate_is_the_capability_not_the_kind_branch(monkeypatch):
+    """The gate must hold for a kind that reaches the non-Snowflake path.
+
+    Snowflake is kept capless by an earlier ``kind ==`` return, so it cannot
+    exercise this branch. Drop the flag on a kind that does reach it, which is
+    the shape any third adapter without a scan cap would have.
+    """
+    monkeypatch.setattr(
+        "factcat_app.query.capabilities",
+        lambda kind: capabilities(kind) - {CAP_SCAN_CAP},
+    )
+    conn = connection_from_form(_form("bigquery", project="p", location="EU"))
+    assert "maximum_bytes_billed" not in conn
+
+
 @pytest.mark.parametrize("kind", list(ADAPTERS))
 def test_estimate_gated_on_dry_run_capability(kind, monkeypatch, tmp_path):
     """A kind that cannot estimate says so instead of opening a connection."""
