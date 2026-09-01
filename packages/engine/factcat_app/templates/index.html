@@ -46,8 +46,61 @@
       opacity: 0;
     }
     .col-divider:hover::before, .col-divider.dragging::before { opacity: 1; }
-    form.workspace-form.config-collapsed .col-divider { cursor: default; }
+    form.workspace-form.config-collapsed .col-divider {
+      cursor: default;
+      width: 1.5rem;
+      margin-left: 0;
+      justify-content: flex-start;
+    }
     form.workspace-form.config-collapsed .col-divider::before { display: none; }
+    form.workspace-form.config-collapsed .col-toggle {
+      width: 1.35rem;
+      height: 3.5rem;
+      border-left: 0;
+      border-radius: 0 0.5rem 0.5rem 0;
+      color: var(--fc-ink);
+      border-color: var(--fc-slate);
+      box-shadow: 0 1px 4px color-mix(in srgb, var(--fc-ink) 22%, transparent);
+    }
+    .col-flyout {
+      position: absolute;
+      left: calc(100% + 0.3rem);
+      top: 50%;
+      transform: translateY(-50%);
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      padding: 0.25rem;
+      background: var(--fc-snow);
+      border: 1px solid var(--fc-line);
+      border-radius: 0.4rem;
+      box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--fc-ink) 18%, transparent);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.12s ease 0.18s;
+      z-index: 30;
+    }
+    .col-divider:hover .col-flyout, .col-flyout:hover {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .col-divider.dragging .col-flyout { opacity: 0; pointer-events: none; }
+    .col-flyout button {
+      margin: 0;
+      padding: 0.3rem;
+      width: 1.7rem;
+      height: 1.7rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--fc-snow);
+      color: var(--fc-slate);
+      border: 0;
+      border-radius: 0.3rem;
+      cursor: pointer;
+    }
+    .col-flyout button:hover { background: var(--fc-paper); color: var(--fc-ink); }
+    .col-flyout button svg { width: 0.9rem; height: 0.9rem; display: block; }
     .col-toggle {
       margin: 0;
       padding: 0;
@@ -781,11 +834,22 @@
     </div>
     <p id="error"></p>
   </div>
-  <div id="col-divider" class="col-divider" role="separator" aria-orientation="vertical" title="Drag to resize the query panel. Double-click to reset.">
+  <div id="col-divider" class="col-divider" role="separator" aria-orientation="vertical" aria-label="Resize the query panel">
     <button type="button" id="config-toggle" class="col-toggle" aria-expanded="{{ 'false' if config.layout_config_collapsed else 'true' }}" aria-label="{{ 'Expand the query panel' if config.layout_config_collapsed else 'Collapse the query panel' }}">
       <svg class="chev-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
       <svg class="chev-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
     </button>
+    <div class="col-flyout" role="group" aria-label="Query panel width">
+      <button type="button" id="config-collapse" title="Collapse" aria-label="Collapse the query panel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/></svg>
+      </button>
+      <button type="button" id="config-default" title="Default width" aria-label="Default query panel width">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="7" height="16" rx="1"/><rect x="13" y="4" width="8" height="16" rx="1"/></svg>
+      </button>
+      <button type="button" id="config-wide" title="Wide" aria-label="Wide query panel">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/></svg>
+      </button>
+    </div>
   </div>
   <div class="results"{% if config.layout_chart_px %} style="--fc-chart-px: {{ config.layout_chart_px }}px"{% endif %}>
     <div class="results-toolbar">
@@ -926,7 +990,7 @@
         <p id="incomplete-note" class="incomplete-note" hidden></p>
       </div>
     </section>
-    <div id="row-divider" class="row-divider" role="separator" aria-orientation="horizontal" title="Drag to resize the chart. Double-click to reset."{% if not config.pane_chart_open or not config.pane_table_open %} hidden{% endif %}></div>
+    <div id="row-divider" class="row-divider" role="separator" aria-orientation="horizontal" aria-label="Resize the chart"{% if not config.pane_chart_open or not config.pane_table_open %} hidden{% endif %}></div>
     <section class="pane pane-table{% if not config.pane_table_open %} closed{% endif %}">
       <div class="pane-head">
         <button type="button" class="pane-toggle" data-pane="table" aria-expanded="{{ 'true' if config.pane_table_open else 'false' }}" aria-controls="table-pane-body" title="{{ 'Collapse table' if config.pane_table_open else 'Expand table' }}">
@@ -4368,14 +4432,18 @@ document.getElementById("config-toggle").addEventListener("click", () => {
 });
 function bindDivider(el, opts) {
   el.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || (e.target && e.target.closest("button"))) return;
+    if (e.button !== 0 || (e.target && e.target.closest(".col-flyout"))) return;
     e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
     let moved = false;
-    if (opts.begin) opts.begin();
-    el.classList.add("dragging");
     try { el.setPointerCapture(e.pointerId); } catch (err) { /* synthetic pointers */ }
     const move = (ev) => {
-      moved = true;
+      if (!moved && Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
+      if (!moved) {
+        moved = true;
+        el.classList.add("dragging");
+      }
       opts.drag(ev);
     };
     const up = () => {
@@ -4384,19 +4452,35 @@ function bindDivider(el, opts) {
       el.removeEventListener("pointerup", up);
       el.removeEventListener("pointercancel", up);
       opts.end(moved);
+      if (moved) {
+        // A drag that started on the toggle must not fire its click.
+        el.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+        }, { capture: true, once: true });
+      }
     };
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", up);
     el.addEventListener("pointercancel", up);
   });
-  el.addEventListener("dblclick", () => opts.reset());
+  el.addEventListener("dblclick", (e) => {
+    if (e.target && e.target.closest("button")) return;
+    opts.reset();
+  });
 }
 let configColPx = 0;
+const CONFIG_COL_WIDE = 560;
+function setConfigWidth(px, persist) {
+  setConfigCollapsed(false, false);
+  configColPx = px;
+  if (px) layoutForm.style.setProperty("--fc-config-col", px + "px");
+  else layoutForm.style.removeProperty("--fc-config-col");
+  if (persist) saveLayout({ layout_config_px: px, layout_config_collapsed: false });
+}
 bindDivider(document.getElementById("col-divider"), {
-  begin: () => {
-    if (layoutForm.classList.contains("config-collapsed")) setConfigCollapsed(false, true);
-  },
   drag: (e) => {
+    if (layoutForm.classList.contains("config-collapsed")) setConfigCollapsed(false, false);
     const left = layoutForm.getBoundingClientRect().left;
     configColPx = Math.round(Math.min(configColMax(), Math.max(CONFIG_COL_MIN, e.clientX - left)));
     layoutForm.style.setProperty("--fc-config-col", configColPx + "px");
@@ -4404,11 +4488,12 @@ bindDivider(document.getElementById("col-divider"), {
   end: (moved) => {
     if (moved) saveLayout({ layout_config_px: configColPx, layout_config_collapsed: false });
   },
-  reset: () => {
-    configColPx = 0;
-    layoutForm.style.removeProperty("--fc-config-col");
-    saveLayout({ layout_config_px: 0 });
-  },
+  reset: () => setConfigWidth(0, true),
+});
+document.getElementById("config-collapse").addEventListener("click", () => setConfigCollapsed(true, true));
+document.getElementById("config-default").addEventListener("click", () => setConfigWidth(0, true));
+document.getElementById("config-wide").addEventListener("click", () => {
+  setConfigWidth(Math.min(configColMax(), CONFIG_COL_WIDE), true);
 });
 let chartHeightPx = 0;
 bindDivider(document.getElementById("row-divider"), {

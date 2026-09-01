@@ -1672,11 +1672,12 @@ def events_sql_from_form(form: dict[str, Any]) -> str:
         if grain == "hour" or grain in _CYCLIC_GRAINS
         else "CAST(bucket AS DATE)"
     )
+    cap_note = '-- safety cap, not meant to be hit; adjust "Result row limit" in Setup'
     if grain in _CYCLIC_GRAINS:
         return (
             f"SELECT * FROM (\n"
             f"  SELECT * FROM (\n{inner}\n  ) AS _fc_inner\n"
-            f"  LIMIT {n}\n"
+            f"  LIMIT {n} {cap_note}\n"
             f") AS _fc_recent\n"
             f"ORDER BY {order}"
         )
@@ -1684,7 +1685,7 @@ def events_sql_from_form(form: dict[str, Any]) -> str:
         f"SELECT * FROM (\n"
         f"  SELECT * FROM (\n{inner}\n  ) AS _fc_inner\n"
         f"  ORDER BY {order} DESC\n"
-        f"  LIMIT {n}\n"
+        f"  LIMIT {n} {cap_note}\n"
         f") AS _fc_recent\n"
         f"ORDER BY {order}"
     )
