@@ -57,8 +57,8 @@ assert form.entity == "subscription_id"
 
 eps = importlib.metadata.entry_points()
 group = eps.select(group="console_scripts") if hasattr(eps, "select") else eps.get("console_scripts", [])
-assert any(ep.name == "factcat-app" for ep in group), "factcat-app console script missing"
-print("Smoke test passed: factcat from PyPI generates SQL and has factcat-app.")
+assert any(ep.name == "factcat" for ep in group), "factcat console script missing"
+print("Smoke test passed: factcat from PyPI generates SQL and has the factcat script.")
 """
 
 

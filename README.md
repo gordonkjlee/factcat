@@ -265,7 +265,7 @@ source .venv/bin/activate
 pip install factcat
 
 cd /path/to/your/warehouse   # mapping is saved here
-factcat-app
+factcat
 ```
 
 Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): pick **BigQuery** or
@@ -372,7 +372,7 @@ report can override it for that run. The filter pane sits beside Chart, Table, a
 SQL result panes.
 
 Click **Run**. The mapping is written to `.factcat.json` in the directory where you started
-`factcat-app`, so the next start is already filled in. Add `.factcat.json` to that repo’s
+`factcat`, so the next start is already filled in. Add `.factcat.json` to that repo’s
 `.gitignore`. ADC lives in your user profile; you do not log in to Google every time you
 start the app.
 

@@ -76,6 +76,19 @@ def test_editable_install_uses_checkout(monkeypatch, tmp_path):
     assert "factcat[bigquery]" not in argv
 
 
+def test_launch_command_is_factcat():
+    from pathlib import Path
+
+    engine = Path(__file__).resolve().parents[1]
+    pyproject = (engine / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'factcat = "factcat_app.__main__:main"' in pyproject
+    assert "factcat-app" not in pyproject
+    readme = engine.parents[1] / "README.md"
+    text = readme.read_text(encoding="utf-8")
+    assert "\nfactcat\n" in text
+    assert "factcat-app" not in text
+
+
 def test_origin_follows_imported_package(monkeypatch, tmp_path):
     engine = tmp_path / "engine"
     pkg = engine / "factcat"
