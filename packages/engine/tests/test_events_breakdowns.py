@@ -418,6 +418,10 @@ SUBS = [
     ("S7", "2026-01-15 00:00:00", "subscription_started", "free"),
     ("S7", "2026-01-15 00:00:00", "subscription_started", "pro"),
     ("S7", "2026-01-16 10:00:00", "login", None),
+    # S8's only stamp lands at exactly the window's EXCLUSIVE end — the
+    # midnight snapshot job. before=end must not see it; until=end would.
+    ("S8", "2026-01-25 08:00:00", "login", None),
+    ("S8", "2026-02-01 00:00:00", "subscription_started", "edge"),
 ]
 
 WINDOW_START = "TIMESTAMP '2026-01-01 00:00:00'"
@@ -579,6 +583,26 @@ def test_asof_boundary_is_inclusive(subs):
     spec = _subs_spec(Breakdown("plan_tier", at="last", until=WINDOW_START))
     got = {(d, t): v for d, t, v in _rows(subs, spec)}
     assert got[("2026-01-02", "pro")] == 1.0  # S4: at-boundary, greatest
+
+
+def test_before_bound_excludes_the_boundary_instant(subs):
+    """S8's stamp sits at exactly the exclusive window end. ``before``
+    keeps it out (the stamp belongs to the next period); ``until`` — the
+    inclusive-anchor spelling — would read it.
+
+    Mutation: substitute ``<=`` for ``<`` (or until for before).
+    """
+    strict = _subs_spec(Breakdown("plan_tier", at="last", before=WINDOW_END))
+    got = {(d, t): v for d, t, v in _rows(subs, strict)}
+    assert got[("2026-01-25", None)] == 1.0
+    inclusive = _subs_spec(Breakdown("plan_tier", at="last", until=WINDOW_END))
+    got_inc = {(d, t): v for d, t, v in _rows(subs, inclusive)}
+    assert got_inc[("2026-01-25", "edge")] == 1.0
+    filled = _subs_spec(
+        Breakdown("plan_tier", at="last", before=WINDOW_END, backfill=True)
+    )
+    got_fill = {(d, t): v for d, t, v in _rows(subs, filled)}
+    assert got_fill[("2026-01-25", "edge")] == 1.0  # backfill from first ever
 
 
 def test_attr_same_instant_greatest_value_wins(subs):

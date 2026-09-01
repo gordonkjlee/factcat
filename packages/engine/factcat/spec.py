@@ -54,9 +54,16 @@ class Breakdown:
                    (``event_time <= until``). ``first`` / ``last`` only.
                    "State as of the window start" is ``at="last",
                    until=<window-start SQL>``.
-        backfill:  only with ``at="last"`` and ``until``: entities with no value
-                   by the bound fall back to their first recorded value ever. It
-                   never overrides a real as-of value.
+        before:    caller SQL timestamp expression; stamps strictly before it
+                   count (``event_time < before``). ``first`` / ``last`` only.
+                   The bound for an EXCLUSIVE boundary — "state at the window
+                   end" is ``at="last", before=<exclusive-end SQL>``, so a
+                   stamp at exactly that instant (a midnight snapshot job)
+                   stays outside the window it closes.
+        backfill:  only with ``at="last"`` and an upper bound (``until`` or
+                   ``before``): entities with no value by the bound fall back
+                   to their first recorded value ever. It never overrides a
+                   real as-of value.
 
     Same-instant rules, shared by every non-``rows`` mode: a stamp at exactly
     the row's (or bound's) instant is seen; duplicate stamps at one instant
@@ -68,6 +75,7 @@ class Breakdown:
     fill_from: str | None = None
     since: str | None = None
     until: str | None = None
+    before: str | None = None
     backfill: bool = False
 
     def __post_init__(self) -> None:
@@ -77,7 +85,7 @@ class Breakdown:
             raise ValueError(
                 "Breakdown.at must be 'rows', 'first', 'last', or 'carried'"
             )
-        for name in ("fill_from", "since", "until"):
+        for name in ("fill_from", "since", "until", "before"):
             value = getattr(self, name)
             if value is not None and not value.strip():
                 raise ValueError(f"Breakdown.{name} must be SQL if set")
@@ -85,10 +93,21 @@ class Breakdown:
             if self.fill_from is not None:
                 raise ValueError("fill_from does not apply to at='rows'")
         if self.at not in ("first", "last"):
-            if self.since is not None or self.until is not None:
-                raise ValueError("since/until apply only to at='first' or 'last'")
-        if self.backfill and not (self.at == "last" and self.until is not None):
-            raise ValueError("backfill requires at='last' with until set")
+            if (
+                self.since is not None
+                or self.until is not None
+                or self.before is not None
+            ):
+                raise ValueError(
+                    "since/until/before apply only to at='first' or 'last'"
+                )
+        if self.backfill and not (
+            self.at == "last"
+            and (self.until is not None or self.before is not None)
+        ):
+            raise ValueError(
+                "backfill requires at='last' with until or before set"
+            )
 
 
 @dataclass(frozen=True)

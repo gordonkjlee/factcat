@@ -176,6 +176,8 @@ def _attr_cte(
         conds.append(f"({spec.event_time}) >= ({bd.since})")
     if bounded and bd.until:
         conds.append(f"({spec.event_time}) <= ({bd.until})")
+    if bounded and bd.before:
+        conds.append(f"({spec.event_time}) < ({bd.before})")
     where = "\n              AND ".join(conds)
     return f"""
     {name} AS (

@@ -215,8 +215,9 @@ EVENTS_BREAKDOWN_ASOF_BACKFILL = EventsSpec(
     measure="total",
     exact=True,
     breakdowns=(
+        # before (strict) + backfill: the range-end shape the app emits.
         Breakdown(
-            "plan", at="last", until="TIMESTAMP '2026-01-01'", backfill=True
+            "plan", at="last", before="TIMESTAMP '2026-02-01'", backfill=True
         ),
     ),
     top_n=8,
