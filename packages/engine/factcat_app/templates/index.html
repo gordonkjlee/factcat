@@ -3,6 +3,7 @@
 {% block extra_head %}
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="/static/catalog.js"></script>
+  <script src="/static/save.js"></script>
 {% endblock %}
 {% block extra_css %}
     main.workspace {
@@ -2524,14 +2525,6 @@ function authBody() {
     data_project: dataProjectEl.value.trim(),
     credentials: credentialsEl.value.trim(),
   };
-}
-async function post(url, body) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(body),
-  });
-  return res.json();
 }
 function writeDestReady() {
   const kind = document.getElementById("kind").value || "bigquery";

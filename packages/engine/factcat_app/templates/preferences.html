@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Factcat — User Preferences{% endblock %}
+{% block extra_head %}
+    <script src="/static/save.js"></script>
+{% endblock %}
 {% block extra_css %}
     .prefs-page {
       flex: 1;
@@ -140,7 +143,6 @@
       box-shadow: 0 0 0 1px var(--fc-ochre);
       background: var(--fc-snow);
     }
-    #status { color: var(--fc-ok); font-size: 0.85rem; }
 {% endblock %}
 {% block body %}
 <div class="prefs-page">
@@ -236,9 +238,8 @@
   </div>
   {% endfor %}
 
-  <button type="submit" id="save">Save</button>
-  <p id="status"></p>
   <p id="error"></p>
+  <div id="status" class="save-toast" role="status" aria-live="polite" hidden></div>
 </form>
 </div>
 <script>
@@ -246,11 +247,13 @@ const form = document.getElementById("f");
 const vocabEl = document.getElementById("vocab");
 const themeEl = document.getElementById("theme");
 const themeBtn = document.getElementById("theme-btn");
+let suppressChange = true;
 function setError(text) {
   document.getElementById("error").textContent = text || "";
+  if (text) showToast(text, "fail");
 }
 function setStatus(text) {
-  document.getElementById("status").textContent = text || "";
+  showToast(text || "Saved", "saved");
 }
 function thousandChar() {
   const v = document.getElementById("thousand_sep").value;
@@ -293,7 +296,10 @@ function setHourClock(clock) {
   if (pick) pick.checked = true;
 }
 document.querySelectorAll(".hour-clock-btn").forEach((btn) => {
-  btn.addEventListener("click", () => setHourClock(btn.getAttribute("data-clock")));
+  btn.addEventListener("click", () => {
+    setHourClock(btn.getAttribute("data-clock"));
+    scheduleSave();
+  });
 });
 const sqlOptionsWrap = document.getElementById("sql-options-wrap");
 function syncSqlOptions() {
@@ -306,64 +312,53 @@ document.querySelectorAll(".vocab-card").forEach((btn) => {
       el.setAttribute("aria-pressed", el === btn ? "true" : "false");
     });
     syncSqlOptions();
+    scheduleSave();
   });
 });
 syncSqlOptions();
-async function applyTheme(next) {
+function applyTheme(next) {
   themeEl.value = next;
   themeBtn.setAttribute("data-theme", next);
   themeBtn.setAttribute("aria-label", next === "dark" ? "Dark" : "Light");
   document.documentElement.setAttribute("data-theme", next);
-  try {
-    const res = await fetch("/api/preferences", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ theme: next }),
-    });
-    const data = await res.json();
-    if (!data.ok) setError(data.error || "Save failed.");
-  } catch (err) {
-    setError(String(err));
-  }
 }
 themeBtn.addEventListener("click", () => {
   applyTheme(themeEl.value === "dark" ? "light" : "dark");
+  scheduleSave();
 });
 themeBtn.setAttribute("aria-label", themeEl.value === "dark" ? "Dark" : "Light");
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  setError("");
-  setStatus("");
-  if (!syncNumExample()) {
-    setError("Thousand and decimal separators must differ.");
-    return;
-  }
-  const body = Object.fromEntries(new FormData(form).entries());
-  body.pad_day = body.pad_day === "true";
-  const saveBtn = document.getElementById("save");
-  saveBtn.disabled = true;
-  saveBtn.textContent = "Saving…";
-  try {
-    const res = await fetch("/api/preferences", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
-    if (!data.ok) {
-      setError(data.error || "Save failed.");
-      return;
-    }
+const autosave = fcAutosave({
+  save: async () => {
+    const body = Object.fromEntries(new FormData(form).entries());
+    body.pad_day = body.pad_day === "true";
+    return post("/api/preferences", body);
+  },
+  onSaved: (data) => {
+    setError("");
     setStatus("Saved");
     if (data.prefs && data.prefs.theme) {
       document.documentElement.setAttribute("data-theme", data.prefs.theme);
     }
-  } catch (err) {
-    setError(String(err));
-  } finally {
-    saveBtn.disabled = false;
-    saveBtn.textContent = "Save";
-  }
+    if (data.prefs && data.prefs.vocab) {
+      document.documentElement.setAttribute("data-vocab", data.prefs.vocab);
+    }
+  },
+  onFail: (msg) => setError(msg || "Could not save preferences"),
+  suppressed: () => suppressChange,
+  gate: () => syncNumExample(),
 });
+function scheduleSave() {
+  autosave.schedule();
+}
+form.addEventListener("submit", (e) => {
+  e.preventDefault();
+  autosave.flush();
+});
+form.addEventListener("change", scheduleSave);
+form.addEventListener("input", (e) => {
+  const tag = (e.target && e.target.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA") scheduleSave();
+});
+suppressChange = false;
 </script>
 {% endblock %}

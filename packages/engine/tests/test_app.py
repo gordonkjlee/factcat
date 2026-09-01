@@ -164,8 +164,9 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "hasOwnProperty.call(body, \"event_column\")" in res.text
     assert "save-toast" in res.text
     assert "showToast" in res.text
-    assert "SAVE_PENDING_MS = 1000" in res.text
-    assert "savingSince" in res.text
+    assert "/static/save.js" in res.text
+    assert "fcAutosave" in res.text
+    assert "async function post(" not in res.text
     assert "/api/save" in res.text
     assert "window.location.href" not in res.text
     assert "Saved" in res.text
@@ -389,6 +390,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert 'id="refresh-of"' in res.text
     assert 'id="refresh-columns"' in res.text
     assert "/static/catalog.js" in res.text
+    assert "/static/save.js" in res.text
+    assert "async function post(" not in res.text
     assert "/api/event_values" in res.text
     assert "<h1>Project setup</h1>" not in res.text
     assert "GCP project that runs" not in res.text
@@ -1039,6 +1042,13 @@ def test_template_ships_with_package():
     assert (static / "logo.png").is_file()
     assert (static / "catalog.js").is_file()
     assert "bindCachedList" in (static / "catalog.js").read_text(encoding="utf-8")
+    assert (static / "save.js").is_file()
+    save_js = (static / "save.js").read_text(encoding="utf-8")
+    assert "async function post(" in save_js
+    assert "function showToast(" in save_js
+    assert "function fcAutosave(" in save_js
+    assert "SAVE_PENDING_MS = 1000" in save_js
+    assert "savingSince" in save_js
     assert not (static / "logo.svg").exists()
     assert not (static / "favicon.ico").exists()
     assert (static / "waiting.jpg").is_file()
@@ -1071,6 +1081,9 @@ def test_favicon_and_mark_are_served(monkeypatch, tmp_path):
     catalog = client.get("/static/catalog.js")
     assert catalog.status_code == 200
     assert b"bindCachedList" in catalog.content
+    save_js = client.get("/static/save.js")
+    assert save_js.status_code == 200
+    assert b"fcAutosave" in save_js.content
 
 
 def test_chrome_uses_tokens_and_empty_state(monkeypatch, tmp_path):
@@ -1675,6 +1688,16 @@ def test_preferences_renders(monkeypatch, tmp_path):
     assert "<h1>Project setup</h1>" not in res.text
     assert 'href="/setup"' in res.text
     assert "data-theme=" in res.text
+    assert 'id="save"' not in res.text
+    assert ">Save<" not in res.text
+    assert "/static/save.js" in res.text
+    assert "save-toast" in res.text
+    assert "scheduleSave" in res.text
+    assert "fcAutosave" in res.text
+    assert "/api/preferences" in res.text
+    assert 'body.pad_day = body.pad_day === "true"' in res.text
+    assert "gate: () => syncNumExample()" in res.text
+    assert '"data-vocab"' in res.text
 
 
 def test_preferences_save_roundtrip(monkeypatch, tmp_path):
