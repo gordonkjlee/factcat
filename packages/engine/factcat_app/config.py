@@ -82,6 +82,9 @@ DEFAULTS: dict[str, Any] = {
     "breakdown_expr": "",
     "breakdown_json_key": "",
     "breakdowns": [],
+    # Legacy: the app no longer sends breakdown_at (per-slot value_at
+    # superseded it); the key stays so old .factcat.json files load and
+    # fold per slot in query._slot_breakdown.
     "breakdown_at": "rows",
     "top_n": 8,
     "include_other": True,

@@ -8,7 +8,7 @@ from typing import Any
 
 from datetime import date, datetime, timedelta, timezone
 
-from factcat import EVENT_MEASURES, PROPERTY_MEASURES, EventsSpec, events_sql
+from factcat import EVENT_MEASURES, PROPERTY_MEASURES, Breakdown, EventsSpec, events_sql
 from factcat.spec import BREAKDOWN_AT
 from factcat.warehouses import (
     AdapterError,
@@ -412,10 +412,17 @@ def _normalize_range(
     return mode, unit, 1
 
 
-def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
-    """Sugar on event_time. Window unit is the range filter, not always the grain."""
+def _window_recipes(
+    form: dict[str, Any],
+) -> tuple[tuple[str, Any], tuple[str, Any] | None]:
+    """Boundary recipes for the chart window: (start, end-exclusive).
+
+    Each recipe is ``("date", date_sql)``, ``("hours_ago", n)``, or
+    ``("hour_start", None)``; the end is ``None`` when the window runs to
+    now. One definition — the window WHERE clauses and the breakdown
+    anchor expressions both render from these, so they cannot drift.
+    """
     mode, unit, n = _normalize_range(form)
-    lhs = _window_time_lhs(event_time, form)
     if mode == "custom":
         kind = str(form.get("custom_kind") or "absolute").strip().lower()
         if kind == "relative":
@@ -423,71 +430,83 @@ def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
             end_n = _rel_n(form, "rel_end_n", 0)
             if start_n < end_n:
                 raise ValueError("relative from must be at least as far back as to")
-            if unit == "day":
-                clauses = [
-                    f"{lhs} >= {_as_event_time(_ps('current_date', 'day', form, -start_n), form)}"
-                ]
-                if end_n > 0:
-                    clauses.append(
-                        f"{lhs} < {_as_event_time(_ps('current_date', 'day', form, -(end_n - 1)), form)}"
-                    )
-                return clauses
-            clauses = [
-                f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, -start_n), form)}"
-            ]
+            start = ("date", _ps("current_date", unit, form, -start_n))
             if end_n > 0:
-                clauses.append(
-                    f"{lhs} < {_as_event_time(_ps('current_date', unit, form, -(end_n - 1)), form)}"
-                )
-            return clauses
-        start = date.fromisoformat(
+                return start, ("date", _ps("current_date", unit, form, -(end_n - 1)))
+            return start, None
+        start_d = date.fromisoformat(
             _iso_date(str(form.get("start_date") or ""), "start_date")
         )
-        end = date.fromisoformat(
+        end_d = date.fromisoformat(
             _iso_date(str(form.get("end_date") or ""), "end_date")
         )
-        if start > end:
+        if start_d > end_d:
             raise ValueError("start_date must be on or before end_date")
         week_start = _week_start(form)
-        start = _grain_start(start, unit, week_start)
-        end_exclusive = _grain_next(end, unit, week_start)
-        return [
-            f"{lhs} >= {_as_event_time('DATE ' + _sql_string(start.isoformat()), form)}",
-            f"{lhs} < {_as_event_time('DATE ' + _sql_string(end_exclusive.isoformat()), form)}",
-        ]
+        start_d = _grain_start(start_d, unit, week_start)
+        end_exclusive = _grain_next(end_d, unit, week_start)
+        return (
+            ("date", "DATE " + _sql_string(start_d.isoformat())),
+            ("date", "DATE " + _sql_string(end_exclusive.isoformat())),
+        )
     if mode == "this":
-        return [
-            f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, 0), form)}"
-        ]
+        return ("date", _ps("current_date", unit, form, 0)), None
     if mode == "previous":
-        return [
-            f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, -1), form)}",
-            f"{lhs} < {_as_event_time(_ps('current_date', unit, form, 0), form)}",
-        ]
+        return (
+            ("date", _ps("current_date", unit, form, -1)),
+            ("date", _ps("current_date", unit, form, 0)),
+        )
     if unit == "hour":
-        tz = _sql_string(_reporting_timezone(form))
-        kind = _event_time_kind(form)
-        clauses = [f"{lhs} >= factcat_hours_ago({n}, {tz}, '{kind}')"]
-        if _exclude_current(form, unit):
-            clauses.append(f"{lhs} < factcat_current_hour_start({tz}, '{kind}')")
-        return clauses
+        end = ("hour_start", None) if _exclude_current(form, unit) else None
+        return ("hours_ago", n), end
     if unit == "day":
-        clauses = [
-            f"{lhs} >= {_as_event_time(_ps('current_date', 'day', form, -n), form)}"
-        ]
-        if _exclude_current(form, unit):
-            clauses.append(
-                f"{lhs} < {_as_event_time(_today_sql(form), form)}"
-            )
-        return clauses
+        end = ("date", _today_sql(form)) if _exclude_current(form, unit) else None
+        return ("date", _ps("current_date", "day", form, -n)), end
     if _exclude_current(form, unit):
-        return [
-            f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, -n), form)}",
-            f"{lhs} < {_as_event_time(_ps('current_date', unit, form, 0), form)}",
-        ]
-    return [
-        f"{lhs} >= {_as_event_time(_ps('current_date', unit, form, -(n - 1)), form)}"
-    ]
+        return (
+            ("date", _ps("current_date", unit, form, -n)),
+            ("date", _ps("current_date", unit, form, 0)),
+        )
+    return ("date", _ps("current_date", unit, form, -(n - 1))), None
+
+
+def _window_rhs(recipe: tuple[str, Any], form: dict[str, Any]) -> str:
+    """A recipe in the event_time column's own type (prune-friendly)."""
+    kind, payload = recipe
+    if kind == "date":
+        return _as_event_time(payload, form)
+    tz = _sql_string(_reporting_timezone(form))
+    tk = _event_time_kind(form)
+    if kind == "hours_ago":
+        return f"factcat_hours_ago({payload}, {tz}, '{tk}')"
+    return f"factcat_current_hour_start({tz}, '{tk}')"
+
+
+def _anchor_rhs(recipe: tuple[str, Any], form: dict[str, Any]) -> str:
+    """A recipe as an instant comparable with the spec's ``event_time``.
+
+    Breakdown anchor bounds compare against the canonical instant
+    (``_event_time_lhs``), not the raw window column, so the boundary is
+    rendered in the instant type — ``reporting`` columns stay naive.
+    """
+    tz = _sql_string(_reporting_timezone(form))
+    tk = "reporting" if _event_time_kind(form) == "reporting" else "instant"
+    kind, payload = recipe
+    if kind == "date":
+        return f"factcat_ts_at_date({payload}, {tz}, '{tk}')"
+    if kind == "hours_ago":
+        return f"factcat_hours_ago({payload}, {tz}, '{tk}')"
+    return f"factcat_current_hour_start({tz}, '{tk}')"
+
+
+def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
+    """Sugar on event_time. Window unit is the range filter, not always the grain."""
+    lhs = _window_time_lhs(event_time, form)
+    start, end = _window_recipes(form)
+    clauses = [f"{lhs} >= {_window_rhs(start, form)}"]
+    if end is not None:
+        clauses.append(f"{lhs} < {_window_rhs(end, form)}")
+    return clauses
 
 
 def _now_in_zone(form: dict[str, Any]) -> datetime:
@@ -708,6 +727,161 @@ def _breakdown_slot(
     return _ident_column(column, "breakdown"), column
 
 
+VALUE_ATS = ("event", "range_start", "range_end", "first_record", "latest_record")
+
+# Legacy spec-level breakdown_at, as a per-slot default for payloads that
+# predate the Value at control.
+_LEGACY_VALUE_AT = {
+    "rows": ("event", "null"),
+    "carried": ("event", "fill"),
+    "first": ("first_record", "null"),
+    "last": ("latest_record", "null"),
+}
+
+
+# Fill-from sugar sentinels the select can carry instead of an event name.
+FILL_FROM_CHARTED = "__charted__"
+FILL_FROM_SERIES = "__series__"
+
+
+def _unit_event_names(unit: dict[str, Any]) -> list[str]:
+    members = unit.get("members") if unit.get("kind") == "any_of" else None
+    if members is None and "any_of" in unit:
+        members = unit.get("any_of")
+    if isinstance(members, list):
+        return [
+            str(m.get("event")).strip()
+            for m in members
+            if isinstance(m, dict) and str(m.get("event") or "").strip()
+        ]
+    event = str(unit.get("event") or "").strip()
+    return [event] if event else []
+
+
+def _charted_event_names(form: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for unit in _series_units(form):
+        for name in _unit_event_names(unit):
+            if name not in names:
+                names.append(name)
+    if not names:
+        names = _event_names_from_form(form)
+    return names
+
+
+def _slot_fill_from(
+    slot: dict[str, Any],
+    form: dict[str, Any],
+    series_unit: dict[str, Any] | None = None,
+) -> str | None:
+    """Which rows may stamp a value: an event pick, a sugar sentinel
+    (charted events / this series' events), or a SQL predicate.
+
+    Event names only — series property filters never narrow the stamp
+    stream, and the date range never applies to it.
+    """
+    expr = _single_expr(str(slot.get("fill_from_expr") or ""), "fill from")
+    if expr:
+        return expr
+    event = str(slot.get("fill_from_event") or "").strip()
+    if not event:
+        return None
+    event_column = (form.get("event_column") or "").strip()
+    if not event_column:
+        raise ValueError("Fill from an event requires an event column")
+    if event in (FILL_FROM_CHARTED, FILL_FROM_SERIES):
+        # "This series' events" only means something when the slot rides
+        # a series card; a stale sentinel on a chart-wide slot degrades
+        # to the charted set rather than failing the run.
+        names: list[str] = []
+        if event == FILL_FROM_SERIES and series_unit is not None:
+            names = _unit_event_names(series_unit)
+        if not names:
+            names = _charted_event_names(form)
+        if not names:
+            raise ValueError(
+                "Fill from charted events needs a charted event name"
+            )
+        return _event_names_clause(event_column, names)
+    return _event_names_clause(event_column, [event])
+
+
+def _slot_breakdown(
+    expr: str,
+    slot: dict[str, Any],
+    form: dict[str, Any],
+    anchors: tuple[str, str | None],
+    series_unit: dict[str, Any] | None = None,
+) -> str | Breakdown:
+    """Map (Value at × If missing × Fill from) onto the library config.
+
+    Chrome the UI hides for a combination (Fill from under each-event +
+    leave, If missing on the ever anchors) is ignored, not an error —
+    hidden fields keep whatever state they last had. The all-default slot
+    returns the plain string so untouched reports build the same spec.
+    """
+    value_at = str(slot.get("value_at") or "").strip().lower()
+    missing = str(slot.get("if_missing") or "").strip().lower()
+    if not value_at:
+        legacy = str(form.get("breakdown_at") or "rows").strip().lower()
+        value_at, legacy_missing = _LEGACY_VALUE_AT.get(legacy, ("event", "null"))
+        missing = missing or legacy_missing
+    if value_at not in VALUE_ATS:
+        raise ValueError(
+            "value_at must be event, range_start, range_end, "
+            "first_record, or latest_record"
+        )
+    missing = missing or "null"
+    if missing not in ("null", "fill"):
+        raise ValueError("if_missing must be null or fill")
+    if value_at == "event" and missing == "null":
+        # The shipped default. Fill from is hidden chrome here, so it is
+        # not even parsed — a stale fill_from_event must never fail a run
+        # the code path is about to discard.
+        return expr
+    fill_from = _slot_fill_from(slot, form, series_unit)
+    if value_at == "event":
+        # The app's contract is own-value-first: "Value at: each event"
+        # stays literally true even when Fill from names an authoritative
+        # source — the narrowed stream fills only rows with no value of
+        # their own. (With no fill_from the flag is a no-op; omit it so
+        # the plain carried SQL is unchanged.)
+        return Breakdown(
+            expr,
+            at="carried",
+            fill_from=fill_from,
+            own_value_first=fill_from is not None,
+        )
+    if value_at == "first_record":
+        return Breakdown(expr, at="first", fill_from=fill_from)
+    if value_at == "latest_record":
+        return Breakdown(expr, at="last", fill_from=fill_from)
+    start_anchor, end_anchor = anchors
+    if value_at == "range_start":
+        # The start boundary is inside the window: inclusive until.
+        return Breakdown(
+            expr,
+            at="last",
+            until=start_anchor,
+            fill_from=fill_from,
+            backfill=missing == "fill",
+        )
+    if end_anchor is None:
+        # The window runs to now: "at range end" is the latest record,
+        # and there is no later stamp for If-missing to fill from.
+        return Breakdown(expr, at="last", fill_from=fill_from)
+    # The end boundary is EXCLUSIVE (the window is `< end`): strict
+    # before, so a stamp at exactly that instant stays outside the
+    # window it closes and "never reads past the range" stays true.
+    return Breakdown(
+        expr,
+        at="last",
+        before=end_anchor,
+        fill_from=fill_from,
+        backfill=missing == "fill",
+    )
+
+
 def _breakdown_slot_dicts(src: dict[str, Any]) -> list[dict[str, Any]]:
     raw = src.get("breakdowns")
     if isinstance(raw, list) and raw:
@@ -723,26 +897,46 @@ def _breakdown_slot_dicts(src: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _breakdown_from_form(
     form: dict[str, Any], *, unit: dict[str, Any] | None = None
-) -> tuple[tuple[str, ...], tuple[str, ...] | None]:
-    """Fill ``breakdowns`` from slots (column, JSON key, or SQL). Expression wins."""
+) -> tuple[tuple[str | Breakdown, ...], tuple[str, ...] | None]:
+    """Fill ``breakdowns`` from slots (column, JSON key, or SQL). Expression wins.
+
+    Each slot carries its own value semantics (Value at, If missing, Fill
+    from); range anchors render from the same window recipes as the WHERE
+    clauses, converted to the instant type.
+    """
     src: dict[str, Any] = form
-    if unit is not None and _bool(form, "breakdown_by_series"):
+    per_series = unit is not None and _bool(form, "breakdown_by_series")
+    if per_series:
         src = unit
     dialect = form_kind(form)
-    exprs: list[str] = []
+    entries: list[str | Breakdown] = []
     labels: list[str | None] = []
+    anchors: tuple[str, str | None] | None = None
     for slot in _breakdown_slot_dicts(src):
         parsed = _breakdown_slot(slot, dialect)
         if parsed is None:
             continue
         expr, label = parsed
-        exprs.append(expr)
+        if anchors is None:
+            start, end = _window_recipes(form)
+            anchors = (
+                _anchor_rhs(start, form),
+                _anchor_rhs(end, form) if end is not None else None,
+            )
+        # "This series' events" resolves against the card only in
+        # per-series mode — a chart-wide overlay arm must not get an
+        # arm-specific stamp stream (one legend label, one meaning).
+        entries.append(
+            _slot_breakdown(
+                expr, slot, form, anchors, unit if per_series else None
+            )
+        )
         labels.append(label)
-    if not exprs:
+    if not entries:
         return (), None
     if any(lab is None for lab in labels):
-        return tuple(exprs), None
-    return tuple(exprs), tuple(str(lab) for lab in labels)
+        return tuple(entries), None
+    return tuple(entries), tuple(str(lab) for lab in labels)
 
 
 def _of_from_form(form: dict[str, Any], *, measure: str) -> str:
@@ -1557,9 +1751,14 @@ def spec_from_form(
         raise ValueError("of is required for property measures")
 
     breakdowns, breakdown_labels = _breakdown_from_form(form, unit=unit)
+    # Legacy payloads still send a spec-level breakdown_at; slots without
+    # a value_at already folded it in (_slot_breakdown). The spec must NOT
+    # receive the legacy value: a plain-string entry means an explicit
+    # each-event + leave choice, and forwarding "first" would silently
+    # promote it. Validate the incoming field for junk, forward "rows".
     breakdown_at = str(form.get("breakdown_at") or "rows").strip().lower()
     if breakdown_at not in BREAKDOWN_AT:
-        raise ValueError("breakdown_at must be rows, first, or last")
+        raise ValueError("breakdown_at must be rows, first, last, or carried")
 
     tz = _sql_string(_reporting_timezone(form))
     kind = _event_time_kind(form)
@@ -1582,7 +1781,7 @@ def spec_from_form(
         where=" AND ".join(clauses),
         exact=exact,
         breakdowns=breakdowns,
-        breakdown_at=breakdown_at,  # type: ignore[arg-type]
+        breakdown_at="rows",
         breakdown_labels=breakdown_labels,
         top_n=_top_n(form),
         include_other=_bool(form, "include_other", True),

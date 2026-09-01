@@ -109,9 +109,12 @@ value per entity, whole unfiltered table), the same bounded by ``since`` /
 ``until``), or ``carried`` — the last non-null value at or before each
 row's instant, so a tier stamped only on ``subscription_started`` still
 labels every later login. A row never borrows a future stamp.
-``fill_from`` names which rows may stamp a value; ``backfill=True`` (with
-``until``) falls back to the entity's first recorded value when nothing
-exists by the bound. Attribution always reads the unfiltered table — the
+``fill_from`` names which rows may stamp a value (with
+``own_value_first`` the charted row's own value still outranks the
+narrowed stream); the strict ``before`` bound is the exclusive-boundary
+spelling, so "state at the window end" never reads a stamp at exactly
+the end instant; ``backfill=True`` (with an upper bound) falls back to
+the entity's first recorded value when nothing exists by it. Attribution always reads the unfiltered table — the
 stamp can sit on an event the chart excludes — and none of it replaces
 the expression.
 
@@ -344,7 +347,18 @@ digits, …). The mapped timestamp may be filtered on a series (intersects the
 chart date range). **Combine** nests another event
 into that series (OR); **Split** undoes it. Ungrouped series overlay as
 separate lines. **Break down by** is chart-wide unless **Break down each
-series** is on, in which case each series has its own split. **Refresh event names**
+series** is on, in which case each series has its own split. Each breakdown
+carries a **Value at** control (each event · range start · range end ·
+first record · latest record) and an **If missing** choice (leave `(null)`,
+or fill from the entity's history — for each event that is the last known
+earlier value; at range boundaries an entity with none takes its first
+recorded value). **Fill from** narrows which events may supply the value
+(one event, or a SQL predicate). The anchors are the chart's date range;
+the history search always reads the whole table, so a tier stamped only on
+`subscription_started` still labels logins, and the meaning of a legend
+label never changes per series. Watch the estimate when flipping these on
+a large table: every option except the plain each-event one reads the
+column's full history. **Refresh event names**
 reloads names for the current lookback (or from `fc_event_names` if you
 gave Factcat a write project and dataset). **Time grain** and **date range**
 sit above the chart with **Run** (warehouse cost is explicit). Grain is

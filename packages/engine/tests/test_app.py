@@ -287,11 +287,29 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Show (other)" in res.text
     assert "SQL expression" in res.text
     assert "sql_expr_ellipsis" in res.text
-    assert 'id="breakdown_at"' in res.text
-    assert 'value="rows"' in res.text
-    assert "On each event" not in res.text
-    assert "First value" not in res.text
-    assert "in this date range" in res.text
+    # The Value at / If missing / Fill from controls replaced the hidden
+    # breakdown_at input and its "later control" hint.
+    assert 'id="breakdown_at"' not in res.text
+    assert "Value at" in res.text
+    assert "If missing" in res.text
+    assert "Fill from" in res.text
+    assert "in this date range" not in res.text
+    assert "folds the rest into (other)" in res.text
+    assert "(null) stays its own group" in res.text
+    # The ever anchors hide If missing entirely (fields that do not
+    # apply are hidden, not disabled-with-a-note).
+    assert "bd-ever-note" not in res.text
+    assert "All history is" not in res.text
+    assert "bd-value-pair" in res.text
+    assert '"bd_at_first": "first ever"' in res.text
+    assert '"bd_at_latest": "latest ever"' in res.text
+    assert '"bd_fill_charted": "Charted events"' in res.text
+    assert "This series" in res.text  # bd_fill_series plain label
+    assert "__charted__" in res.text
+    assert "__series__" in res.text
+    assert "IGNORE NULLS" not in res.text
+    assert 'id="bd-null-nudge"' in res.text
+    assert "Use last known at the event" in res.text
     assert "Exact (off = approx unique count)" not in res.text
     assert 'id="copy-sql"' in res.text
     assert 'id="copy-chart"' in res.text
@@ -840,6 +858,52 @@ def test_run_passes_breakdown_series(monkeypatch, tmp_path):
     sql = warehouse.run.call_args.args[0]
     assert "country" in sql
     assert "(other)" in sql
+
+
+def test_run_passes_breakdown_value_semantics(monkeypatch, tmp_path):
+    """A slot with Value at + If missing + Fill from reaches the engine:
+    the generated SQL carries the carried-stream CTEs and the stamp
+    predicate, and never IGNORE NULLS."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(
+        rows=[{"bucket": "2026-01-05", "plan": "pro", "value": 2}]
+    )
+    monkeypatch.setattr(
+        "factcat_app.main.connect",
+        lambda kind, **kw: warehouse,
+    )
+    client = TestClient(app)
+    res = client.post(
+        "/api/run",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "event_column": "event_name",
+            "event_values": ["login"],
+            "measure": "total",
+            "grain": "day",
+            "lookback_days": 30,
+            "breakdowns": [
+                {
+                    "breakdown_column": "plan",
+                    "value_at": "event",
+                    "if_missing": "fill",
+                    "fill_from_event": "subscription_started",
+                }
+            ],
+            "top_n": 8,
+            "include_other": True,
+        },
+    )
+    assert res.status_code == 200
+    sql = warehouse.run.call_args.args[0]
+    assert "fc_stamps" in sql
+    assert "subscription_started" in sql
+    assert "IGNORE NULLS" not in sql.upper()
 
 
 def test_estimate_is_dry_run(monkeypatch, tmp_path):
@@ -1908,6 +1972,14 @@ def test_events_sql_vocab(monkeypatch, tmp_path):
     assert "fc-or" in html
     assert "Add breakdown" not in html
     assert "fc-plus-row" in html
+    # Value-semantics chrome folds per the CHROME table; nothing names a
+    # SQL construct the emitter does not produce.
+    assert '"bd_at_event": "each row"' in html
+    assert '"bd_at_first": "first non-null ever"' in html
+    assert '"bd_at_latest": "last non-null ever"' in html
+    assert '"bd_fill_charted": "charted events"' in html
+    assert '"bd_fill_series": "this series"' in html
+    assert "IGNORE NULLS" not in html
     assert "COUNT(*)" in html
     assert "COUNT(DISTINCT id)" in html
     assert "SUM(x)" in html

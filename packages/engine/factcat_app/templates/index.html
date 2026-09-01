@@ -433,8 +433,6 @@
     .range-row input[type="number"] { width: 4.5rem; }
     #breakdown-extra[hidden] { display: none !important; }
     #breakdown-extra .range-row { margin-top: 0.5rem; }
-    .breakdown-slot { margin-top: 0.45rem; }
-    .breakdown-slot:first-child { margin-top: 0; }
     .fc-plus {
       display: inline-flex;
       align-items: center;
@@ -508,8 +506,52 @@
       margin: 0;
       flex: 0 0 auto;
     }
-    #breakdown-more .breakdown-slot { margin-top: 0.35rem; }
-    .series-bd-slot { margin-top: 0.35rem; }
+    /* Same card surface as .event-card (border/background/padding values
+       reused verbatim); nested series slots take the .event-group-members
+       .event-card snow background, the shipped card-in-card treatment. */
+    #breakdown-chart .breakdown-slot, .series-bd-slot {
+      border: 1px solid var(--fc-line); background: var(--fc-paper);
+      padding: 0.5rem 0.55rem 0.4rem; margin: 0 0 0.5rem;
+      min-width: 0;
+    }
+    /* The toggle row above sits flush (0px) otherwise — invisible before
+       the cards drew a border there. Same 0.5rem rhythm as the seams. */
+    #breakdown-chart .breakdown-slot[data-slot="0"] { margin-top: 0.5rem; }
+    .series-bd-slot { background: var(--fc-snow); margin: 0 0 0.35rem; }
+    .bd-value-controls { margin-top: 0.3rem; }
+    .bd-value-controls[hidden], .bd-fill-wrap[hidden],
+    .bd-fill-expr-wrap[hidden], .bd-value-pair[hidden],
+    #bd-null-nudge[hidden] { display: none !important; }
+    .bd-value-row {
+      display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: flex-start;
+    }
+    .bd-value-pair {
+      display: flex; flex-direction: column; flex: 1 1 9rem; min-width: 7rem;
+    }
+    /* Two-class chains so these beat .series-bd label (0,1,1, later in the
+       file); descendant (not >) so the SQL-expression label inside
+       .bd-fill-expr-wrap is owned here too. */
+    .bd-value-controls .bd-value-pair label,
+    .bd-value-controls .bd-fill-wrap label,
+    .bd-value-controls .bd-fill-expr-wrap label {
+      margin: 0; font-size: 0.7rem; font-weight: 600;
+    }
+    .bd-value-pair select { width: auto; font-size: 0.75rem; margin: 0; }
+    .bd-fill-wrap { margin-top: 0.3rem; display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+    .bd-fill-wrap select, .bd-fill-wrap input {
+      /* min-width 0 lets flex shrink the select below its widest option
+         (long event names) so a 256px column never scrolls sideways. */
+      width: auto; flex: 1 1 8rem; min-width: 0; font-size: 0.75rem; margin: 0;
+    }
+    /* Column flex so the label and input stretch to the wrap's width; the
+       input opts back out of the row rule above (flex-basis would become
+       HEIGHT in a column context) and takes the full line. */
+    .bd-fill-expr-wrap { flex: 1 1 100%; display: flex; flex-direction: column; }
+    /* Two-class chain: beats .bd-fill-wrap input on specificity, not
+       source order — the same convention as the label chains above. */
+    .bd-fill-wrap .bd-fill-expr-wrap input { flex: 0 0 auto; width: 100%; }
+    #bd-null-nudge { margin-top: 0.35rem; }
+    #bd-null-nudge .linkish { margin-left: 0; }
     .series-bd .remove-breakdown { margin-left: 0.4rem; }
     #of-wrap[hidden] { display: none !important; }
     #events-band { margin: 0 0 1rem; }
@@ -864,13 +906,16 @@
     </div>
     </div>
     <div id="breakdown-extra" hidden>
-      <span class="hint" id="breakdown-hint">Value on each event in this date range. First/last for an entity (chart window vs all history vs cohort) is a later control — it is not this dropdown.</span>
-      <input type="hidden" name="breakdown_at" id="breakdown_at" value="rows">
+      <span class="hint" id="breakdown-hint">Top N keeps the biggest groups and folds the rest into (other). (null) stays its own group.</span>
       <div class="range-row">
         <label for="top_n" style="margin:0">Top N</label>
         <input id="top_n" name="top_n" type="number" min="1" max="1000" value="{{ config.top_n or 8 }}">
         <input name="include_other" type="checkbox" id="include_other" {% if config.include_other or config.include_other is not false %}checked{% endif %} style="width:auto">
         <label for="include_other" style="margin:0">Show (other)</label>
+      </div>
+      <div id="bd-null-nudge" hidden>
+        <span class="hint" id="bd-null-nudge-copy"></span>
+        <button type="button" class="linkish" id="bd-null-nudge-fix">Use last known at the event</button>
       </div>
     </div>
     </div>
@@ -1447,6 +1492,9 @@ function syncBreakdownUi() {
   );
   document.getElementById("breakdown-expr-wrap").hidden = col !== CUSTOM_BREAKDOWN;
   document.getElementById("breakdown-json-wrap").hidden = !json;
+  const zero = document.querySelector('#breakdown-chart .breakdown-slot[data-slot="0"]');
+  if (zero) syncValueControls(zero);
+  if (typeof hideNullNudge === "function") hideNullNudge();
   syncBreakdownMode();
   if (typeof syncExact === "function") syncExact();
 }
@@ -1540,6 +1588,10 @@ function fillBreakdownSelect(columns) {
   const more = document.getElementById("breakdown-more");
   more.innerHTML = "";
   slots.slice(1, BREAKDOWN_SLOT_CAP).forEach((slot) => addChartBreakdownSlot(slot));
+  const zero = chartSlotZeroEl();
+  if (zero) {
+    attachValueControls(zero, first, () => { syncBreakdownUi(); scheduleEstimate(); });
+  }
   syncAddBreakdownBtn();
 }
 function savedBreakdownSlots() {
@@ -1561,7 +1613,198 @@ function normalizeBreakdownSlot(s) {
     breakdown_column: src.breakdown_column || src.column || "",
     breakdown_expr: src.breakdown_expr || src.expr || "",
     breakdown_json_key: src.breakdown_json_key || src.json_key || "",
+    value_at: VALUE_ATS.includes(src.value_at) ? src.value_at : "event",
+    if_missing: src.if_missing === "fill" ? "fill" : "null",
+    fill_from_event: src.fill_from_event || "",
+    fill_from_expr: src.fill_from_expr || "",
   };
+}
+const VALUE_ATS = ["event", "range_start", "range_end", "first_record", "latest_record"];
+const FILL_FROM_TITLE = "Which events count as the value's source. Any event: any row where it is set. The event's own value still wins when it has one.";
+function entityWord() {
+  const el = document.getElementById("entity_label");
+  return ((el && el.value) || "").trim().toLowerCase() || "entity";
+}
+function valueAtTitle(v) {
+  const w = entityWord();
+  const cost = " Reads this column's full history — the estimate shows the cost.";
+  if (v === "event") return "The value stamped on each event row. Events without one group as (null).";
+  if (v === "range_start") return "One group per " + w + ": the value as it stood at the start of the date range — the most recent one recorded at or before it." + cost;
+  if (v === "range_end") return "One group per " + w + ": the value as it stood at the end of the date range. Never reads past the range." + cost;
+  if (v === "first_record") return "One group per " + w + ": the first value ever recorded, even before this date range." + cost;
+  return "One group per " + w + ": the most recent value ever recorded — including after this date range. Can change as new data arrives." + cost;
+}
+function ifMissingFillTitle() {
+  const w = entityWord();
+  return "No value by then? Each event uses the most recent earlier value from this " + w
+    + "'s history; at range boundaries " + (w === "entity" ? "an" : "a") + " " + w
+    + " with none takes its first recorded value — possibly after the range.";
+}
+function valueControlsHtml() {
+  return (
+    '<div class="bd-value-controls" hidden>'
+    + '<div class="bd-value-row">'
+    + '<div class="bd-value-pair">'
+    + "<label>" + tHtml("bd_value_at") + "</label>"
+    + '<select class="bd-value-at"></select>'
+    + "</div>"
+    + '<div class="bd-value-pair">'
+    + "<label>" + tHtml("bd_if_missing") + "</label>"
+    + '<select class="bd-if-missing"></select>'
+    + "</div>"
+    + "</div>"
+    + '<div class="bd-fill-wrap" hidden>'
+    + "<label>" + tHtml("bd_fill_from") + "</label>"
+    + '<select class="bd-fill-event"></select>'
+    + '<div class="bd-fill-expr-wrap" hidden><label>' + tHtml("sql_expr") + "</label>"
+    + '<input class="bd-fill-expr" autocomplete="off" placeholder="event_name = \'signup\'"></div>'
+    + "</div>"
+    + "</div>"
+  );
+}
+let bdControlSeq = 0;
+function wireValueControlIds(block) {
+  bdControlSeq += 1;
+  ["bd-value-at", "bd-if-missing", "bd-fill-event", "bd-fill-expr"].forEach((cls) => {
+    const ctl = block.querySelector("." + cls);
+    if (!ctl) return;
+    ctl.id = "bdc-" + bdControlSeq + "-" + cls;
+    const lab = ctl.previousElementSibling;
+    if (lab && lab.tagName === "LABEL") lab.htmlFor = ctl.id;
+  });
+}
+function paintValueAtSelect(sel, current) {
+  sel.innerHTML = "";
+  [
+    ["event", t("bd_at_event")],
+    ["range_start", t("bd_at_range_start")],
+    ["range_end", t("bd_at_range_end")],
+    ["first_record", t("bd_at_first")],
+    ["latest_record", t("bd_at_latest")],
+  ].forEach(([v, label]) => {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = label;
+    o.title = valueAtTitle(v);
+    sel.appendChild(o);
+  });
+  sel.value = VALUE_ATS.includes(current) ? current : "event";
+}
+function paintIfMissingSelect(sel, current) {
+  sel.innerHTML = "";
+  [["null", t("bd_missing_null"), ""], ["fill", t("bd_missing_fill"), ifMissingFillTitle()]]
+    .forEach(([v, label, title]) => {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = label;
+      if (title) o.title = title;
+      sel.appendChild(o);
+    });
+  sel.value = current === "fill" ? "fill" : "null";
+}
+const FILL_CHARTED = "__charted__";
+const FILL_SERIES = "__series__";
+const FILL_CHARTED_TITLE = "Rows with any event name charted here may supply the value; series filters do not narrow it. The event's own value still wins.";
+const FILL_SERIES_TITLE = "Rows with this series' event name(s) may supply the value. The event's own value still wins.";
+function paintFillEventSelect(sel, current) {
+  const cur = current !== undefined ? current : sel.value;
+  sel.innerHTML = "";
+  const add = (value, label, title) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = label;
+    if (title) o.title = title;
+    sel.appendChild(o);
+  };
+  add("", t("bd_fill_any"), FILL_FROM_TITLE);
+  // Sentinels the backend interprets: series → that card's event names,
+  // charted → every charted name (a chart-wide "__series__" falls back
+  // to charted server-side).
+  if (sel.closest(".series-bd")) add(FILL_SERIES, t("bd_fill_series"), FILL_SERIES_TITLE);
+  add(FILL_CHARTED, t("bd_fill_charted"), FILL_CHARTED_TITLE);
+  [...eventNameCache].sort((a, b) => String(a).localeCompare(String(b))).forEach((name) => {
+    add(name, name);
+  });
+  add(CUSTOM_BREAKDOWN, t("sql_expr_ellipsis"));
+  // A stale series sentinel restored onto a chart-wide slot would render
+  // its raw value via ensureOption; coerce it to charted, matching the
+  // backend's degradation.
+  const fixed =
+    cur === FILL_SERIES && !sel.closest(".series-bd") ? FILL_CHARTED : cur;
+  if (fixed && fixed !== CUSTOM_BREAKDOWN) ensureOption(sel, fixed);
+  sel.value = fixed || "";
+}
+function slotColumnValue(slotEl) {
+  const sel = slotEl.querySelector(".bd-column, .series-bd-column") || breakdownColumnEl;
+  return sel.value;
+}
+function attachValueControls(slotEl, init, onChange) {
+  if (slotEl.querySelector(".bd-value-controls")) return;
+  const holder = document.createElement("div");
+  holder.innerHTML = valueControlsHtml();
+  const block = holder.firstElementChild;
+  slotEl.appendChild(block);
+  wireValueControlIds(block);
+  const data = normalizeBreakdownSlot(init);
+  paintValueAtSelect(block.querySelector(".bd-value-at"), data.value_at);
+  paintIfMissingSelect(block.querySelector(".bd-if-missing"), data.if_missing);
+  paintFillEventSelect(
+    block.querySelector(".bd-fill-event"),
+    data.fill_from_expr ? CUSTOM_BREAKDOWN : data.fill_from_event
+  );
+  block.querySelector(".bd-fill-expr").value = data.fill_from_expr || "";
+  ["bd-value-at", "bd-if-missing", "bd-fill-event"].forEach((cls) => {
+    block.querySelector("." + cls).addEventListener("change", () => {
+      syncValueControls(slotEl);
+      hideNullNudge();
+      onChange();
+    });
+  });
+  block.querySelector(".bd-fill-expr").addEventListener("input", onChange);
+  syncValueControls(slotEl);
+}
+function syncValueControls(slotEl) {
+  const block = slotEl.querySelector(":scope > .bd-value-controls");
+  if (!block) return;
+  block.hidden = !slotColumnValue(slotEl);
+  const atSel = block.querySelector(".bd-value-at");
+  const missSel = block.querySelector(".bd-if-missing");
+  // The ever anchors already search all history, so If missing has no
+  // job there: hide the pair rather than explain a disabled control.
+  // disabled stays set so readValueControls keeps reporting "null".
+  const ever = atSel.value === "first_record" || atSel.value === "latest_record";
+  missSel.disabled = ever;
+  const missPair = missSel.closest(".bd-value-pair");
+  if (missPair) missPair.hidden = ever;
+  const fillWrap = block.querySelector(".bd-fill-wrap");
+  fillWrap.hidden = atSel.value === "event" && missSel.value !== "fill";
+  const fillSel = block.querySelector(".bd-fill-event");
+  block.querySelector(".bd-fill-expr-wrap").hidden = fillSel.value !== CUSTOM_BREAKDOWN;
+}
+function readValueControls(slotEl) {
+  const block = slotEl.querySelector(":scope > .bd-value-controls");
+  if (!block) {
+    return { value_at: "event", if_missing: "null", fill_from_event: "", fill_from_expr: "" };
+  }
+  const at = block.querySelector(".bd-value-at").value;
+  const missSel = block.querySelector(".bd-if-missing");
+  const fillSel = block.querySelector(".bd-fill-event");
+  const exprOn = fillSel.value === CUSTOM_BREAKDOWN;
+  return {
+    value_at: VALUE_ATS.includes(at) ? at : "event",
+    if_missing: missSel.disabled ? "null" : (missSel.value === "fill" ? "fill" : "null"),
+    fill_from_event: exprOn ? "" : fillSel.value,
+    fill_from_expr: exprOn ? (block.querySelector(".bd-fill-expr").value || "").trim() : "",
+  };
+}
+function repaintFillEventSelects() {
+  document.querySelectorAll(".bd-value-controls .bd-fill-event").forEach((sel) => {
+    paintFillEventSelect(sel, sel.value);
+  });
+}
+function hideNullNudge() {
+  const el = document.getElementById("bd-null-nudge");
+  if (el) el.hidden = true;
 }
 function chartSlotCount() {
   return 1 + document.querySelectorAll("#breakdown-more .breakdown-slot").length;
@@ -1599,6 +1842,7 @@ function addChartBreakdownSlot(init) {
     scheduleEstimate();
     syncStaleNotes();
   });
+  attachValueControls(wrap, data, () => { syncBreakdownUi(); scheduleEstimate(); });
   syncExtraSlot(wrap);
   syncAddBreakdownBtn();
 }
@@ -1609,6 +1853,7 @@ function syncExtraSlot(wrap) {
   );
   wrap.querySelector(".bd-json-wrap").hidden = !json;
   wrap.querySelector(".bd-expr-wrap").hidden = col !== CUSTOM_BREAKDOWN;
+  syncValueControls(wrap);
 }
 function breakdownJsonIncomplete() {
   if (!document.getElementById("breakdown-json-wrap").hidden
@@ -1618,31 +1863,76 @@ function breakdownJsonIncomplete() {
   }
   return false;
 }
-function slotFromEls(colEl, jsonWrap, jsonEl, exprEl) {
+function slotFromEls(colEl, jsonWrap, jsonEl, exprEl, slotEl) {
   const col = colEl.value;
   const exprOn = col === CUSTOM_BREAKDOWN;
-  return {
+  return Object.assign({
     breakdown_column: exprOn ? "" : col,
     breakdown_json_key: exprOn || jsonWrap.hidden ? "" : (jsonEl.value || "").trim(),
     breakdown_expr: exprOn ? (exprEl.value || "").trim() : "",
-  };
+  }, slotEl ? readValueControls(slotEl) : {});
 }
-function chartBreakdownSlots() {
-  const slots = [slotFromEls(
+function chartSlotZeroEl() {
+  return document.querySelector('#breakdown-chart .breakdown-slot[data-slot="0"]');
+}
+function chartBreakdownSlotPairs() {
+  const pairs = [];
+  const zero = chartSlotZeroEl();
+  pairs.push([zero, slotFromEls(
     breakdownColumnEl,
     document.getElementById("breakdown-json-wrap"),
     document.getElementById("breakdown_json_key"),
-    document.getElementById("breakdown_expr")
-  )];
+    document.getElementById("breakdown_expr"),
+    zero
+  )]);
   document.querySelectorAll("#breakdown-more .breakdown-slot").forEach((el) => {
-    slots.push(slotFromEls(
+    pairs.push([el, slotFromEls(
       el.querySelector(".bd-column"),
       el.querySelector(".bd-json-wrap"),
       el.querySelector(".bd-json"),
-      el.querySelector(".bd-expr")
-    ));
+      el.querySelector(".bd-expr"),
+      el
+    )]);
   });
-  return slots.filter((s) => s.breakdown_column || s.breakdown_expr);
+  return pairs.filter(([, s]) => s.breakdown_column || s.breakdown_expr);
+}
+function chartBreakdownSlots() {
+  return chartBreakdownSlotPairs().map(([, s]) => s);
+}
+let nudgeSlotEl = null;
+function syncNullNudge(rows) {
+  const el = document.getElementById("bd-null-nudge");
+  if (!el) return;
+  el.hidden = true;
+  nudgeSlotEl = null;
+  if (breakdownBySeries()) return;
+  if (!Array.isArray(rows) || !rows.length) return;
+  // The 80% share is only meaningful for additive measures; summing
+  // Median / Average / Distinct-per-entity values is not a share of
+  // anything. Fallback matches syncExact's source for the same fact.
+  const measure = (collectSeries()[0] || {}).measure
+    || (form.measure ? form.measure.value : "uniques");
+  if (measure !== "total" && measure !== "uniques") return;
+  for (const [slotEl, s] of chartBreakdownSlotPairs()) {
+    if (!slotEl || !s.breakdown_column || s.breakdown_expr || s.breakdown_json_key) continue;
+    if (s.value_at !== "event" || s.if_missing !== "null") continue;
+    const key = s.breakdown_column;
+    if (!(key in (rows[0] || {}))) continue;
+    let total = 0;
+    let nul = 0;
+    rows.forEach((row) => {
+      const v = Math.abs(Number(row.value) || 0);
+      total += v;
+      if (row[key] == null || row[key] === "") nul += v;
+    });
+    if (total > 0 && nul / total >= 0.8) {
+      document.getElementById("bd-null-nudge-copy").textContent =
+        key + " is (null) on most of these events — its value is stamped elsewhere.";
+      nudgeSlotEl = slotEl;
+      el.hidden = false;
+      return;
+    }
+  }
 }
 function paintColumns(columns) {
   columnCache = columns || [];
@@ -2292,17 +2582,18 @@ function syncSeriesBdSlot(slot) {
   );
   slot.querySelector(".series-bd-json").hidden = !json;
   slot.querySelector(".series-bd-expr").hidden = col !== CUSTOM_BREAKDOWN;
+  syncValueControls(slot);
 }
 function readSeriesBdSlot(slot) {
   const col = slot.querySelector(".series-bd-column").value;
   const exprOn = col === CUSTOM_BREAKDOWN;
-  return {
+  return Object.assign({
     breakdown_column: exprOn ? "" : col,
     breakdown_json_key: exprOn || slot.querySelector(".series-bd-json").hidden
       ? ""
       : (slot.querySelector(".series-bd-json").value || "").trim(),
     breakdown_expr: exprOn ? (slot.querySelector(".series-bd-expr").value || "").trim() : "",
-  };
+  }, readValueControls(slot));
 }
 function readSeriesBd(host) {
   const wrap = host.querySelector(":scope > .series-bd");
@@ -2469,6 +2760,7 @@ function addSeriesBdSlot(wrap, init) {
       syncStaleNotes();
     });
   }
+  attachValueControls(slot, data, () => { syncBreakdownMode(); scheduleEstimate(); });
   syncSeriesBdSlot(slot);
   syncSeriesBdAdd(wrap);
 }
@@ -2765,6 +3057,19 @@ document.getElementById("add-breakdown").addEventListener("click", () => {
   scheduleEstimate();
   syncStaleNotes();
 });
+document.getElementById("bd-null-nudge-fix").addEventListener("click", () => {
+  if (!nudgeSlotEl || !document.contains(nudgeSlotEl)) { hideNullNudge(); return; }
+  const miss = nudgeSlotEl.querySelector(".bd-value-controls .bd-if-missing");
+  if (miss && !miss.disabled) {
+    // Programmatic value set fires no change event: sync everything the
+    // change handler would have, stale-results banner included.
+    miss.value = "fill";
+    syncValueControls(nudgeSlotEl);
+    scheduleEstimate();
+    syncStaleNotes();
+  }
+  hideNullNudge();
+});
 ofColumnEl.addEventListener("change", syncOfUi);
 function authBody() {
   return {
@@ -2865,6 +3170,7 @@ const eventNameList = bindCachedList({
   paint: (items) => {
     eventNameCache = items || [];
     document.querySelectorAll(".event-card-name").forEach((sel) => fillEventNameSelect(sel, sel.value));
+    repaintFillEventSelects();
     syncSeriesChrome();
   },
   loadingFor: [document.getElementById("event_value")],
@@ -3446,7 +3752,7 @@ function estimateKey(body) {
     body.on, body.of_column, body.of_expr, body.of_json_key,
     body.breakdown_column, body.breakdown_expr, body.breakdown_json_key,
     JSON.stringify(body.breakdowns || []),
-    body.breakdown_at, body.top_n, body.include_other,
+    body.top_n, body.include_other,
   ].join("\0");
 }
 let lastEstimateKey = "";
@@ -3587,7 +3893,7 @@ function resultKey(body) {
     body.on, body.of_column, body.of_expr, body.of_json_key,
     body.breakdown_column, body.breakdown_expr, body.breakdown_json_key,
     JSON.stringify(body.breakdowns || []),
-    body.breakdown_at, body.top_n, body.include_other,
+    body.top_n, body.include_other,
     body.exact ? "1" : "0",
   ].join("\0");
 }
@@ -4569,6 +4875,7 @@ form.addEventListener("submit", async (e) => {
     sortDir = 1;
     renderTable();
     drawChart();
+    syncNullNudge(data.rows || []);
     showLimitNote(!!data.truncated, data.limit || effectiveRowLimit());
     runStatus.textContent = tableRows.length + " row" + (tableRows.length === 1 ? "" : "s");
   } finally {
