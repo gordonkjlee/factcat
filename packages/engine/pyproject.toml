@@ -36,7 +36,7 @@ snowflake = ["snowflake-connector-python[secure-local-storage]>=3.12.0"]
 all = ["factcat[bigquery,snowflake]"]
 
 [project.scripts]
-factcat-app = "factcat_app.__main__:main"
+factcat = "factcat_app.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/gordonkjlee/factcat"
