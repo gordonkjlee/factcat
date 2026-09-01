@@ -421,8 +421,10 @@ cap** is set in Setup for BigQuery (default 10 GB on the job). Snowflake has no
 byte estimate; that chrome is hidden. When a BigQuery estimate exceeds the cap,
 **Run** is disabled and an **Override cap** tickbox appears beside it; the
 estimate reads `~24 GB / 10 GB cap`. Override takes no number — it removes the
-cap for that one run, and never persists. A query that outran its estimate and
-was rejected by BigQuery offers the same tickbox, using the figures BigQuery
+cap rather than raising it to one. It is never written to `.factcat.json`, so it
+is gone next start; while it stays ticked it keeps applying, and the tickbox
+stays visible so it can be cleared. A query that outran its estimate and was
+rejected by BigQuery offers the same tickbox, using the figures BigQuery
 reported. The filter pane sits beside Chart, Table, and SQL result panes.
 
 Click **Run**. The mapping is written to `.factcat.json` in the directory where you started

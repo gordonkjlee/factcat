@@ -3892,9 +3892,9 @@ async function compileSql() {
   }
 }
 function scheduleEstimate() {
-  syncCostGate();
   clearTimeout(estimateTimer);
   estimateTimer = setTimeout(() => {
+    syncCostGate();
     compileSql();
     runEstimate();
   }, 400);
