@@ -4924,7 +4924,7 @@ form.addEventListener("submit", async (e) => {
         if (data.bytes != null) {
           paintEstimate(data.bytes, data.cap, true);
           msg = "Query failed: " + bytesLabel(data.bytes)
-            + (data.cap != null && ours ? " over the " + bytesLabel(data.cap) + " cap." : " over the byte limit.");
+            + (data.cap != null && ours ? " (over the " + bytesLabel(data.cap) + " cap)." : " (over the byte limit).");
         } else {
           msg = "Query failed: over the byte limit.";
         }
