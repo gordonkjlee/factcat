@@ -325,6 +325,7 @@
     #run-status, #run-estimate { font-size: 0.8rem; color: var(--fc-slate); }
     #run-estimate-wrap { display: inline-flex; align-items: center; gap: 0.4rem; }
     #run-estimate-wrap[hidden] { display: none !important; }
+    #run-estimate-bar[hidden] { display: none !important; }
     #run-estimate-bar {
       display: inline-block; width: 3.2rem; height: 0.45rem;
       background: var(--fc-line); border-radius: 2px; overflow: hidden; vertical-align: middle;
@@ -405,7 +406,6 @@
       font-size: 0.75rem; color: var(--fc-alert);
     }
     #cap-override[hidden] { display: none !important; }
-    #cap-override input[type="number"] { width: 4rem; padding: 0.15rem 0.3rem; }
     #result-table { table-layout: fixed; width: 100%; }
     #result-table th {
       position: relative; cursor: pointer; user-select: none; min-width: 4rem;
@@ -1003,7 +1003,7 @@
         </div>
       </div>
       <div id="run-row">
-        <button type="submit" id="run"{% if not mapping_ready %} disabled{% endif %}>Run</button>
+        <span id="run-status"></span>
         <span id="run-estimate-wrap" hidden>
           <span id="run-estimate-bar" aria-hidden="true"><span id="run-estimate-fill"></span></span>
           <span id="run-estimate"></span>
@@ -1011,10 +1011,8 @@
         <div id="cap-override" hidden>
           <input name="override_cap" type="checkbox" id="override_cap" style="width:auto">
           <label for="override_cap" style="margin:0">Override cap</label>
-          <input id="bytes_cap_override_gb" name="bytes_cap_override_gb" type="number" min="1" max="100000" step="1">
-          <span>GB this run</span>
         </div>
-        <span id="run-status"></span>
+        <button type="submit" id="run"{% if not mapping_ready %} disabled{% endif %}>Run</button>
       </div>
     </div>
     <section class="pane pane-chart{% if not config.pane_chart_open %} closed{% endif %}">
@@ -1458,6 +1456,7 @@ const PROPERTY_OF_TYPES = new Set({{ property_of_types|tojson }});
 const DISTINCT_OF_TYPES = new Set({{ distinct_of_types|tojson }});
 const JSON_TYPES = new Set({{ json_types|tojson }});
 const CAPABILITIES = new Set({{ capabilities|tojson }});
+const MAPPING_READY = {{ mapping_ready|tojson }};
 const SUPPORTS_JSON_VALUE = {{ supports_json_value|tojson }};
 const breakdownColumnEl = document.getElementById("breakdown_column");
 const ofColumnEl = document.getElementById("of_column");
@@ -3748,7 +3747,7 @@ function estimateKey(body) {
     body.event_value, body.grain, body.range_mode, body.range_n,
     body.range_unit, body.include_current, body.measure, body.custom_kind,
     body.start_date, body.end_date, body.rel_start_n, body.rel_end_n,
-    body.override_cap, body.bytes_cap_override_gb, body.bytes_cap_gb,
+    body.override_cap, body.bytes_cap_gb,
     body.on, body.of_column, body.of_expr, body.of_json_key,
     body.breakdown_column, body.breakdown_expr, body.breakdown_json_key,
     JSON.stringify(body.breakdowns || []),
@@ -3756,13 +3755,60 @@ function estimateKey(body) {
   ].join("\0");
 }
 let lastEstimateKey = "";
+// The one fact "this exact query is known to be over the cap", keyed by the
+// same fingerprint the estimate uses. Written by an over-cap estimate and by a
+// cap-rejected run; null means no known condition, never "unknown".
+let capBlock = null;
+let runInFlight = false;
+function capLabel(cap) {
+  return (Math.round((cap / (1024 * 1024 * 1024)) * 10) / 10) + " GB";
+}
+function capBlocked() {
+  if (!CAPABILITIES.has("scan_cap") || !capBlock) return false;
+  if (document.getElementById("override_cap").checked) return false;
+  return capBlock.key === estimateKey(payload());
+}
+// Sole writer of #run.disabled and #cap-override.hidden. The run handler sets
+// runInFlight rather than the button, so its finally cannot re-enable a Run
+// the cap is still blocking.
+function syncCostGate() {
+  const blocked = capBlocked();
+  document.getElementById("cap-override").hidden =
+    !CAPABILITIES.has("scan_cap")
+    || (!blocked && !document.getElementById("override_cap").checked);
+  document.getElementById("run").disabled =
+    !MAPPING_READY || runInFlight || blocked;
+}
+function paintEstimate(bytes, cap, overCap) {
+  const wrap = document.getElementById("run-estimate-wrap");
+  const el = document.getElementById("run-estimate");
+  const bar = document.getElementById("run-estimate-bar");
+  const fill = document.getElementById("run-estimate-fill");
+  const uncapped = cap == null;
+  wrap.hidden = false;
+  // A proportion bar with no denominator has nothing to show.
+  bar.hidden = uncapped;
+  const frac = uncapped ? 0 : bytes / cap;
+  fill.style.width = uncapped ? "0" : Math.min(100, Math.max(2, frac * 100)) + "%";
+  wrap.classList.toggle("over-cap", !!overCap);
+  wrap.classList.toggle("hot", !overCap && !uncapped && frac >= 0.25);
+  wrap.classList.toggle("warn", !overCap && !uncapped && frac >= 0.05 && frac < 0.25);
+  el.textContent = formatBytes(bytes)
+    + (overCap && !uncapped ? " / " + capLabel(cap) + " cap" : "")
+    + (uncapped ? " · no cap this run" : "");
+  el.title = overCap
+    ? "Over the job scan cap. Tick Override cap to run it anyway."
+    : (uncapped
+        ? "Estimated bytes scanned (free dry run). No cap this run."
+        : "Estimated bytes scanned (free dry run). Cap " + capLabel(cap) + ".");
+}
 async function runEstimate() {
   const wrap = document.getElementById("run-estimate-wrap");
   const el = document.getElementById("run-estimate");
   const fill = document.getElementById("run-estimate-fill");
   if (!CAPABILITIES.has("dry_run")) {
     wrap.hidden = true;
-    document.getElementById("cap-override").hidden = true;
+    syncCostGate();
     return;
   }
   const gen = ++estimateGen;
@@ -3780,6 +3826,7 @@ async function runEstimate() {
   wrap.hidden = false;
   el.textContent = "Estimating…";
   wrap.classList.remove("over-cap", "warn", "hot");
+  document.getElementById("run-estimate-bar").hidden = false;
   fill.style.width = "0";
   try {
     const data = await post("/api/estimate", body);
@@ -3789,22 +3836,11 @@ async function runEstimate() {
       return;
     }
     lastEstimateKey = key;
-    const cap = data.cap || (10 * 1024 * 1024 * 1024);
-    const frac = cap ? data.bytes / cap : 0;
-    fill.style.width = Math.min(100, Math.max(2, frac * 100)) + "%";
-    wrap.classList.toggle("over-cap", !!data.over_cap);
-    wrap.classList.toggle("hot", !data.over_cap && frac >= 0.25);
-    wrap.classList.toggle("warn", !data.over_cap && frac >= 0.05 && frac < 0.25);
-    el.textContent = formatBytes(data.bytes);
-    const capGb = cap ? (cap / (1024 * 1024 * 1024)) : null;
-    el.title = data.over_cap
-      ? "Would exceed the job scan cap. Override below to run anyway."
-      : ("Estimated bytes scanned (free dry run)" + (capGb != null ? ". Cap " + capGb + " GB." : "."));
-    const ov = document.getElementById("cap-override");
-    ov.hidden = !data.over_cap && !document.getElementById("override_cap").checked;
-    if (data.over_cap && !document.getElementById("bytes_cap_override_gb").value) {
-      document.getElementById("bytes_cap_override_gb").value = String(Math.max(1, Math.ceil(data.bytes / (1024 * 1024 * 1024))));
-    }
+    paintEstimate(data.bytes, data.cap, !!data.over_cap);
+    // A fresh estimate for this query supersedes any earlier verdict on it,
+    // including one a rejected run left behind.
+    capBlock = data.over_cap ? {key: key, bytes: data.bytes, cap: data.cap} : null;
+    syncCostGate();
   } catch (err) {
     if (gen !== estimateGen) return;
     wrap.hidden = true;
@@ -3854,6 +3890,7 @@ async function compileSql() {
   }
 }
 function scheduleEstimate() {
+  syncCostGate();
   clearTimeout(estimateTimer);
   estimateTimer = setTimeout(() => {
     compileSql();
@@ -3876,8 +3913,10 @@ form.addEventListener("input", (e) => {
   }
   scheduleEstimate();
 });
-document.getElementById("override_cap").addEventListener("change", scheduleEstimate);
-document.getElementById("bytes_cap_override_gb").addEventListener("change", scheduleEstimate);
+document.getElementById("override_cap").addEventListener("change", () => {
+  syncCostGate();
+  scheduleEstimate();
+});
 function csvCell(value) {
   const s = String(value ?? "");
   if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
@@ -4815,7 +4854,8 @@ form.addEventListener("submit", async (e) => {
   const runBtn = document.getElementById("run");
   const runStatus = document.getElementById("run-status");
   const hadChart = !!chart || tableRows.length;
-  runBtn.disabled = true;
+  runInFlight = true;
+  syncCostGate();
   startRunButtonDots();
   if (!hadChart) setChartEmpty("running");
   try {
@@ -4827,7 +4867,20 @@ form.addEventListener("submit", async (e) => {
     const data = await res.json();
     if (data.sql) showSql(data.sql);
     if (!data.ok) {
-      const msg = shortError(data.error || res.statusText || "Query failed.");
+      let msg = shortError(data.error || res.statusText || "Query failed.");
+      if (data.over_cap) {
+        // The warehouse rejected it on the cap. It reported the figures; show
+        // those and the way past them rather than a raw rejection string.
+        capBlock = {key: estimateKey(body), bytes: data.bytes, cap: data.cap};
+        if (data.bytes != null) {
+          paintEstimate(data.bytes, data.cap, true);
+          msg = "Needs " + formatBytes(data.bytes).replace("~", "")
+            + (data.cap != null ? ", over the " + capLabel(data.cap) + " cap" : ", over the job scan cap")
+            + ". Tick Override cap to run it.";
+        } else {
+          msg = "Over the job scan cap. Tick Override cap to run it.";
+        }
+      }
       setError(msg);
       const tableEmpty = document.getElementById("table-empty");
       tableEmpty.hidden = false;
@@ -4848,6 +4901,7 @@ form.addEventListener("submit", async (e) => {
       runStatus.textContent = "";
       return;
     }
+    capBlock = null;
     if (titleLockedEl.value !== "true") titleEl.value = body.chart_title || defaultTitle();
     const tableEmpty = document.getElementById("table-empty");
     tableEmpty.hidden = true;
@@ -4880,7 +4934,8 @@ form.addEventListener("submit", async (e) => {
     runStatus.textContent = tableRows.length + " row" + (tableRows.length === 1 ? "" : "s");
   } finally {
     stopRunButtonDots();
-    runBtn.disabled = false;
+    runInFlight = false;
+    syncCostGate();
     runBtn.textContent = "Run";
     if (!tableRows.length && catKind === "running") {
       setChartEmpty("empty");

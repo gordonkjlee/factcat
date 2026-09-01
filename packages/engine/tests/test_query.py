@@ -291,8 +291,19 @@ def test_job_bytes_cap_default_is_ten_gib():
     assert job_bytes_cap(_form()) == 10 * 1024**3
 
 
-def test_job_bytes_cap_override_uses_report_gb():
-    assert job_bytes_cap(_form(override_cap=True, bytes_cap_override_gb=20)) == 20 * 1024**3
+@pytest.mark.parametrize("flag", [True, "true", "on", "1", 1])
+def test_job_bytes_cap_override_is_unlimited(flag):
+    """Override takes no number: it removes the cap for that request."""
+    assert job_bytes_cap(_form(override_cap=flag)) is None
+
+
+def test_job_bytes_cap_override_ignores_a_stale_gb_field():
+    # A cached page (or a crafted body) may still carry the retired field.
+    assert job_bytes_cap(_form(override_cap=True, bytes_cap_override_gb=20)) is None
+
+
+def test_job_bytes_cap_unticked_override_uses_the_setup_cap():
+    assert job_bytes_cap(_form(override_cap=False, bytes_cap_gb=25)) == 25 * 1024**3
 
 
 def test_catalog_event_values_uses_recent_window():

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from typing import Any, ClassVar
@@ -103,7 +104,37 @@ def _require_sql(sql: str) -> str:
 
 def _looks_like_bytes_cap(message: str) -> bool:
     lowered = message.lower()
-    return "bytes billed" in lowered or "maximumbytesbilled" in lowered
+    return (
+        "bytes billed" in lowered
+        or "maximumbytesbilled" in lowered
+        or "bytesbilledlimitexceeded" in lowered
+    )
+
+
+# BigQuery states both figures when it rejects a job on the cap:
+#   "Query exceeded limit for bytes billed: 10737418240. 39277559808 or higher
+#    required.; reason: bytesBilledLimitExceeded"
+# Sniffing that only to pick the error class and dropping the numbers leaves the
+# app showing a raw 500 for a condition it fully understands.
+_BYTES_CAP_LIMIT = re.compile(r"bytes billed:\s*(\d+)", re.IGNORECASE)
+_BYTES_CAP_REQUIRED = re.compile(r"(\d+)\s+or higher required", re.IGNORECASE)
+
+
+def _bytes_cap_figures(message: str) -> tuple[int | None, int | None]:
+    """``(required, limit)`` from a cap rejection. Either may be None.
+
+    ``required`` is BigQuery's *bytes billed* figure, not
+    ``total_bytes_processed``: billing rounds up (10 MB minimum per table), so
+    it can exceed the dry-run estimate for the same SQL. It is still the number
+    to show someone deciding whether to override, which is why it rides
+    ``BytesCapError.bytes_processed`` rather than a fourth field.
+    """
+    required = _BYTES_CAP_REQUIRED.search(message)
+    limit = _BYTES_CAP_LIMIT.search(message)
+    return (
+        int(required.group(1)) if required else None,
+        int(limit.group(1)) if limit else None,
+    )
 
 
 def _looks_like_adc(exc: BaseException, message: str) -> bool:
@@ -124,9 +155,11 @@ def _wrap_google_error(
 ) -> AdapterError:
     message = str(exc)
     if _looks_like_bytes_cap(message):
+        required, limit = _bytes_cap_figures(message)
         return BytesCapError(
             message,
-            maximum_bytes_billed=maximum_bytes_billed,
+            bytes_processed=required,
+            maximum_bytes_billed=limit if limit is not None else maximum_bytes_billed,
         )
     if _looks_like_adc(exc, message):
         return AdapterError(

@@ -11,10 +11,22 @@ import logging
 
 import pytest
 
-from factcat.warehouses import ADAPTERS, capabilities, extra_installed, extra_requirement
+from fastapi.testclient import TestClient
+
+from factcat.warehouses import (
+    ADAPTERS,
+    CAP_DRY_RUN,
+    CAP_SCAN_CAP,
+    capabilities,
+    extra_installed,
+    extra_requirement,
+)
+from factcat.warehouses.bigquery import DEFAULT_MAXIMUM_BYTES_BILLED
 from factcat_app.catalog import catalog_steps, catalog_steps_by_kind, type_sets
 from factcat_app.main import SETUP_DOCS
+from factcat_app.main import app as main_app
 from factcat_app.query import (
+    connection_from_form,
     event_name_cache_rebuild_sql,
     event_values_sql,
     events_sql_from_form,
@@ -172,6 +184,35 @@ def test_event_name_cache_rebuild_walks_adapters(kind, sqlglot_warnings):
 def test_capabilities_declared(kind):
     caps = capabilities(kind)
     assert isinstance(caps, frozenset)
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
+def test_scan_cap_rides_the_capability_not_the_kind(kind):
+    """A kind without CAP_SCAN_CAP is never handed a cap it cannot honour."""
+    conn = connection_from_form(_form(kind, project="p", location="EU"))
+    if CAP_SCAN_CAP in capabilities(kind):
+        assert conn["maximum_bytes_billed"] == DEFAULT_MAXIMUM_BYTES_BILLED
+        assert connection_from_form(
+            _form(kind, project="p", location="EU", override_cap=True)
+        )["maximum_bytes_billed"] is None
+    else:
+        assert "maximum_bytes_billed" not in conn
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
+def test_estimate_gated_on_dry_run_capability(kind, monkeypatch, tmp_path):
+    """A kind that cannot estimate says so instead of opening a connection."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / f"{kind}.json"))
+
+    def _boom(*a, **kw):
+        raise AssertionError(f"{kind} must not connect to estimate")
+
+    if CAP_DRY_RUN not in capabilities(kind):
+        monkeypatch.setattr("factcat_app.main.connect", _boom)
+        res = TestClient(main_app).post(
+            "/api/estimate", json=_form(kind, project="p", location="EU")
+        )
+        assert res.json()["supported"] is False
 
 
 @pytest.mark.parametrize("kind", list(ADAPTERS))

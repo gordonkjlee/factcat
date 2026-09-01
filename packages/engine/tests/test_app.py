@@ -438,8 +438,13 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Load more" in res.text
     assert 'id="query_row_limit"' in res.text
     assert "Override cap" in res.text
+    assert "bytes_cap_override_gb" not in res.text
+    assert "GB this run" not in res.text
     assert "icon-btn" in res.text
     assert "estimateKey" in res.text
+    assert "syncCostGate" in res.text
+    # Cost -> consent -> action: Run is last so it stays flush right.
+    assert html.find('id="run-estimate-wrap"') < html.find('id="cap-override"') < html.find('id="run"')
     assert 'e.target.id === "exact"' in res.text
     assert 'id="needs-setup"' not in res.text
     assert 'id="run" disabled' not in res.text
@@ -971,6 +976,59 @@ def test_estimate_over_cap_still_returns_bytes(monkeypatch, tmp_path):
     assert body["ok"] is True
     assert body["over_cap"] is True
     assert body["bytes"] == 20 * 1024**3
+
+
+def _cap_rejected_run(monkeypatch, tmp_path, exc):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.side_effect = exc
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    return TestClient(app).post(
+        "/api/run",
+        json={
+            "project": "p",
+            "location": "EU",
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "uniques",
+            "grain": "day",
+        },
+    )
+
+
+def test_run_cap_rejection_is_distinguishable(monkeypatch, tmp_path):
+    res = _cap_rejected_run(
+        monkeypatch,
+        tmp_path,
+        BytesCapError(
+            "too big",
+            bytes_processed=39277559808,
+            maximum_bytes_billed=10 * 1024**3,
+        ),
+    )
+    assert res.status_code == 400
+    body = res.json()
+    assert body["ok"] is False
+    assert body["over_cap"] is True
+    assert body["bytes"] == 39277559808
+    assert body["cap"] == 10 * 1024**3
+
+
+def test_run_cap_rejection_without_figures_still_flags(monkeypatch, tmp_path):
+    """No figures in the message: the flag survives, the cap falls back."""
+    res = _cap_rejected_run(monkeypatch, tmp_path, BytesCapError("too big"))
+    body = res.json()
+    assert body["over_cap"] is True
+    assert body["bytes"] is None
+    assert body["cap"] == 10 * 1024**3
+
+
+def test_run_other_failures_are_not_flagged_over_cap(monkeypatch, tmp_path):
+    res = _cap_rejected_run(monkeypatch, tmp_path, AdapterError("syntax error"))
+    body = res.json()
+    assert body["ok"] is False
+    assert "over_cap" not in body
 
 
 def test_run_flags_truncated_when_row_count_hits_limit(monkeypatch, tmp_path):

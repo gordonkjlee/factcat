@@ -1891,11 +1891,16 @@ def events_sql_from_form(form: dict[str, Any]) -> str:
 
 
 def job_bytes_cap(form: dict[str, Any]) -> int | None:
-    """Factcat job cap in bytes. None is unlimited. Not a GCP default."""
-    override = form.get("override_cap") in (True, "true", "on", "1", 1)
-    raw = form.get("bytes_cap_override_gb" if override else "bytes_cap_gb")
+    """Factcat job cap in bytes. None is unlimited. Not a GCP default.
+
+    Override takes no number: the caller has already been shown the estimate
+    they are approving, so ticking it runs uncapped for that request.
+    """
+    if form.get("override_cap") in (True, "true", "on", "1", 1):
+        return None
+    raw = form.get("bytes_cap_gb")
     if raw in (None, ""):
-        return None if override else DEFAULT_MAXIMUM_BYTES_BILLED
+        return DEFAULT_MAXIMUM_BYTES_BILLED
     try:
         gb = float(raw)
     except (TypeError, ValueError) as exc:

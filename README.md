@@ -418,9 +418,12 @@ does, a warning offers **Load more**, which doubles the cap for that run
 rather than removing LIMIT. There is no hard max. Sort is among loaded
 rows and does not re-query. **Job scan
 cap** is set in Setup for BigQuery (default 10 GB on the job). Snowflake has no
-byte estimate; that chrome is hidden. If a BigQuery estimate exceeds the cap, the
-report can override it for that run. The filter pane sits beside Chart, Table, and
-SQL result panes.
+byte estimate; that chrome is hidden. When a BigQuery estimate exceeds the cap,
+**Run** is disabled and an **Override cap** tickbox appears beside it; the
+estimate reads `~24 GB / 10 GB cap`. Override takes no number — it removes the
+cap for that one run, and never persists. A query that outran its estimate and
+was rejected by BigQuery offers the same tickbox, using the figures BigQuery
+reported. The filter pane sits beside Chart, Table, and SQL result panes.
 
 Click **Run**. The mapping is written to `.factcat.json` in the directory where you started
 `factcat`, so the next start is already filled in. Add `.factcat.json` to that repo’s
