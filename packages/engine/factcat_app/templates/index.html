@@ -206,8 +206,12 @@
       border-bottom: 1px solid var(--fc-line);
     }
     .pane + .pane { margin-top: 0.5rem; }
+    /* The divider's own height provides the chart-table gap; when a closed
+       pane hides it, the next card supplies the same 0.5rem so every
+       inter-card gap is identical in every collapse state. */
+    .row-divider[hidden] + .pane { margin-top: 0.5rem; }
     .row-divider {
-      flex: 0 0 0.5rem;
+      height: 0.5rem;
       cursor: row-resize;
       touch-action: none;
       position: relative;
