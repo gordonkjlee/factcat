@@ -356,6 +356,19 @@
     .icon-btn.copied { color: var(--fc-ok); border-color: var(--fc-ok); }
     .format-pop > summary.icon-btn { list-style: none; }
     .format-pop > summary.icon-btn::-webkit-details-marker { display: none; }
+    .format-pop[hidden] { display: none !important; }
+    .format-pop[open] > .export-body {
+      position: absolute; right: 0; top: calc(100% + 0.2rem); z-index: 8;
+      background: var(--fc-snow); border: 1px solid var(--fc-line); padding: 0.25rem;
+      min-width: 11rem; box-shadow: 0 4px 14px rgba(28, 25, 23, .08);
+      display: flex; flex-direction: column; gap: 0.1rem;
+    }
+    .export-body button {
+      margin: 0; padding: 0.35rem 0.6rem; width: 100%;
+      background: none; border: 0; border-radius: 0.25rem;
+      color: var(--fc-ink); font-size: 0.72rem; text-align: left; cursor: pointer;
+    }
+    .export-body button:hover { background: var(--fc-paper); }
     .pane-limit {
       display: flex; align-items: center; gap: 0.3rem; margin: 0;
       font-size: 0.7rem; font-weight: 400; color: var(--fc-slate);
@@ -978,9 +991,16 @@
           <button type="button" id="copy-chart" class="icon-btn" hidden title="Copy chart" aria-label="Copy chart">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
-          <button type="button" id="export-png" class="icon-btn" hidden title="Download PNG" aria-label="Download PNG">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
-          </button>
+          <details class="format-pop" id="chart-export" hidden>
+            <summary class="icon-btn" title="Download chart" aria-label="Download chart">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 19h16"/></svg>
+            </summary>
+            <div class="export-body">
+              <button type="button" data-chart-export="png">PNG</button>
+              <button type="button" data-chart-export="png2x">PNG 2×</button>
+              <button type="button" data-chart-export="png2xt">PNG 2× transparent</button>
+            </div>
+          </details>
         </span>
       </div>
       <div class="pane-body chart-body" id="chart-pane-body">
@@ -1004,9 +1024,17 @@
           <button type="button" id="copy-table" class="icon-btn" hidden title="Copy table" aria-label="Copy table">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
-          <button type="button" id="export-csv" class="icon-btn" hidden title="Export CSV" aria-label="Export CSV">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 19h16"/></svg>
-          </button>
+          <details class="format-pop" id="table-export" hidden>
+            <summary class="icon-btn" title="Download table" aria-label="Download table">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 19h16"/></svg>
+            </summary>
+            <div class="export-body">
+              <button type="button" data-table-export="csv">CSV</button>
+              <button type="button" data-table-export="tsv">TSV — pastes into Sheets and Excel</button>
+              <button type="button" data-table-export="md">Markdown table</button>
+              <button type="button" data-table-export="json">JSON</button>
+            </div>
+          </details>
         </span>
       </div>
       <div class="pane-body" id="table-pane-body">
@@ -1035,6 +1063,15 @@
           <button type="button" id="copy-sql" class="icon-btn" hidden title="Copy SQL" aria-label="Copy SQL">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
+          <details class="format-pop" id="sql-export" hidden>
+            <summary class="icon-btn" title="Download SQL" aria-label="Download SQL">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 19h16"/></svg>
+            </summary>
+            <div class="export-body">
+              <button type="button" data-sql-export="sql">SQL file (.sql)</button>
+              <button type="button" data-sql-export="md">Markdown (.md)</button>
+            </div>
+          </details>
         </span>
       </div>
       <div class="pane-body" id="sql-pane-body">
@@ -3447,11 +3484,13 @@ function showSql(text) {
     sqlEl.textContent = "SQL updates as you change the form.";
     sqlEl.classList.add("empty");
     document.getElementById("copy-sql").hidden = true;
+    document.getElementById("sql-export").hidden = true;
     return;
   }
   sqlEl.textContent = text;
   sqlEl.classList.remove("empty");
   document.getElementById("copy-sql").hidden = false;
+  document.getElementById("sql-export").hidden = false;
 }
 let sqlGen = 0;
 async function compileSql() {
@@ -3749,20 +3788,21 @@ function tableErrorText() {
 }
 function setTableActions(mode) {
   const copyBtn = document.getElementById("copy-table");
-  const exportBtn = document.getElementById("export-csv");
+  const exportPop = document.getElementById("table-export");
+  const exportBtn = exportPop.querySelector("summary");
   copyBtn.hidden = false;
-  exportBtn.hidden = false;
+  exportPop.hidden = false;
   if (mode === "error") {
     copyBtn.title = "Copy error";
     copyBtn.setAttribute("aria-label", "Copy error");
-    exportBtn.title = "Export error";
-    exportBtn.setAttribute("aria-label", "Export error");
+    exportBtn.title = "Download error";
+    exportBtn.setAttribute("aria-label", "Download error");
     return;
   }
   copyBtn.title = "Copy table";
   copyBtn.setAttribute("aria-label", "Copy table");
-  exportBtn.title = "Export CSV";
-  exportBtn.setAttribute("aria-label", "Export CSV");
+  exportBtn.title = "Download table";
+  exportBtn.setAttribute("aria-label", "Download table");
 }
 function downloadBlob(text, filename, type) {
   const blob = new Blob([text.endsWith("\n") ? text : text + "\n"], { type });
@@ -3772,20 +3812,69 @@ function downloadBlob(text, filename, type) {
   a.click();
   URL.revokeObjectURL(a.href);
 }
-function exportCsv() {
+function exportSlug() {
+  const raw = (titleEl.value || "").trim().toLowerCase();
+  const slug = raw
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/-+$/, "");
+  return slug || "factcat-events";
+}
+function tsvCell(value) {
+  return String(value ?? "").replace(/[\t\n\r]+/g, " ");
+}
+function mdCell(value) {
+  return String(value ?? "").replace(/\|/g, "\\|").replace(/[\n\r]+/g, " ");
+}
+function rawTableCells(row) {
+  return hasSeries()
+    ? [row.bucket, row.series, row.value, row.incomplete ? "true" : "false"]
+    : [row.bucket, row.value, row.incomplete ? "true" : "false"];
+}
+function exportTable(kind) {
   const err = tableErrorText();
   if (err) {
     downloadBlob(err, "factcat-error.txt", "text/plain");
     return;
   }
-  const lines = [tableHeaderRow().map(csvCell).join(",")];
+  const slug = exportSlug();
+  if (kind === "csv" || kind === "tsv") {
+    const sep = kind === "csv" ? "," : "\t";
+    const cell = kind === "csv" ? csvCell : tsvCell;
+    const lines = [tableHeaderRow().map(cell).join(sep)];
+    for (const row of rankedTableRows()) lines.push(rawTableCells(row).map(cell).join(sep));
+    downloadBlob(
+      lines.join("\n"),
+      slug + "." + kind,
+      kind === "csv" ? "text/csv" : "text/tab-separated-values"
+    );
+    return;
+  }
+  if (kind === "json") {
+    const rows = rankedTableRows().map((row) => {
+      const item = { bucket: row.bucket, value: row.value, incomplete: !!row.incomplete };
+      if (hasSeries()) item.series = row.series;
+      return item;
+    });
+    downloadBlob(JSON.stringify(rows, null, 2), slug + ".json", "application/json");
+    return;
+  }
+  // Markdown is the human-facing export: display buckets and formatted values.
+  const head = hasSeries()
+    ? [grainHeader(), seriesHeader(), valueHeader()]
+    : [grainHeader(), valueHeader()];
+  const md = [
+    "| " + head.map(mdCell).join(" | ") + " |",
+    "| " + head.map(() => "---").join(" | ") + " |",
+  ];
   for (const row of rankedTableRows()) {
     const cells = hasSeries()
-      ? [row.bucket, row.series, row.value, row.incomplete ? "true" : "false"]
-      : [row.bucket, row.value, row.incomplete ? "true" : "false"];
-    lines.push(cells.map(csvCell).join(","));
+      ? [displayBucket(row), row.series, formatValue(row.value)]
+      : [displayBucket(row), formatValue(row.value)];
+    md.push("| " + cells.map(mdCell).join(" | ") + " |");
   }
-  downloadBlob(lines.join("\n"), "factcat-events.csv", "text/csv");
+  downloadBlob(md.join("\n"), slug + ".md", "text/markdown");
 }
 document.querySelectorAll("#result-table th[data-key]").forEach((th) => {
   th.addEventListener("click", (e) => {
@@ -3814,7 +3903,12 @@ document.querySelectorAll("#result-table .grip").forEach((grip) => {
     document.addEventListener("mouseup", up);
   });
 });
-document.getElementById("export-csv").addEventListener("click", exportCsv);
+document.querySelectorAll("[data-table-export]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    exportTable(btn.getAttribute("data-table-export"));
+    btn.closest("details").removeAttribute("open");
+  });
+});
 document.getElementById("copy-table").addEventListener("click", async () => {
   const err = tableErrorText();
   if (err) {
@@ -3847,6 +3941,28 @@ document.getElementById("copy-sql").addEventListener("click", async () => {
   if (!text || document.getElementById("sql").classList.contains("empty")) return;
   await navigator.clipboard.writeText(text);
   flashCopied(document.getElementById("copy-sql"));
+});
+function exportSqlFile(kind) {
+  const el = document.getElementById("sql");
+  const text = (el.textContent || "").replace(/\n$/, "");
+  if (!text || el.classList.contains("empty")) return;
+  const slug = exportSlug();
+  if (kind === "md") {
+    const title = (titleEl.value || "").trim() || "Factcat events query";
+    downloadBlob(
+      "## " + title + "\n\n```sql\n" + text + "\n```",
+      slug + ".md",
+      "text/markdown"
+    );
+    return;
+  }
+  downloadBlob(text, slug + ".sql", "application/sql");
+}
+document.querySelectorAll("[data-sql-export]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    exportSqlFile(btn.getAttribute("data-sql-export"));
+    btn.closest("details").removeAttribute("open");
+  });
 });
 function applySeps(raw) {
   const text = String(raw);
@@ -4127,7 +4243,7 @@ function setChartEmpty(kind) {
 function drawChart() {
   const ctx = document.getElementById("chart");
   const copyBtn = document.getElementById("copy-chart");
-  const pngBtn = document.getElementById("export-png");
+  const pngBtn = document.getElementById("chart-export");
   if (!tableRows.length) {
     if (catKind !== "fail" && catKind !== "running") setChartEmpty("wait");
     ctx.hidden = true;
@@ -4263,8 +4379,9 @@ function drawChart() {
   });
 }
 document.addEventListener("click", (e) => {
-  const pop = document.getElementById("format-pop");
-  if (pop.open && !pop.contains(e.target)) pop.removeAttribute("open");
+  document.querySelectorAll("details.format-pop[open]").forEach((pop) => {
+    if (!pop.contains(e.target)) pop.removeAttribute("open");
+  });
 });
 document.getElementById("chart_type").addEventListener("change", drawChart);
 ["chart_labels", "chart_value_format", "chart_grid"].forEach((id) => {
@@ -4275,21 +4392,45 @@ document.getElementById("chart_type").addEventListener("change", drawChart);
     }
   });
 });
-document.getElementById("export-png").addEventListener("click", () => {
-  if (!chart) return;
-  const a = document.createElement("a");
-  a.href = chart.toBase64Image();
-  a.download = "factcat-chart.png";
-  a.click();
+function chartExportCanvas(scale, transparent) {
+  const src = chart.canvas;
+  const cssW = src.clientWidth || src.width;
+  const cssH = src.clientHeight || src.height;
+  const off = document.createElement("canvas");
+  off.width = Math.round(cssW * scale);
+  off.height = Math.round(cssH * scale);
+  const g = off.getContext("2d");
+  if (!transparent) {
+    g.fillStyle = getComputedStyle(document.querySelector(".pane-chart")).backgroundColor;
+    g.fillRect(0, 0, off.width, off.height);
+  }
+  g.drawImage(src, 0, 0, off.width, off.height);
+  return off;
+}
+document.querySelectorAll("[data-chart-export]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    btn.closest("details").removeAttribute("open");
+    if (!chart) return;
+    const kind = btn.getAttribute("data-chart-export");
+    const scale = kind === "png" ? 1 : 2;
+    const off = chartExportCanvas(scale, kind === "png2xt");
+    const a = document.createElement("a");
+    a.href = off.toDataURL("image/png");
+    a.download = exportSlug() + ".png";
+    a.click();
+  });
 });
 document.getElementById("copy-chart").addEventListener("click", async () => {
   if (!chart) return;
-  const blob = await (await fetch(chart.toBase64Image())).blob();
+  // Copy with the pane background painted: a transparent PNG pastes as
+  // unreadable ink-on-nothing in dark theme.
+  const off = chartExportCanvas(2, false);
+  const blob = await new Promise((resolve) => off.toBlob(resolve, "image/png"));
   try {
     await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
     flashCopied(document.getElementById("copy-chart"));
   } catch (err) {
-    setError("Could not copy image. Use PNG to download.");
+    setError("Could not copy image. Use the download menu instead.");
   }
 });
 function showLimitNote(truncated, limit) {
@@ -4370,7 +4511,7 @@ form.addEventListener("submit", async (e) => {
       document.getElementById("chart").hidden = true;
       setChartEmpty("fail");
       document.getElementById("copy-chart").hidden = true;
-      document.getElementById("export-png").hidden = true;
+      document.getElementById("chart-export").hidden = true;
       showLimitNote(false, 0);
       runStatus.textContent = "";
       return;
