@@ -183,6 +183,49 @@ def test_bq_bytes_cap_rejection_is_bytes_cap_error(google_stack):
         BigQueryAdapter(project="p", location="EU").run("SELECT 1")
 
 
+def test_bq_bytes_cap_rejection_keeps_both_figures(google_stack):
+    """BigQuery states what it needs and what it was capped at. Keep both."""
+    google_stack.client.query.side_effect = RuntimeError(
+        "500 Query exceeded limit for bytes billed: 10737418240. "
+        "39277559808 or higher required.; reason: bytesBilledLimitExceeded, "
+        "message: Query exceeded limit for bytes billed: 10737418240. "
+        "39277559808 or higher required."
+    )
+    with pytest.raises(BytesCapError) as exc:
+        BigQueryAdapter(project="p", location="EU").run("SELECT 1")
+    assert exc.value.bytes_processed == 39277559808
+    assert exc.value.maximum_bytes_billed == 10737418240
+
+
+def test_bq_bytes_cap_rejection_reports_the_cap_it_was_measured_against(
+    google_stack,
+):
+    # The rejection's own limit wins over the one we asked for: BigQuery is
+    # authoritative about what it actually enforced.
+    google_stack.client.query.side_effect = RuntimeError(
+        "Query exceeded limit for bytes billed: 5368709120. "
+        "39277559808 or higher required."
+    )
+    with pytest.raises(BytesCapError) as exc:
+        BigQueryAdapter(
+            project="p", location="EU", maximum_bytes_billed=10 * 1024**3
+        ).run("SELECT 1")
+    assert exc.value.maximum_bytes_billed == 5368709120
+
+
+def test_bq_bytes_cap_rejection_without_figures_falls_back(google_stack):
+    """A reworded message still picks the class; the figures degrade to None."""
+    google_stack.client.query.side_effect = RuntimeError(
+        "reason: bytesBilledLimitExceeded"
+    )
+    with pytest.raises(BytesCapError) as exc:
+        BigQueryAdapter(
+            project="p", location="EU", maximum_bytes_billed=10 * 1024**3
+        ).run("SELECT 1")
+    assert exc.value.bytes_processed is None
+    assert exc.value.maximum_bytes_billed == 10 * 1024**3
+
+
 def test_adc_missing_tells_you_to_login(google_stack):
     err = type("DefaultCredentialsError", (RuntimeError,), {})(
         "Could not automatically determine credentials"

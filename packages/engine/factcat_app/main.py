@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import markdown
 from fastapi import FastAPI, Request
@@ -422,11 +423,22 @@ def _client_error(exc: BaseException, sql: str | None = None) -> str:
     return "\n".join(lines) if lines else "Query failed. See SQL below."
 
 
-def _fail(exc: BaseException, sql: str | None) -> JSONResponse:
-    return JSONResponse(
-        {"ok": False, "error": _client_error(exc, sql), "sql": sql},
-        status_code=400,
-    )
+def _fail(
+    exc: BaseException,
+    sql: str | None,
+    extra: dict[str, Any] | None = None,
+) -> JSONResponse:
+    body = {"ok": False, "error": _client_error(exc, sql), "sql": sql}
+    if extra:
+        body.update(extra)
+    return JSONResponse(body, status_code=400)
+
+
+def _cap_from_error(exc: BytesCapError, form: dict[str, Any]) -> int | None:
+    """The cap a rejection was measured against, or the one we asked for."""
+    if exc.maximum_bytes_billed is not None:
+        return exc.maximum_bytes_billed
+    return job_bytes_cap(form)
 
 
 def _estimate_payload(processed: int | None, cap: int | None, *, over_cap: bool) -> dict:
@@ -482,7 +494,7 @@ async def api_estimate(request: Request) -> JSONResponse:
         return JSONResponse(
             _estimate_payload(
                 exc.bytes_processed,
-                exc.maximum_bytes_billed if exc.maximum_bytes_billed is not None else job_bytes_cap(form),
+                _cap_from_error(exc, form),
                 over_cap=True,
             )
         )
@@ -506,7 +518,17 @@ async def api_run(request: Request) -> JSONResponse:
         warehouse = await run_in_threadpool(connect, form_kind(form), **conn)
         result = await run_in_threadpool(warehouse.run, sql)
     except BytesCapError as exc:
-        return _fail(exc, sql)
+        # Distinguishable from any other 400 so the report can offer the
+        # override instead of showing a raw warehouse rejection.
+        return _fail(
+            exc,
+            sql,
+            {
+                "over_cap": True,
+                "bytes": exc.bytes_processed,
+                "cap": _cap_from_error(exc, form),
+            },
+        )
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _fail(exc, sql)
     raw_rows = []
