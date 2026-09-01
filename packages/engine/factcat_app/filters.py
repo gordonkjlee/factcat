@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+from .sql_display import sql_chrome, sql_plain
 
 # value: none (no input), one, two (between), list (comma/newline tokens).
 FILTER_OP_META: dict[str, dict[str, str]] = {
@@ -272,14 +275,14 @@ FILTER_OP_SQL_LABELS = {
     "is_not": "<>",
     "is_any_of": "IN",
     "is_none_of": "NOT IN",
-    "contains": "LIKE",
-    "not_contains": "NOT LIKE",
-    "starts_with": "LIKE prefix",
-    "not_starts_with": "NOT LIKE prefix",
-    "ends_with": "LIKE suffix",
-    "not_ends_with": "NOT LIKE suffix",
-    "is_empty": "= ''",
-    "is_not_empty": "<> ''",
+    "contains": "LIKE '%s%'",
+    "not_contains": "NOT LIKE '%s%'",
+    "starts_with": "LIKE 's%'",
+    "not_starts_with": "NOT LIKE 's%'",
+    "ends_with": "LIKE '%s'",
+    "not_ends_with": "NOT LIKE '%s'",
+    "is_empty": "= (empty)",
+    "is_not_empty": "<> (empty)",
     "is_true": "IS TRUE",
     "is_false": "IS FALSE",
     "gt": ">",
@@ -299,34 +302,50 @@ CHROME = {
     "plain": {
         "add_filter": "Add filter",
         "combine": "Combine",
+        "any_of": "Any of",
+        "event_or": "or",
+        "add_group_event": "Add event",
         "breakdown": "Break down by",
         "breakdown_each": "Break down each series",
         "breakdown_th": "Break down",
+        "add_breakdown": "Add breakdown",
         "sql_expr": "SQL expression",
         "sql_expr_ellipsis": "SQL expression…",
         "of": "Of",
         "volume": "Volume",
         "unique": "Unique {plural}",
         "average_per": "Average per {singular}",
+        "property_sum": "Sum",
+        "property_average": "Average",
+        "property_median": "Median",
+        "property_distinct": "Distinct per {singular}",
         "filter_column": "Filter column",
         "filter_op": "Filter operator",
         "filter_sql": "Filter SQL",
     },
     "sql": {
-        "add_filter": "WHERE",
-        "combine": "OR",
-        "breakdown": "GROUP BY",
-        "breakdown_each": "GROUP BY each series",
-        "breakdown_th": "GROUP BY",
-        "sql_expr": "SQL",
-        "sql_expr_ellipsis": "SQL…",
-        "of": "of=",
-        "volume": "COUNT",
-        "unique": "COUNT DISTINCT",
-        "average_per": "COUNT / COUNT DISTINCT",
+        "add_filter": "`WHERE`",
+        "combine": "`OR`",
+        "any_of": "`OR`",
+        "event_or": "`OR`",
+        "add_group_event": "Add event",
+        "breakdown": "`GROUP BY`",
+        "breakdown_each": "`GROUP BY` each series",
+        "breakdown_th": "`GROUP BY`",
+        "add_breakdown": "`GROUP BY`",
+        "sql_expr": "`SQL`",
+        "sql_expr_ellipsis": "`SQL`…",
+        "of": "of",
+        "volume": "`COUNT(*)`",
+        "unique": "`COUNT(DISTINCT id)`",
+        "average_per": "`COUNT(*)`/`COUNT(DISTINCT id)`",
+        "property_sum": "`SUM(x)`",
+        "property_average": "`AVERAGE(x)`",
+        "property_median": "`MEDIAN(x)`",
+        "property_distinct": "`AVG(COUNT(DISTINCT x))`",
         "filter_column": "column",
         "filter_op": "op",
-        "filter_sql": "SQL",
+        "filter_sql": "`SQL`",
     },
 }
 
@@ -345,6 +364,11 @@ FILTER_TYPE_FAMILY: dict[str, str] = {
     "TIMESTAMP": "timestamp",
     "DATETIME": "timestamp",
     "JSON": "string",
+}
+
+DATE_PART_GROUP_SQL = {
+    "Start of": "DATE_TRUNC",
+    "Extract": "EXTRACT",
 }
 
 LIKE_OPS: dict[str, tuple[str, bool]] = {
@@ -371,6 +395,26 @@ def display_months(style: str) -> list[str]:
     return _short_names(MONTHS) if style == "short" else list(MONTHS)
 
 
+_SQL_MARK = re.compile(r"`([^`]*)`")
+
+
+def _sql_letter_case(text: str, case: str) -> str:
+    if case != "lower":
+        return text
+    if "`" not in text:
+        return text
+    return _SQL_MARK.sub(lambda m: "`" + m.group(1).lower() + "`", text)
+
+
+def _sql_neq(text: str, neq: str) -> str:
+    return text.replace("<>", "!=") if neq == "!=" else text
+
+
+def _sql_label(text: str, case: str, neq: str) -> str:
+    text = _sql_neq(text, neq)
+    return text.lower() if case == "lower" else text
+
+
 def filter_ui(prefs: dict[str, Any] | None = None) -> dict[str, Any]:
     """One payload for the Events form. Do not copy this matrix in JS."""
     if prefs is None:
@@ -380,16 +424,24 @@ def filter_ui(prefs: dict[str, Any] | None = None) -> dict[str, Any]:
     vocab = str(prefs.get("vocab") or "plain")
     if vocab not in CHROME:
         vocab = "plain"
+    sql_case = str(prefs.get("sql_case") or "upper")
+    if sql_case not in {"upper", "lower"}:
+        sql_case = "upper"
+    sql_neq = str(prefs.get("sql_neq") or "<>")
+    if sql_neq not in {"<>", "!="}:
+        sql_neq = "<>"
     ops = {key: dict(meta) for key, meta in FILTER_OP_META.items()}
     numeric_labels = dict(FILTER_OP_NUMERIC_LABELS)
+    chrome = dict(CHROME[vocab])
     if vocab == "sql":
         for key, label in FILTER_OP_SQL_LABELS.items():
             if key in ops:
-                ops[key]["label"] = label
+                ops[key]["label"] = _sql_label(label, sql_case, sql_neq)
         numeric_labels = {
-            key: FILTER_OP_SQL_LABELS.get(key, label)
+            key: _sql_label(FILTER_OP_SQL_LABELS.get(key, label), sql_case, sql_neq)
             for key, label in FILTER_OP_NUMERIC_LABELS.items()
         }
+        chrome = {key: _sql_letter_case(value, sql_case) for key, value in chrome.items()}
     from .prefs import _validate, format_hour, hour_labels
 
     prefs = _validate(prefs)
@@ -407,6 +459,9 @@ def filter_ui(prefs: dict[str, Any] | None = None) -> dict[str, Any]:
             row["label"] = (
                 "Day of month (01-31)" if pad_day else "Day of month (1-31)"
             )
+        if vocab == "sql" and row.get("group") in DATE_PART_GROUP_SQL:
+            group = DATE_PART_GROUP_SQL[row["group"]]
+            row["group"] = group.lower() if sql_case == "lower" else group
         parts.append(row)
     return {
         "type_family": dict(FILTER_TYPE_FAMILY),
@@ -420,8 +475,12 @@ def filter_ui(prefs: dict[str, Any] | None = None) -> dict[str, Any]:
         "hours": hours,
         "integer_types": sorted(FILTER_INTEGER_TYPES),
         "numeric_op_labels": numeric_labels,
-        "chrome": dict(CHROME[vocab]),
+        "chrome": chrome,
+        "chrome_html": {key: str(sql_chrome(value)) for key, value in chrome.items()},
+        "chrome_plain": {key: sql_plain(value) for key, value in chrome.items()},
         "vocab": vocab,
+        "sql_case": sql_case,
+        "sql_neq": sql_neq,
         "thousand_sep": str(prefs.get("thousand_sep") or "comma"),
         "decimal_sep": str(prefs.get("decimal_sep") or "period"),
         "pad_day": pad_day,

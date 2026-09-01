@@ -201,7 +201,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "Average per User" in res.text
     assert ">Uniques<" not in res.text
     assert 'optgroup label="Event"' in res.text
-    assert 'optgroup label="Property"' in res.text
+    assert 'optgroup label="Property value"' in res.text
+    assert 'optgroup label="Property"' not in res.text
     assert ">Sum<" in res.text
     assert 'value="property_average"' in res.text
     assert ">Median<" in res.text
@@ -380,6 +381,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert 'id="event-cards"' in res.text
     assert "Event series" in res.text
     assert "Add series" in res.text
+    assert 'id="add-event-row"' in res.text
+    assert "syncSeriesChrome" in res.text
     assert "series-measure" in res.text
     assert "event-series" in res.text
     assert "attachSeriesMeasure" in res.text
@@ -387,6 +390,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert "event group" not in res.text.lower()
     assert 'id="add-event"' in res.text
     assert "event-card-combine" in res.text
+    assert "fc-plus-row" in res.text
+    assert "fc-plus" in res.text
     assert "event-group-split" in res.text
     assert "Break down each series" in res.text
     assert "collectSeries" in res.text
@@ -527,6 +532,31 @@ def test_sql_endpoint_compiles_without_warehouse(monkeypatch, tmp_path):
     assert body["ok"] is True
     assert "SUM" in body["sql"].upper()
     assert "revenue" in body["sql"]
+
+
+def test_sql_endpoint_lowercases_keywords_for_sql_vocab(monkeypatch, tmp_path):
+    from factcat_app.prefs import save as save_prefs
+
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    save_prefs({"vocab": "sql", "sql_case": "lower"})
+    client = TestClient(app)
+    res = client.post(
+        "/api/sql",
+        json={
+            "table": "analytics.events",
+            "entity": "account_id",
+            "event_time": "occurred_at",
+            "measure": "uniques",
+            "grain": "day",
+            "lookback_days": 30,
+        },
+    )
+    assert res.status_code == 200
+    sql = res.json()["sql"]
+    assert "select" in sql
+    assert "from" in sql
+    assert "SELECT" not in sql
+    assert "account_id" in sql
 
 
 def test_sql_endpoint_compiles_event_in_and_filter(monkeypatch, tmp_path):
@@ -1491,6 +1521,12 @@ def test_preferences_renders(monkeypatch, tmp_path):
     assert 'id="vocab"' in res.text
     assert "I'm a business user" in res.text
     assert "I'm an analyst familiar with SQL" in res.text
+    assert "SQL letter case" in res.text
+    assert "Uppercase (COUNT(*), WHERE)" in res.text
+    assert "Lowercase (count(*), where)" in res.text
+    assert 'id="sql-options-wrap"' in res.text
+    assert "Not equal" in res.text
+    assert "!=" in res.text
     assert "Factcat will tailor its wording for you." in res.text
     assert "/static/cat-business.jpg" in res.text
     assert "/static/cat-analyst.jpg" in res.text
@@ -1533,6 +1569,8 @@ def test_preferences_save_roundtrip(monkeypatch, tmp_path):
             "thousand_sep": "period",
             "decimal_sep": "comma",
             "vocab": "sql",
+            "sql_case": "lower",
+            "sql_neq": "!=",
             "weekday_style": "short",
             "month_style": "short",
             "pad_calendar": True,
@@ -1543,6 +1581,8 @@ def test_preferences_save_roundtrip(monkeypatch, tmp_path):
     body = res.json()
     assert body["ok"] is True
     assert body["prefs"]["vocab"] == "sql"
+    assert body["prefs"]["sql_case"] == "lower"
+    assert body["prefs"]["sql_neq"] == "!="
     assert body["prefs"]["decimal_sep"] == "comma"
     stored = json.loads((tmp_path / "preferences.json").read_text(encoding="utf-8"))
     assert stored["theme"] == "dark"
@@ -1575,9 +1615,61 @@ def test_events_sql_vocab(monkeypatch, tmp_path):
     assert "Break down by" not in html
     assert "is any of" not in html
     assert '"label": "IN"' in html
+    assert r"LIKE \u0027%s%\u0027" in html
+    assert r"LIKE \u0027s%\u0027" in html
+    assert '"label": "= (empty)"' in html
+    assert "LIKE prefix" not in html
+    assert '"combine": "`OR`"' in html
+    assert '"combine": "Combine"' not in html
+    assert '"add_breakdown": "`GROUP BY`"' in html
+    assert "fc-sql" in html
+    assert 'data-vocab="sql"' in html
+    assert "fc-plus" in html
+    assert "breakdown-slot-head" in html
+    assert '"any_of": "`OR`"' in html
+    assert '"event_or": "`OR`"' in html
+    assert "fc-or" in html
+    assert "Add breakdown" not in html
+    assert "fc-plus-row" in html
+    assert "COUNT(*)" in html
+    assert "COUNT(DISTINCT id)" in html
+    assert "SUM(x)" in html
+    assert "AVERAGE(x)" in html
+    assert "MEDIAN(x)" in html
+    assert "AVG(COUNT(DISTINCT x))" in html
+    assert 'optgroup label="Property value"' in html
+    assert '"of": "of"' in html
     assert "Hour of day" in html
     assert "Day of month (01-31)" in html
     assert ">Mon<" in html or '"Mon"' in html
+
+
+def test_events_sql_vocab_lower(monkeypatch, tmp_path):
+    from factcat_app.prefs import save as save_prefs
+
+    _map_cfg(tmp_path, monkeypatch)
+    save_prefs({"vocab": "sql", "sql_case": "lower"})
+    html = TestClient(app).get("/").text
+    assert '"vocab": "sql"' in html
+    assert '"add_filter": "`where`"' in html
+    assert '"combine": "`or`"' in html
+    assert "count(*)" in html
+    assert "count(distinct id)" in html
+    assert "sum(x)" in html
+    assert "avg(count(distinct x))" in html
+    assert "`group by` each series" in html
+    assert '"add_filter": "`WHERE`"' not in html
+
+
+def test_events_sql_neq_bang(monkeypatch, tmp_path):
+    from factcat_app.prefs import save as save_prefs
+
+    _map_cfg(tmp_path, monkeypatch)
+    save_prefs({"vocab": "sql", "sql_neq": "!="})
+    html = TestClient(app).get("/").text
+    assert '"label": "!="' in html
+    assert '"label": "!= (empty)"' in html
+    assert r"\u003c\u003e (empty)" not in html
 
 
 def test_save_strips_separators_from_project(monkeypatch, tmp_path):

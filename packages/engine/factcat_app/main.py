@@ -37,6 +37,7 @@ from .catalog import (
 from .extras import extra_commands, install_command, run_install
 from .config import load, mapping_ready, save, warehouse_kind
 from .filters import filter_ui
+from .sql_display import apply_sql_keyword_case, sql_chrome, sql_plain
 from . import prefs as prefs_mod
 from .query import (
     REPORTING_TIMEZONES,
@@ -59,6 +60,8 @@ STATIC_DIR = APP_DIR / "static"
 DOCS_DIR = APP_DIR / "guides"
 SETUP_DOCS = {kind: DOCS_DIR / f"setup-{kind}.md" for kind in ADAPTERS}
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+templates.env.filters["sql_chrome"] = sql_chrome
+templates.env.filters["sql_plain"] = sql_plain
 
 
 def setup_docs_html(kind: str = "bigquery") -> str:
@@ -425,6 +428,9 @@ async def api_sql(request: Request) -> JSONResponse:
         sql = events_sql_from_form(form)
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    prefs = prefs_mod.load()
+    if prefs.get("vocab") == "sql" and prefs.get("sql_case") == "lower":
+        sql = apply_sql_keyword_case(sql, form_kind(form), "lower")
     return JSONResponse({"ok": True, "sql": sql})
 
 

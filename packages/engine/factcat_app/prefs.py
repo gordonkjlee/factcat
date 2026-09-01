@@ -57,6 +57,8 @@ DEFAULTS: dict[str, Any] = {
     "decimal_sep": "period",
     "theme": "light",
     "vocab": "plain",
+    "sql_case": "upper",
+    "sql_neq": "<>",
     "weekday_style": "long",
     "month_style": "long",
     "pad_day": False,
@@ -166,6 +168,10 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
     out["decimal_sep"] = dec
     if str(out.get("vocab") or "") not in {"plain", "sql"}:
         out["vocab"] = "plain"
+    if str(out.get("sql_case") or "") not in {"upper", "lower"}:
+        out["sql_case"] = "upper"
+    if str(out.get("sql_neq") or "") not in {"<>", "!="}:
+        out["sql_neq"] = "<>"
     if str(out.get("theme") or "") not in {"light", "dark"}:
         out["theme"] = "light"
     if str(out.get("weekday_style") or "") not in {"long", "short"}:
