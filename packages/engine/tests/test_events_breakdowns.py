@@ -422,6 +422,10 @@ SUBS = [
     # midnight snapshot job. before=end must not see it; until=end would.
     ("S8", "2026-01-25 08:00:00", "login", None),
     ("S8", "2026-02-01 00:00:00", "subscription_started", "edge"),
+    # S9's login carries its own speculative 'trial' while the
+    # authoritative stream says basic — the own_value_first paper.
+    ("S9", "2026-01-03 09:00:00", "subscription_started", "basic"),
+    ("S9", "2026-01-10 11:00:00", "login", "trial"),
 ]
 
 WINDOW_START = "TIMESTAMP '2026-01-01 00:00:00'"
@@ -524,6 +528,43 @@ def test_attr_fill_from_excludes_other_stamps(subs):
         Breakdown("plan_tier", at="last")
     ))}
     assert without[("2026-01-02", "enterprise")] == 1.0
+
+
+def test_own_value_first_beats_narrowed_fill_from(subs):
+    """S9's charted login carries its own speculative 'trial' while the
+    fill_from stream says basic. Source-of-truth (default) ignores the
+    row's own value; own_value_first keeps it. Without fill_from the two
+    contracts agree — the row is its own stamp.
+
+    Mutation: drop the COALESCE / fc_self column and the own-first case
+    returns basic.
+    """
+    authoritative = _subs_spec(
+        Breakdown(
+            "plan_tier",
+            at="carried",
+            fill_from="event_name = 'subscription_started'",
+        )
+    )
+    got = {(d, t): v for d, t, v in _rows(subs, authoritative)}
+    assert got[("2026-01-10", "basic")] == 1.0
+    own_first = _subs_spec(
+        Breakdown(
+            "plan_tier",
+            at="carried",
+            fill_from="event_name = 'subscription_started'",
+            own_value_first=True,
+        )
+    )
+    got_own = {(d, t): v for d, t, v in _rows(subs, own_first)}
+    assert got_own[("2026-01-10", "trial")] == 1.0
+    plain = {(d, t): v for d, t, v in _rows(subs, _subs_spec())}
+    assert plain[("2026-01-10", "trial")] == 1.0
+
+
+def test_own_value_first_requires_carried():
+    with pytest.raises(ValueError, match="own_value_first"):
+        Breakdown("plan", at="last", own_value_first=True)
 
 
 def test_carried_slices_sum_to_unsplit_total(subs):

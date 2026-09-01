@@ -64,6 +64,14 @@ class Breakdown:
                    ``before``): entities with no value by the bound fall back
                    to their first recorded value ever. It never overrides a
                    real as-of value.
+        own_value_first: ``carried`` only. The metric row's own non-null
+                   value wins even when ``fill_from`` excludes that row —
+                   the narrowed stream then only fills rows with no value
+                   of their own. Off (default), ``fill_from`` names the
+                   single source of truth: a speculative stamp on the
+                   charted row itself is ignored too. With no ``fill_from``
+                   the two agree (the row is in the stream and a stamp at
+                   its own instant wins).
 
     Same-instant rules, shared by every non-``rows`` mode: a stamp at exactly
     the row's (or bound's) instant is seen; duplicate stamps at one instant
@@ -77,6 +85,7 @@ class Breakdown:
     until: str | None = None
     before: str | None = None
     backfill: bool = False
+    own_value_first: bool = False
 
     def __post_init__(self) -> None:
         if not self.expr or not self.expr.strip():
@@ -108,6 +117,8 @@ class Breakdown:
             raise ValueError(
                 "backfill requires at='last' with until or before set"
             )
+        if self.own_value_first and self.at != "carried":
+            raise ValueError("own_value_first applies only to at='carried'")
 
 
 @dataclass(frozen=True)

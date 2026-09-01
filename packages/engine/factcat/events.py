@@ -245,9 +245,14 @@ def _carried_ctes(
     for i, bd in rows_items:
         needle_cols.append(f"({bd.expr}) AS fc_bd_{i}")
         stamp_cols.append(f"NULL AS fc_bd_{i}")
-    for i, _ in carried:
+    for i, bd in carried:
         needle_cols.append(f"NULL AS fc_stamp_{i}")
         stamp_cols.append(f"fc_stamp_{i}")
+        if bd.own_value_first:
+            # The metric row's own value, evaluated in the needle branch,
+            # outranks the (possibly fill_from-narrowed) stamp stream.
+            needle_cols.append(f"({bd.expr}) AS fc_self_{i}")
+            stamp_cols.append(f"NULL AS fc_self_{i}")
     grp_windows = ",\n            ".join(
         f"""SUM(CASE WHEN fc_stamp_{i} IS NOT NULL THEN 1 ELSE 0 END) OVER (
                 PARTITION BY fc_entity
@@ -256,13 +261,18 @@ def _carried_ctes(
             ) AS fc_grp_{i}"""
         for i, _ in carried
     )
-    locf_windows = ",\n            ".join(
-        f"""FIRST_VALUE(fc_stamp_{i}) OVER (
+    def _locf_value(i: int, bd: Breakdown) -> str:
+        window = f"""FIRST_VALUE(fc_stamp_{i}) OVER (
                 PARTITION BY fc_entity, fc_grp_{i}
                 ORDER BY {_carried_order_keys(i)}
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-            ) AS fc_bd_{i}"""
-        for i, _ in carried
+            )"""
+        if bd.own_value_first:
+            return f"COALESCE(fc_self_{i}, {window}) AS fc_bd_{i}"
+        return f"{window} AS fc_bd_{i}"
+
+    locf_windows = ",\n            ".join(
+        _locf_value(i, bd) for i, bd in carried
     )
     needle_csv = ",\n            ".join(needle_cols)
     stamp_csv = ",\n            ".join(stamp_cols)

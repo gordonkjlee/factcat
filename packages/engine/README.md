@@ -39,8 +39,10 @@ Breakdowns are caller SQL plus optional ``top_n`` (default 8) and
 ``include_other`` (default True). Value semantics ride per column: a plain
 string means ``breakdown_at`` (``rows`` / ``first`` / ``last`` /
 ``carried``); a ``Breakdown`` entry adds ``fill_from``, ``since`` /
-``until`` bounds, and ``backfill``. ``carried`` is the last non-null value
-at or before each row's instant over the entity's unfiltered history.
+``until`` / strict ``before`` bounds, ``backfill``, and
+``own_value_first`` (carried: the row's own value outranks a narrowed
+``fill_from`` stream). ``carried`` is the last non-null value at or
+before each row's instant over the entity's unfiltered history.
 None of it replaces the expression.
 
 ```python

@@ -178,7 +178,14 @@ EVENTS_BREAKDOWN_CARRIED = EventsSpec(
     measure="total",
     exact=True,
     breakdowns=(
-        Breakdown("plan", at="carried", fill_from="event_name = 'plan_set'"),
+        # own_value_first walks the COALESCE(fc_self, ...) shape too;
+        # CARRIED_PAIR below keeps the plain shape in the walk.
+        Breakdown(
+            "plan",
+            at="carried",
+            fill_from="event_name = 'plan_set'",
+            own_value_first=True,
+        ),
     ),
     top_n=8,
 )
