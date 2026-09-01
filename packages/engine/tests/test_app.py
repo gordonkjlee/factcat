@@ -450,6 +450,8 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     # Toggling the override must not cost a dry run: bytes are cap-independent,
     # so the override is not part of the estimate fingerprint.
     assert "reverdictFromLastEstimate" in res.text
+    # A failed run must not render in the same slate as the idle copy.
+    assert "#chart-empty.fail #empty-copy" in res.text
     # Cost -> consent -> action: Run is last so it stays flush right.
     assert html.find('id="run-estimate-wrap"') < html.find('id="cap-override"') < html.find('id="run"')
     assert 'e.target.id === "exact"' in res.text

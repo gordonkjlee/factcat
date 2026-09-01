@@ -282,6 +282,7 @@
       text-align: center;
       margin: 0;
     }
+    #chart-empty.fail #empty-copy { color: var(--fc-alert); white-space: pre-wrap; }
     .empty-state[hidden], canvas[hidden], .empty-state img[hidden] { display: none; }
     .empty-state img { width: 10rem; height: 10rem; object-fit: contain; margin-bottom: 0.75rem; }
     /* Dots hide via visibility so the centred copy never shifts as they cycle. */
@@ -3768,14 +3769,6 @@ let runInFlight = false;
 function bytesLabel(n) {
   return formatBytes(n).replace("~", "");
 }
-// With Override already ticked our cap is off, so a rejection came from the
-// project's own cost control. Telling that user to tick the box they ticked is
-// the advice bug this avoids.
-function capAdvice() {
-  return document.getElementById("override_cap").checked
-    ? "Factcat's cap is already off, so this is your BigQuery project's own limit."
-    : "Tick Override cap to run it.";
-}
 function capBlocked() {
   if (!CAPABILITIES.has("scan_cap") || !capBlock) return false;
   if (document.getElementById("override_cap").checked) return false;
@@ -4648,6 +4641,7 @@ function setChartEmpty(kind) {
     return;
   }
   empty.hidden = false;
+  empty.classList.toggle("fail", kind === "fail");
   img.hidden = false;
   if (kind === "running") setRunningCopy(copy);
   else if (kind === "fail") copy.textContent = failCopy || "Query failed.";
@@ -4926,14 +4920,16 @@ form.addEventListener("submit", async (e) => {
         // The warehouse rejected it on the cap. It reported the figures; show
         // those and the way past them rather than a raw rejection string.
         capBlock = {key: estimateKey(body), bytes: data.bytes, cap: data.cap};
+        const ours = !document.getElementById("override_cap").checked;
         if (data.bytes != null) {
           paintEstimate(data.bytes, data.cap, true);
-          msg = "Needs " + bytesLabel(data.bytes)
-            + (data.cap != null ? ", over the " + bytesLabel(data.cap) + " cap" : ", over the job scan cap")
-            + ". " + capAdvice();
+          msg = "Query failed: " + bytesLabel(data.bytes)
+            + (data.cap != null && ours ? " over the " + bytesLabel(data.cap) + " cap." : " over the byte limit.");
         } else {
-          msg = "Over the job scan cap. " + capAdvice();
+          msg = "Query failed: over the byte limit.";
         }
+        // Our cap is already off, so the limit that rejected this is theirs.
+        if (!ours) msg += " Factcat's cap is off — this is your BigQuery project's own limit.";
       }
       failCopy = msg;
       const tableEmpty = document.getElementById("table-empty");
