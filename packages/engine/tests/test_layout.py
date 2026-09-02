@@ -56,6 +56,9 @@ def test_metadata_match_and_mismatch():
     assert _metadata_timestamp_verdict(rel, "created_at") == "mismatch"
     view = {"kind": "view", "partition": None, "bases": []}
     assert _metadata_timestamp_verdict(view, "occurred_at") is None
+    sf = {"kind": "table", "partition": None, "clustering": [], "bases": []}
+    assert _metadata_timestamp_verdict(sf, "occurred_at", kind="snowflake") is None
+    assert _metadata_timestamp_verdict(sf, "occurred_at", kind="bigquery") == "none"
 
 
 def test_cluster_note_raises_unless_spoke_view():
@@ -255,6 +258,33 @@ def test_layout_fingerprints_split_by_check():
     assert relation_fingerprint(form) == relation_fingerprint(_form(entity="other"))
     assert date_fingerprint(form) == date_fingerprint(_form(entity="other"))
     assert date_fingerprint(form) != date_fingerprint(_form(event_time="other"))
+
+
+def test_snowflake_table_is_not_called_unpartitioned(monkeypatch):
+    monkeypatch.setattr(
+        "factcat_app.layout.columns_from_form",
+        lambda form: {
+            "columns": [],
+            "relation": {
+                "name": "EVENTS",
+                "kind": "table",
+                "partition": None,
+                "clustering": [],
+                "automatic_clustering": False,
+            },
+        },
+    )
+    payload, _store = assemble_layout(
+        _form(
+            kind="snowflake",
+            database="ANALYTICS",
+            schema="MARTS",
+            table="ANALYTICS.MARTS.EVENTS",
+            table_name="EVENTS",
+        )
+    )
+    assert payload["metadata_verdict"] is None
+    assert (payload["probe"] or {}).get("verdict") is None
 
 
 def test_assemble_layout_reuses_relation_when_mapping_changes(monkeypatch):

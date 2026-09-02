@@ -361,8 +361,13 @@ const SETUP_DOCS = {{ setup_docs_by_kind|tojson }};
 const EXTRAS = {{ extras|tojson }};
 const EXTRA_COMMANDS = {{ extra_commands|tojson }};
 const CATALOG = {{ catalog_steps_by_kind|tojson }};
+const CAPABILITIES_BY_KIND = {{ capabilities_by_kind|tojson }};
 function currentKind() {
   return CATALOG[kindEl.value] ? kindEl.value : Object.keys(CATALOG)[0];
+}
+function hasCap(name) {
+  const list = CAPABILITIES_BY_KIND[currentKind()] || [];
+  return list.indexOf(name) >= 0;
 }
 function typeSet(role) {
   const pack = TYPE_SETS[currentKind()] || TYPE_SETS.bigquery;
@@ -935,7 +940,7 @@ function paintEventTimeLayout() {
   const check = document.getElementById("event-time-check");
   syncLayoutChecking();
   if (!box) return;
-  const canProbe = currentKind() === "bigquery";
+  const canProbe = hasCap("dry_run");
   const payload = layoutPayload;
   const probe = payload && payload.probe;
   const dateBusy = !!loading._date;
@@ -944,7 +949,10 @@ function paintEventTimeLayout() {
     const settled = meta === "match" || meta === "mismatch" || meta === "ingestion" || meta === "none";
     check.hidden = dateBusy || !canProbe || !eventTimeEl.value || settled;
   }
-  if (dateBusy) return;
+  if (dateBusy) {
+    box.innerHTML = "";
+    return;
+  }
   box.innerHTML = "";
   if (!eventTimeEl.value || !payload) return;
   const verdict = (probe && probe.verdict) || payload.metadata_verdict;
@@ -1277,7 +1285,7 @@ function paintLayoutChrome() {
 }
 let avgGen = 0;
 async function requestPartitionAvg() {
-  if (currentKind() !== "bigquery") return;
+  if (!hasCap("dry_run")) return;
   const payload = layoutPayload;
   if (!payload || payload.partition_avg_bytes != null) return;
   const verdict = (payload.probe && payload.probe.verdict) || payload.metadata_verdict;
@@ -1366,8 +1374,8 @@ async function requestWriteAccess() {
       el.className = "hint ok";
       el.textContent = "Can create tables and materialized views in " + (data.dest || "this destination") + ".";
     } else if (data.status === "denied") {
-      el.className = "hint";
-      el.textContent = "This role cannot create tables in " + (data.dest || "this destination") + ".";
+      el.className = "callout";
+      el.textContent = "This role cannot create tables in " + (data.dest || "this destination") + ". Mapping still saves.";
     }
   } catch (err) {
     if (gen !== writeAccessGen) return;

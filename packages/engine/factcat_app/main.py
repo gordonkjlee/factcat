@@ -166,6 +166,9 @@ def setup(request: Request) -> HTMLResponse:
             },
             "reporting_timezones": REPORTING_TIMEZONES,
             "capabilities": sorted(capabilities(kind)),
+            "capabilities_by_kind": {
+                name: sorted(capabilities(name)) for name in ADAPTERS
+            },
             "type_sets": {
                 name: {role: sorted(vals) for role, vals in type_sets(name).items()}
                 for name in ADAPTERS

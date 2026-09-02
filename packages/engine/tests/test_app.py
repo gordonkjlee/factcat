@@ -165,6 +165,9 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "Pruning is effective on event-name filters" in res.text
     assert "applyLayoutCache" in res.text
     assert "layout_cache" in res.text
+    assert "hasCap" in res.text
+    assert "CAPABILITIES_BY_KIND" in res.text
+    assert "Mapping still saves." in res.text
     assert "Checking clustering on the tables this view reads" not in res.text
     assert "paintClusterPending" not in res.text
     assert 'id="event-column-layout"' in res.text

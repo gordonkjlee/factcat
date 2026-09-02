@@ -696,6 +696,23 @@ def list_columns(
     return {"columns": columns, "relation": relation}
 
 
+def _schema_privileges_from_grants(
+    rows: list[dict[str, Any]] | tuple, *, role: str
+) -> set[str]:
+    """Privileges granted to ``role`` or PUBLIC — not every grantee on the schema."""
+    want = (role or "").strip().upper()
+    allowed = {want, "PUBLIC"} if want else {"PUBLIC"}
+    privileges: set[str] = set()
+    for row in rows or []:
+        grantee = str(_row_get(row, "grantee_name", "grantee") or "").upper()
+        if grantee and grantee not in allowed:
+            continue
+        priv = str(_row_get(row, "privilege", "privilege_type") or "").upper()
+        if priv:
+            privileges.add(priv)
+    return privileges
+
+
 def schema_write_privileges(
     *,
     account: str,
@@ -727,13 +744,20 @@ def schema_write_privileges(
             authenticator=authenticator,
         )
         cur = ctx.cursor()
+        session_role = (role or "").strip().upper()
+        if not session_role:
+            cur.execute("SELECT CURRENT_ROLE() AS fc_role")
+            got = list(_fetch_maps(cur) or [])
+            if got:
+                session_role = str(
+                    _row_get(got[0], "fc_role", "CURRENT_ROLE()") or ""
+                ).upper()
         cur.execute(
             f"SHOW GRANTS ON SCHEMA {_quote_ident(database)}.{_quote_ident(schema)}"
         )
-        for row in _fetch_maps(cur):
-            priv = str(_row_get(row, "privilege", "privilege_type") or "").upper()
-            if priv:
-                privileges.add(priv)
+        privileges = _schema_privileges_from_grants(
+            _fetch_maps(cur), role=session_role
+        )
     except (AdapterError, ImportError, ValueError):
         raise
     except Exception as exc:

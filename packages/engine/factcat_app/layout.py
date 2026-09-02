@@ -415,9 +415,14 @@ def _probe_cluster_bq(
 
 
 def _metadata_timestamp_verdict(
-    relation: dict[str, Any], event_time: str
+    relation: dict[str, Any], event_time: str, *, kind: str = ""
 ) -> str | None:
-    """Match / mismatch / none from advertised partition field. None = silent."""
+    """Match / mismatch / none from advertised partition field. None = silent.
+
+    Snowflake has no partition column; ``partition: None`` is not
+    "unpartitioned" in the BigQuery sense.
+    """
+    kind = (kind or "bigquery").strip().lower() or "bigquery"
     if relation.get("kind") in {"view", "materialized_view"}:
         bases = list(relation.get("bases") or [])
         if not bases:
@@ -434,6 +439,8 @@ def _metadata_timestamp_verdict(
         return None
     part = relation.get("partition")
     if not part:
+        if kind == "snowflake":
+            return None
         return "none"
     if part.get("ingestion"):
         return "ingestion"
@@ -495,7 +502,11 @@ def _compute_date_facts(
 ) -> dict[str, Any]:
     event_time = str(form.get("event_time") or "").strip()
     kind = form_kind(form)
-    meta = _metadata_timestamp_verdict(relation, event_time) if event_time else None
+    meta = (
+        _metadata_timestamp_verdict(relation, event_time, kind=kind)
+        if event_time
+        else None
+    )
     probe: dict[str, Any] = {"status": "skipped", "verdict": None}
     silent = event_time and meta is None
     if (
