@@ -141,9 +141,13 @@ print(events_sql(EventsSpec(
 
 Two honest costs. The stamp scan is unbounded history by design (a
 pre-window stamp must resolve): on BigQuery that is the referenced
-columns' full history in bytes, and ``fill_from`` prunes rows, not bytes —
-a column you break down every week belongs as an as-of column in your
-mart, with ``carried`` as the exploration mode. And under ``rows`` /
+columns' full history in bytes. ``fill_from`` prunes rows, not bytes, on
+an unclustered table — but when the table clusters by the event-name
+column (a common hub layout), an event-named ``fill_from`` prunes storage
+blocks too (observed ~20× on a month-partitioned hub with event name as
+the leading cluster key). A column you break down every week still
+belongs as an as-of column in your mart, with ``carried`` as the
+exploration mode. And under ``rows`` /
 ``carried``, Uniques slices can sum to more than the unsplit line (an
 entity whose value changes inside a bucket counts in both groups); the
 one-value-per-entity modes partition entities instead.
