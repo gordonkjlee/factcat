@@ -1639,7 +1639,7 @@ function normalizeBreakdownSlot(s) {
   };
 }
 const VALUE_ATS = ["event", "range_start", "range_end", "first_record", "latest_record"];
-const FILL_FROM_TITLE = "Which events count as the value's source. Any event: any row where it is set. The event's own value still wins when it has one.";
+const FILL_FROM_TITLE = "Which events may supply the value. (any event): every event in the table where the value is set — including events not charted here. The event's own value still wins when it has one.";
 function entityWord() {
   const el = document.getElementById("entity_label");
   return ((el && el.value) || "").trim().toLowerCase() || "entity";

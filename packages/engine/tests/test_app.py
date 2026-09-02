@@ -2055,7 +2055,7 @@ def test_events_sql_vocab(monkeypatch, tmp_path):
     assert '"bd_at_latest": "last non-null ever"' in html
     assert '"bd_fill_charted": "(charted events)"' in html
     assert '"bd_fill_series": "(this series)"' in html
-    assert '"bd_fill_any": "(any row)"' in html
+    assert '"bd_fill_any": "(any event)"' in html
     assert '"bd_section": "`GROUP BY`"' in html
     assert '"bd_fill_group": "Event names"' in html
     assert "IGNORE NULLS" not in html
