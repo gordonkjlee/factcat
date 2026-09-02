@@ -11,9 +11,14 @@ own value semantics (``Breakdown``): ``rows`` on the metric row, ``first`` /
 ``last`` per entity over the unfiltered table (optionally bounded by
 ``since`` / ``until``), or ``carried`` — last non-null at or before the
 row's instant. ``carried`` is emitted with a counting trick (a cumulative
-stamp counter then ``FIRST_VALUE`` per group) rather than
+recorded-value counter then ``FIRST_VALUE`` per group) rather than
 ``LAST_VALUE(... IGNORE NULLS)``, which several dialects lack — sqlglot
 warns and silently strips the modifier for Postgres, yielding wrong SQL.
+
+A column with ``values_table`` reads its recorded values from that relation
+(``fc_entity``, ``fc_t``, ``fc_value``) instead of the unfiltered table, plus
+the live rows after ``values_watermark``; the result is the same as the
+full-history scan, for the bytes of a small relation and a short tail.
 """
 
 from __future__ import annotations
@@ -156,15 +161,22 @@ def _plain_sql(spec: EventsSpec, dialect: str) -> str:
     return _finish(sql, dialect)
 
 
+def _tail_time(spec: EventsSpec) -> str:
+    # The live-tail bound compares the stored column when the caller named
+    # it: a function around the partition column (a cast, a zone shift)
+    # defeats pruning, and the tail exists to be cheap.
+    return spec.event_time_column or spec.event_time
+
+
 def _attr_cte(
     spec: EventsSpec, name: str, col: str, bd: Breakdown, at: str, *, bounded: bool
 ) -> str:
     # One non-null value per entity from the UNFILTERED table (spec.where
-    # filters the metric, not the attribute — sparse stamps still resolve),
-    # narrowed only by explicit fill_from and, when bounded, since/until.
-    # Tiebreak at one instant: greatest expression value wins — the same
-    # rule the carried stream applies. (The entity is constant within its
-    # own partition, so it can never break a tie.)
+    # filters the metric, not the attribute — a sparsely recorded value
+    # still resolves), narrowed only by explicit fill_from and, when
+    # bounded, since/until. Tiebreak at one instant: greatest expression
+    # value wins — the same rule the carried stream applies. (The entity
+    # is constant within its own partition, so it can never break a tie.)
     direction = "ASC" if at == "first" else "DESC"
     conds = [
         f"({bd.expr}) IS NOT NULL",
@@ -178,8 +190,9 @@ def _attr_cte(
         conds.append(f"({spec.event_time}) <= ({bd.until})")
     if bounded and bd.before:
         conds.append(f"({spec.event_time}) < ({bd.before})")
-    where = "\n              AND ".join(conds)
-    return f"""
+    if bd.values_table is None:
+        where = "\n              AND ".join(conds)
+        return f"""
     {name} AS (
         SELECT fc_entity, expr_val AS {col}
         FROM (
@@ -196,19 +209,67 @@ def _attr_cte(
         WHERE fc_rn = 1
     )
     """
+    # values_table holds this column's recorded values (fc_entity, fc_t,
+    # fc_value), already narrowed by the caller — fill_from never touches
+    # it. Live rows after the watermark join it so a lagging relation stays
+    # exact; no watermark means the relation is complete and the table is
+    # not read for this column. Bounds land on fc_t there and on the
+    # event_time expression on the live side.
+    vals_conds = ["fc_entity IS NOT NULL", "fc_value IS NOT NULL"]
+    if bounded and bd.since:
+        vals_conds.append(f"fc_t >= ({bd.since})")
+    if bounded and bd.until:
+        vals_conds.append(f"fc_t <= ({bd.until})")
+    if bounded and bd.before:
+        vals_conds.append(f"fc_t < ({bd.before})")
+    branches = [
+        f"""SELECT fc_entity, fc_t, fc_value AS expr_val
+            FROM {bd.values_table}
+            WHERE {" AND ".join(vals_conds)}"""
+    ]
+    if bd.values_watermark is not None:
+        conds.append(f"({_tail_time(spec)}) > ({bd.values_watermark})")
+        where = "\n              AND ".join(conds)
+        branches.append(
+            f"""SELECT
+                {spec.entity} AS fc_entity,
+                {spec.event_time} AS fc_t,
+                {bd.expr} AS expr_val
+            FROM {spec.table}
+            WHERE {where}"""
+        )
+    source = "\n            UNION ALL\n            ".join(branches)
+    return f"""
+    {name} AS (
+        SELECT fc_entity, expr_val AS {col}
+        FROM (
+            SELECT
+                fc_entity,
+                expr_val,
+                ROW_NUMBER() OVER (
+                    PARTITION BY fc_entity
+                    ORDER BY fc_t {direction}, expr_val DESC
+                ) AS fc_rn
+            FROM (
+            {source}
+            ) _vals_{name}
+        ) _ranked_{name}
+        WHERE fc_rn = 1
+    )
+    """
 
 
 def _carried_order_keys(i: int) -> str:
-    # Stamp-before-needle at one instant (a row sees a stamp at its own
-    # time); among same-instant stamps the greatest value sorts last and
+    # Value-before-needle at one instant (a row sees a value recorded at
+    # its own time); among same-instant values the greatest sorts last and
     # opens the group the needles join. Every key carries an explicit
     # NULLS FIRST: BigQuery forbids the modifier inside aggregate-function
     # windows, and explicit-in-source matches its default so sqlglot omits
     # it there and emits it verbatim everywhere else.
     return (
         f"fc_t NULLS FIRST, "
-        f"CASE WHEN fc_stamp_{i} IS NOT NULL THEN 0 ELSE 1 END NULLS FIRST, "
-        f"fc_stamp_{i} NULLS FIRST"
+        f"CASE WHEN fc_val_{i} IS NOT NULL THEN 0 ELSE 1 END NULLS FIRST, "
+        f"fc_val_{i} NULLS FIRST"
     )
 
 
@@ -217,44 +278,90 @@ def _carried_ctes(
     carried: list[tuple[int, Breakdown]],
     rows_items: list[tuple[int, Breakdown]],
 ) -> str:
-    # LOCF without IGNORE NULLS: union the stamp stream with the metric
-    # rows, count stamps cumulatively per entity so each stamp opens a
-    # group, then FIRST_VALUE per (entity, group) is the group's stamp.
-    # ONE stamp scan serves every carried column; metric rows with a NULL
-    # instant sort into group 0 and carry NULL, but the row survives.
-    # The stamp branch pairs bare NULLs against the needle branch's typed
+    # LOCF without IGNORE NULLS: union the recorded-value stream with the
+    # metric rows, count values cumulatively per entity so each recorded
+    # value opens a group, then FIRST_VALUE per (entity, group) is the
+    # group's value. ONE live scan serves every carried column that reads
+    # the table; a column with values_table reads that relation instead,
+    # and the live rows after its watermark fold into the same shared scan.
+    # Metric rows with a NULL instant sort into group 0 and carry NULL,
+    # but the row survives.
+    # The value branch pairs bare NULLs against the needle branch's typed
     # columns. That is valid on the union type resolution of every
     # SUPPORTED family, and was verified live on BigQuery (the strictest):
     # dry-run of carried / mixed / property / backfill specs against a
     # real DATETIME-bucketed table validated and returned byte estimates
     # (2026-09-01). Do not "harden" this to CAST(NULL AS ...) — the
     # caller expressions' types are unknown by design.
-    stamp_selects: list[str] = []
-    stamp_preds: list[str] = []
+    # The values_table branches (a caller relation UNION ALL the live tail,
+    # NULL-padded per column) were settled the same way: BigQuery dry-runs
+    # against a month-partitioned DATETIME hub validated carried and
+    # anchor+backfill shapes, with the tail bound on the bare partition
+    # column via event_time_column (2026-09-02). Bytes on that table: live
+    # full history 73.8 GB; relation + one-month tail 1.9 GB; complete
+    # relation 0.26 GB (the chart's own window scan). That is the point.
+    live_cols: list[str] = []
+    live_preds: list[str] = []
+    value_relations: list[tuple[int, Breakdown]] = []
     for i, bd in carried:
         pred = f"({bd.expr}) IS NOT NULL"
         if bd.fill_from:
             pred = f"{pred} AND ({bd.fill_from})"
-        stamp_preds.append(f"({pred})")
-        stamp_selects.append(f"CASE WHEN {pred} THEN {bd.expr} END AS fc_stamp_{i}")
+        if bd.values_table is not None:
+            value_relations.append((i, bd))
+            if bd.values_watermark is None:
+                # A complete relation: nothing live for this column.
+                live_cols.append(f"NULL AS fc_val_{i}")
+                continue
+            pred = f"{pred} AND ({_tail_time(spec)}) > ({bd.values_watermark})"
+        live_preds.append(f"({pred})")
+        live_cols.append(f"CASE WHEN {pred} THEN {bd.expr} END AS fc_val_{i}")
+    branches: list[str] = []
+    if live_preds:
+        branches.append(
+            f"""SELECT
+            {spec.entity}     AS fc_entity,
+            {spec.event_time} AS fc_t,
+            {", ".join(live_cols)}
+        FROM {spec.table}
+        WHERE ({spec.entity}) IS NOT NULL
+          AND ({spec.event_time}) IS NOT NULL
+          AND ({" OR ".join(live_preds)})"""
+        )
+    for i, bd in value_relations:
+        cols = [
+            f"fc_value AS fc_val_{j}" if j == i else f"NULL AS fc_val_{j}"
+            for j, _ in carried
+        ]
+        branches.append(
+            f"""SELECT
+            fc_entity,
+            fc_t,
+            {", ".join(cols)}
+        FROM {bd.values_table}
+        WHERE fc_entity IS NOT NULL
+          AND fc_t IS NOT NULL
+          AND fc_value IS NOT NULL"""
+        )
+    values_body = "\n        UNION ALL\n        ".join(branches)
     needle_cols = ["fc_entity", "fc_event_ts AS fc_t", "1 AS fc_is_row", "fc_bucket"]
-    stamp_cols = ["fc_entity", "fc_t", "0 AS fc_is_row", "NULL AS fc_bucket"]
+    value_cols = ["fc_entity", "fc_t", "0 AS fc_is_row", "NULL AS fc_bucket"]
     if spec.of:
         needle_cols.append("fc_of")
-        stamp_cols.append("NULL AS fc_of")
+        value_cols.append("NULL AS fc_of")
     for i, bd in rows_items:
         needle_cols.append(f"({bd.expr}) AS fc_bd_{i}")
-        stamp_cols.append(f"NULL AS fc_bd_{i}")
+        value_cols.append(f"NULL AS fc_bd_{i}")
     for i, bd in carried:
-        needle_cols.append(f"NULL AS fc_stamp_{i}")
-        stamp_cols.append(f"fc_stamp_{i}")
+        needle_cols.append(f"NULL AS fc_val_{i}")
+        value_cols.append(f"fc_val_{i}")
         if bd.own_value_first:
             # The metric row's own value, evaluated in the needle branch,
-            # outranks the (possibly fill_from-narrowed) stamp stream.
+            # outranks the (possibly fill_from-narrowed) value stream.
             needle_cols.append(f"({bd.expr}) AS fc_self_{i}")
-            stamp_cols.append(f"NULL AS fc_self_{i}")
+            value_cols.append(f"NULL AS fc_self_{i}")
     grp_windows = ",\n            ".join(
-        f"""SUM(CASE WHEN fc_stamp_{i} IS NOT NULL THEN 1 ELSE 0 END) OVER (
+        f"""SUM(CASE WHEN fc_val_{i} IS NOT NULL THEN 1 ELSE 0 END) OVER (
                 PARTITION BY fc_entity
                 ORDER BY {_carried_order_keys(i)}
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
@@ -262,7 +369,7 @@ def _carried_ctes(
         for i, _ in carried
     )
     def _locf_value(i: int, bd: Breakdown) -> str:
-        window = f"""FIRST_VALUE(fc_stamp_{i}) OVER (
+        window = f"""FIRST_VALUE(fc_val_{i}) OVER (
                 PARTITION BY fc_entity, fc_grp_{i}
                 ORDER BY {_carried_order_keys(i)}
                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
@@ -275,17 +382,10 @@ def _carried_ctes(
         _locf_value(i, bd) for i, bd in carried
     )
     needle_csv = ",\n            ".join(needle_cols)
-    stamp_csv = ",\n            ".join(stamp_cols)
+    value_csv = ",\n            ".join(value_cols)
     return f"""
-    fc_stamps AS (
-        SELECT
-            {spec.entity}     AS fc_entity,
-            {spec.event_time} AS fc_t,
-            {", ".join(stamp_selects)}
-        FROM {spec.table}
-        WHERE ({spec.entity}) IS NOT NULL
-          AND ({spec.event_time}) IS NOT NULL
-          AND ({" OR ".join(stamp_preds)})
+    fc_values AS (
+        {values_body}
     ),
     fc_stream AS (
         SELECT
@@ -293,8 +393,8 @@ def _carried_ctes(
         FROM base
         UNION ALL
         SELECT
-            {stamp_csv}
-        FROM fc_stamps
+            {value_csv}
+        FROM fc_values
     ),
     fc_grp AS (
         SELECT fc_stream.*,

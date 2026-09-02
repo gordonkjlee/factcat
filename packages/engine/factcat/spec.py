@@ -43,23 +43,24 @@ class Breakdown:
                    ``carried`` — for each metric row, the last non-null value of
                                  the expression at or before that row's
                                  ``event_time``, over the entity's unfiltered
-                                 history (a stamp before the chart window still
-                                 resolves). A row never borrows a future stamp.
-        fill_from: caller SQL boolean narrowing which unfiltered rows may stamp
-                   a value (e.g. ``"event_name = 'subscription_started'"``).
+                                 history (a value recorded before the chart
+                                 window still resolves). A row never borrows a
+                                 future value.
+        fill_from: caller SQL boolean narrowing which unfiltered rows may
+                   supply a value (e.g. ``"event_name = 'subscription_started'"``).
                    Any mode except ``rows``.
-        since:     caller SQL timestamp expression; stamps at or after it count
-                   (``event_time >= since``). ``first`` / ``last`` only.
-        until:     caller SQL timestamp expression; stamps at or before it count
-                   (``event_time <= until``). ``first`` / ``last`` only.
+        since:     caller SQL timestamp expression; values recorded at or after
+                   it count (``event_time >= since``). ``first`` / ``last`` only.
+        until:     caller SQL timestamp expression; values recorded at or before
+                   it count (``event_time <= until``). ``first`` / ``last`` only.
                    "State as of the window start" is ``at="last",
                    until=<window-start SQL>``.
-        before:    caller SQL timestamp expression; stamps strictly before it
-                   count (``event_time < before``). ``first`` / ``last`` only.
-                   The bound for an EXCLUSIVE boundary — "state at the window
-                   end" is ``at="last", before=<exclusive-end SQL>``, so a
-                   stamp at exactly that instant (a midnight snapshot job)
-                   stays outside the window it closes.
+        before:    caller SQL timestamp expression; values recorded strictly
+                   before it count (``event_time < before``). ``first`` /
+                   ``last`` only. The bound for an EXCLUSIVE boundary — "state
+                   at the window end" is ``at="last", before=<exclusive-end
+                   SQL>``, so a value recorded at exactly that instant (a
+                   midnight snapshot job) stays outside the window it closes.
         backfill:  only with ``at="last"`` and an upper bound (``until`` or
                    ``before``): entities with no value by the bound fall back
                    to their first recorded value ever. It never overrides a
@@ -68,14 +69,33 @@ class Breakdown:
                    value wins even when ``fill_from`` excludes that row —
                    the narrowed stream then only fills rows with no value
                    of their own. Off (default), ``fill_from`` names the
-                   single source of truth: a speculative stamp on the
+                   single source of truth: a speculative value on the
                    charted row itself is ignored too. With no ``fill_from``
-                   the two agree (the row is in the stream and a stamp at
-                   its own instant wins).
+                   the two agree (the row is in the stream and a value
+                   recorded at its own instant wins).
+        values_table: caller SQL naming a relation that already holds this
+                   column's recorded values: three columns, ``fc_entity``,
+                   ``fc_t`` (same type as ``event_time``) and ``fc_value``
+                   (same type as ``expr``), one row per recorded value, no
+                   NULL values. Any mode except ``rows``. When set, the
+                   unfiltered-table scan for this column reads this relation
+                   instead — a small derived index, or your own model — so a
+                   full-history scan is not paid on every run. Narrow it
+                   yourself: ``fill_from`` applies to live rows only, never
+                   to the relation. Anything ``EventsSpec.table`` accepts
+                   works here.
+        values_watermark: caller SQL timestamp. ``values_table`` is complete
+                   through this instant (every value recorded at or before
+                   it is in the relation), and the live table is read only
+                   after it (``> watermark``), so a lagging relation still
+                   yields exact results. None means the relation is complete
+                   and no live rows are read. The comparison is against
+                   ``EventsSpec.event_time_column`` when set, else
+                   ``event_time``: write the literal in that column's type.
 
-    Same-instant rules, shared by every non-``rows`` mode: a stamp at exactly
-    the row's (or bound's) instant is seen; duplicate stamps at one instant
-    resolve to the greatest expression value.
+    Same-instant rules, shared by every non-``rows`` mode: a value recorded
+    at exactly the row's (or bound's) instant is seen; duplicate values at
+    one instant resolve to the greatest expression value.
     """
 
     expr: str
@@ -86,6 +106,8 @@ class Breakdown:
     before: str | None = None
     backfill: bool = False
     own_value_first: bool = False
+    values_table: str | None = None
+    values_watermark: str | None = None
 
     def __post_init__(self) -> None:
         if not self.expr or not self.expr.strip():
@@ -94,13 +116,24 @@ class Breakdown:
             raise ValueError(
                 "Breakdown.at must be 'rows', 'first', 'last', or 'carried'"
             )
-        for name in ("fill_from", "since", "until", "before"):
+        for name in (
+            "fill_from",
+            "since",
+            "until",
+            "before",
+            "values_table",
+            "values_watermark",
+        ):
             value = getattr(self, name)
             if value is not None and not value.strip():
                 raise ValueError(f"Breakdown.{name} must be SQL if set")
         if self.at == "rows":
             if self.fill_from is not None:
                 raise ValueError("fill_from does not apply to at='rows'")
+            if self.values_table is not None:
+                raise ValueError("values_table does not apply to at='rows'")
+        if self.values_watermark is not None and self.values_table is None:
+            raise ValueError("values_watermark requires values_table")
         if self.at not in ("first", "last"):
             if (
                 self.since is not None
@@ -235,6 +268,12 @@ class EventsSpec:
         table:      source relation.
         entity:     grain for Uniques and for distinct-per-entity. Caller-supplied.
         event_time: observation instant; also used in the default day bucket.
+        event_time_column: the stored column behind ``event_time`` when that
+                    is an expression (a cast, a zone shift). Incremental
+                    bounds (``Breakdown.values_watermark``) compare this
+                    column directly so a partitioned warehouse prunes; a
+                    function wrapped around the column would defeat that.
+                    None compares ``event_time`` itself.
         measure:    see ``EVENT_MEASURES`` / ``PROPERTY_MEASURES``.
         on:         ``events`` (default) or ``property``.
         of:         SQL expression. Required for ``on="property"``; forbidden
@@ -278,6 +317,7 @@ class EventsSpec:
     breakdown_labels: tuple[str, ...] | None = None
     top_n: int = 8
     include_other: bool = True
+    event_time_column: str | None = None
 
     def __post_init__(self) -> None:
         if self.on not in ONS:
@@ -295,6 +335,8 @@ class EventsSpec:
             raise ValueError("entity is required")
         if not self.event_time.strip():
             raise ValueError("event_time is required")
+        if self.event_time_column is not None and not self.event_time_column.strip():
+            raise ValueError("event_time_column must be a column name if set")
         if self.bucket is not None and not self.bucket.strip():
             raise ValueError("bucket must be a SQL expression if set")
         if self.breakdown_at not in BREAKDOWN_AT:

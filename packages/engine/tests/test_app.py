@@ -957,7 +957,7 @@ def test_run_passes_breakdown_value_semantics(monkeypatch, tmp_path):
     )
     assert res.status_code == 200
     sql = warehouse.run.call_args.args[0]
-    assert "fc_stamps" in sql
+    assert "fc_values" in sql
     assert "subscription_started" in sql
     assert "IGNORE NULLS" not in sql.upper()
 
