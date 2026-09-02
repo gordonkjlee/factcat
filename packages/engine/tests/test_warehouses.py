@@ -188,6 +188,22 @@ def test_google_is_optional_extra_not_a_core_dependency():
     )
 
 
+def test_schema_grants_ignore_other_roles():
+    from factcat.warehouses.snowflake import _schema_privileges_from_grants
+
+    rows = [
+        {"privilege": "CREATE TABLE", "grantee_name": "ACCOUNTADMIN"},
+        {"privilege": "USAGE", "grantee_name": "ANALYST"},
+        {"privilege": "CREATE TABLE", "grantee_name": "PUBLIC"},
+    ]
+    privs = _schema_privileges_from_grants(rows, role="ANALYST")
+    assert "USAGE" in privs
+    assert "CREATE TABLE" in privs  # PUBLIC
+    only = _schema_privileges_from_grants(rows[:2], role="ANALYST")
+    assert "CREATE TABLE" not in only
+    assert "USAGE" in only
+
+
 def test_adapter_error_hierarchy():
     assert issubclass(DryRunNotSupported, AdapterError)
     assert inspect.isclass(Adapter)

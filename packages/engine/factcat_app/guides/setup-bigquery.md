@@ -63,8 +63,8 @@ Must be an **instant**, not a calendar DATE and not a wall-clock TIME.
 | Type | Meaning | Set “Timestamp stored as” |
 |---|---|---|
 | `TIMESTAMP` | UTC instant (BigQuery) | UTC instant |
-| `DATETIME` | Civil date-time, no zone | Reporting timezone |
-| `INT64` / `INTEGER` | Unix epoch | Seconds, milliseconds, or microseconds since 1970-01-01 UTC |
+| `DATETIME` | Civil date-time, no zone | Pick the zone those numbers are in (shown under Timestamp) |
+| `INT64` / `INTEGER` | Unix epoch | Inferred (seconds / ms / µs) from a sample of values |
 
 STRING timestamps are not accepted. DATE is a day, not an event time. FLOAT
 epochs are not accepted.
@@ -74,8 +74,33 @@ a “week”. `CURRENT_DATE` and day buckets follow that zone. Week start
 (Monday/Sunday) is applied **after** the instant is converted to that
 calendar.
 
-If the column is DATETIME, it is already civil time in the reporting
-zone. Do not store local time in a TIMESTAMP and label it UTC.
+DATETIME has no zone: a timezone picker appears under Timestamp. TIMESTAMP
+and Unix epochs are instants and do not need it. Reporting timezone is
+still whose midnight is a day. Do not store local time in a TIMESTAMP and
+label it UTC.
+
+## Partitioning and clustering
+
+BigQuery has **one** partition column. Partition the events table on the
+mapped timestamp so date filters prune. Average partition size should be
+about 10 GB: many tiny day partitions inflate metadata and slow listing
+them. Month on a large table is often the right size.
+
+Clustering is a second sort **inside** each partition (up to four
+columns). Order is a leftmost prefix: a filter on the first key skips
+blocks; a filter on only the second does not. Typical layout: partition
+by event time, cluster `event_name`, then the entity id. Cluster pruning
+does not show in a dry-run estimate.
+
+A view does not advertise the hub's partition column. Date filters still
+prune if the view pushes them down. Setup checks that with a dry-run
+when metadata is silent. A view over many per-event tables may prune
+event-name filters by selecting a spoke; that is not a missing
+`event_name` cluster.
+
+Recommended: allow Factcat to create and maintain tables in a project
+and dataset for better performance. Setup checks create rights on that
+dataset (no test object).
 
 ## Event name
 
@@ -83,8 +108,7 @@ Optional STRING column. Mapping persists as you pick fields; it does not query.
 **Look back for event names** on this page (90 days by default; 0 is all
 time) is the window for the Events picker. That job does not use the scan
 cap. Events **Refresh event names** re-runs it; the chevron next to it raises the window. The filter isolates the timestamp column so a table
-partitioned on it can prune. Optional: allow Factcat to create and maintain
-tables in a project and dataset for better performance. First fetch creates
+partitioned on it can prune. First fetch creates
 `fc_event_names` if it is missing (materialized view, or a table if the
 source cannot back a view). Later Refresh reads the view, or rebuilds the
 table snapshot. The object stores a fingerprint of the mapped table and

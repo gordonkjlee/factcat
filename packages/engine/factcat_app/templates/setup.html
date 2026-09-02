@@ -88,6 +88,22 @@
       cursor: not-allowed;
     }
     label .catalog-refresh { margin-left: 0.5rem; }
+    .hint.ok { color: var(--fc-ok); }
+    .hint.ok .tick { font-weight: 700; margin-right: 0.35rem; }
+    #event-time-layout .callout,
+    #event-column-layout .callout,
+    #entity-layout .callout,
+    #table-cluster-layout .callout { margin: 0.45rem 0 0.65rem; }
+    #event-time-layout .callout p,
+    #event-column-layout .callout p,
+    #entity-layout .callout p,
+    #table-cluster-layout .callout p { margin: 0; }
+    .layout-checking {
+      margin-left: 0.5rem;
+      font-size: inherit;
+      font-weight: 400;
+      color: var(--fc-ochre-deep);
+    }
     @media (max-width: 56rem) {
       .setup-page { overflow-y: auto; }
       .setup-cols {
@@ -181,15 +197,18 @@
     <option value=""></option>
     {% if config.table_name %}<option value="{{ config.table_name }}" selected>{{ config.table_name }}</option>{% endif %}
   </select>
+  <span class="hint" id="table-layout-hint"></span>
+  <div id="table-cluster-layout"></div>
 
   <h2>Grain</h2>
-  <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="_columns" hidden>Refresh</button></label>
+  <label for="entity">Entity id <span id="entity-loading" class="loading" hidden aria-label="Loading"></span> <span id="entity-checking" class="layout-checking" hidden>Checking whether entity filters prune…</span> <button type="button" class="linkish catalog-refresh" data-catalog="_columns" hidden>Refresh</button></label>
   <select id="entity" name="entity" required disabled>
     <option value=""></option>
     {% if config.entity %}<option value="{{ config.entity }}" selected>{{ config.entity }}</option>{% endif %}
   </select>
   <span class="hint">Stable id for this grain. Null means the event is not about that grain (dropped from uniques). Integer preferred; string is fine. Not unique on the events table.</span>
-  <label for="entity_label_choice">Entity name (singular)</label>
+  <div id="entity-layout"></div>
+  <label for="entity_label_choice">Entity name</label>
   <select id="entity_label_choice">
     <option value="User">User</option>
     <option value="Customer">Customer</option>
@@ -197,36 +216,39 @@
     <option value="Subscription">Subscription</option>
     <option value="__other__">Other</option>
   </select>
+  <span class="hint">Display only (Unique Users, Average per User). Does not choose the id column.</span>
   <div id="entity_label_other_wrap" hidden>
-    <label for="entity_label_other">Custom singular</label>
+    <label for="entity_label_other">Singular (e.g. order)</label>
     <input id="entity_label_other" autocomplete="off">
+    <label for="entity_label_plural">Plural (e.g. orders)</label>
+    <input id="entity_label_plural" name="entity_label_plural" autocomplete="off" value="{{ config.entity_label_plural or 'Users' }}">
   </div>
   <input type="hidden" name="entity_label" id="entity_label" value="{{ config.entity_label or 'User' }}">
-  <label for="entity_label_plural">Plural</label>
-  <input id="entity_label_plural" name="entity_label_plural" autocomplete="off" value="{{ config.entity_label_plural or 'Users' }}">
-  <span class="hint">Display only (Unique Users, Average per User). Does not choose the id column.</span>
-  <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <label for="event_time">Timestamp <span id="event_time-loading" class="loading" hidden aria-label="Loading"></span> <span id="event-time-checking" class="layout-checking" hidden>Checking whether date filters prune…</span> <button type="button" class="linkish" id="event-time-check" hidden>Check whether date filters prune</button></label>
   <select id="event_time" name="event_time" required disabled>
     <option value=""></option>
     {% if config.event_time %}<option value="{{ config.event_time }}" selected>{{ config.event_time }}</option>{% endif %}
   </select>
   <span class="hint" id="event-time-hint">TIMESTAMP (UTC instant), DATETIME (civil time), or an integer Unix epoch. Not DATE.</span>
-  <div id="event-time-epoch-wrap" hidden>
-    <label for="event_time_epoch">Unix epoch unit</label>
-    <select id="event_time_epoch" name="event_time_epoch">
-      <option value="" {% if not config.event_time_epoch %}selected{% endif %}></option>
-      <option value="seconds" {% if config.event_time_epoch == "seconds" %}selected{% endif %}>Seconds</option>
-      <option value="milliseconds" {% if config.event_time_epoch == "milliseconds" %}selected{% endif %}>Milliseconds</option>
-      <option value="microseconds" {% if config.event_time_epoch == "microseconds" %}selected{% endif %}>Microseconds</option>
+  <div id="event-time-layout"></div>
+  <input type="hidden" name="event_time_epoch" id="event_time_epoch" value="{{ config.event_time_epoch or '' }}">
+  <div id="event-time-tz-wrap" hidden>
+    <label for="event_time_storage_tz">Timezone of these values</label>
+    <select id="event_time_storage_tz">
+      {% for tz in reporting_timezones %}
+      <option value="{{ tz }}">{{ tz }}</option>
+      {% endfor %}
     </select>
-    <span class="hint">Integer seconds (or ms / µs) since 1970-01-01 UTC. Always an instant; reporting timezone is whose midnight is a day.</span>
+    <input type="hidden" name="event_time_tz" id="event_time_tz" value="{{ config.event_time_tz or 'utc' }}">
+    <span class="hint" id="event-time-tz-hint">This column has no timezone. Pick the zone the numbers were recorded in. Reporting timezone (below) is whose midnight is a day.</span>
   </div>
-  <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span></label>
+  <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span> <span id="event-column-checking" class="layout-checking" hidden>Checking whether event-name filters prune…</span></label>
   <select id="event_column" name="event_column" disabled>
     <option value=""></option>
     {% if config.event_column %}<option value="{{ config.event_column }}" selected>{{ config.event_column }}</option>{% endif %}
   </select>
   <span class="hint">String column of event names. Events <strong>Refresh list</strong> loads names from the lookback below.</span>
+  <div id="event-column-layout"></div>
   <h2>Time</h2>
   <label for="week_start">Week starts on</label>
   <select id="week_start" name="week_start">
@@ -241,15 +263,6 @@
     {% endfor %}
   </select>
   <span class="hint">Whose midnight is a day, and whose Monday is a week. Not the warehouse default.</span>
-  <div id="event-time-tz-wrap">
-    <label for="event_time_tz">Timestamp stored as</label>
-    <select id="event_time_tz" name="event_time_tz">
-      <option value="instant" {% if config.event_time_tz == "instant" %}selected{% endif %}>Instant (has a timezone)</option>
-      <option value="utc" {% if config.event_time_tz == "utc" or not config.event_time_tz %}selected{% endif %}>Wall-clock UTC (no zone on the column)</option>
-      <option value="reporting" {% if config.event_time_tz == "reporting" %}selected{% endif %}>Wall-clock in the reporting timezone</option>
-    </select>
-    <span class="hint" id="event-time-tz-hint">TIMESTAMP_TZ and TIMESTAMP_LTZ are instants (offset or UTC storage). TIMESTAMP_NTZ / DATETIME are wall-clock numbers — say whether those numbers are UTC or already in the reporting timezone.</span>
-  </div>
   <h2>Limits</h2>
   <div id="scan-cap-wrap">
     <label for="bytes_cap_gb">Job scan cap (GB)</label>
@@ -265,9 +278,10 @@
   <span class="hint">How far back to scan the events table to fill the event picker. 0 is all time. This job does not use the scan cap.</span>
   </div>
 
-  <h2>Factcat-managed tables (optional)</h2>
+  <h2>Factcat-managed tables (recommended)</h2>
   <div id="write-bq-wrap">
     <span class="hint">Allow Factcat to create and maintain tables in this project and dataset for better performance.</span>
+    <span class="hint" id="write-access-hint-bq"></span>
     <label for="write_project">Project</label>
     <input id="write_project" name="write_project" autocomplete="off" value="{{ config.write_project }}" placeholder="GCP project id">
     <label for="write_dataset">Dataset <span id="write_dataset-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="write_dataset" hidden>Refresh</button></label>
@@ -278,6 +292,7 @@
   </div>
   <div id="write-sf-wrap" hidden>
     <span class="hint">Allow Factcat to create and maintain tables in this database and schema for better performance.</span>
+    <span class="hint" id="write-access-hint-sf"></span>
     <label for="write_database">Database <span id="write_database-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="write_database" hidden>Refresh</button></label>
     <select id="write_database" name="write_database" disabled>
       <option value=""></option>
@@ -314,6 +329,7 @@ const saved = {
   entity: {{ config.entity|tojson }},
   event_time: {{ config.event_time|tojson }},
   event_column: {{ config.event_column|tojson }},
+  event_names: {{ (config.event_names or [])|tojson }},
   role: {{ config.role|tojson }},
   warehouse: {{ config.warehouse|tojson }},
   write_project: {{ config.write_project|tojson }},
@@ -322,6 +338,7 @@ const saved = {
   write_schema: {{ config.write_schema|tojson }},
   columns: {{ (config.columns or [])|tojson }},
   catalog_lists: {{ (config.catalog_lists or {})|tojson }},
+  layout_cache: {{ (config.layout_cache or {})|tojson }},
 };
 const form = document.getElementById("f");
 const kindEl = document.getElementById("kind");
@@ -344,8 +361,13 @@ const SETUP_DOCS = {{ setup_docs_by_kind|tojson }};
 const EXTRAS = {{ extras|tojson }};
 const EXTRA_COMMANDS = {{ extra_commands|tojson }};
 const CATALOG = {{ catalog_steps_by_kind|tojson }};
+const CAPABILITIES_BY_KIND = {{ capabilities_by_kind|tojson }};
 function currentKind() {
   return CATALOG[kindEl.value] ? kindEl.value : Object.keys(CATALOG)[0];
+}
+function hasCap(name) {
+  const list = CAPABILITIES_BY_KIND[currentKind()] || [];
+  return list.indexOf(name) >= 0;
 }
 function typeSet(role) {
   const pack = TYPE_SETS[currentKind()] || TYPE_SETS.bigquery;
@@ -393,7 +415,12 @@ function syncExtraCard() {
 }
 function setLoading(sel, on) {
   const hint = document.getElementById(sel.id + "-loading");
-  if (hint) hint.hidden = !on;
+  if (!hint) return;
+  if (!on && (loading._date || loading._cluster) && (sel.id === "event_time" || sel.id === "event_column" || sel.id === "entity")) {
+    hint.hidden = false;
+    return;
+  }
+  hint.hidden = !on;
 }
 function hideSelect(sel) {
   setLoading(sel, false);
@@ -431,6 +458,7 @@ function fillSelect(sel, items, selected) {
       opt.value = item.value;
       opt.textContent = item.label;
       if (item.type) opt.dataset.type = item.type;
+      if (item.kind) opt.dataset.kind = item.kind;
     }
     sel.appendChild(opt);
   }
@@ -540,7 +568,10 @@ function paintStep(step) {
       }
     } else {
       const el = document.getElementById(step.id);
-      if (el) fillSelect(el, items, saved[step.id] || el.value);
+      if (el) {
+        const rows = step.id === "table_name" ? items.map(tableOption) : items;
+        fillSelect(el, rows, saved[step.id] || el.value);
+      }
     }
     fetched[step.id] = true;
     return;
@@ -740,6 +771,7 @@ async function loadStep(step) {
         fillSelect(el, typedOptions(cols, typeSet(spec.filter)), el.value);
       }
       tableEl.value = combinedTable();
+      requestLayout();
       return;
     }
     const el = document.getElementById(step.id);
@@ -748,6 +780,7 @@ async function loadStep(step) {
     if (step.item) {
       items = items.map((row) => (typeof row === "string" ? row : row[step.item]));
     }
+    if (step.id === "table_name") items = items.map(tableOption);
     storeCatalogList(step, items);
     const pick = el.value || (step.default_key && data[step.default_key]) || "";
     fillSelect(el, items, pick);
@@ -790,9 +823,17 @@ function bindCatalog() {
           if (id === "table_name" || id === "dataset" || id === "database" || id === "schema") {
             tableEl.value = combinedTable();
           }
-          if (id === "event_time") syncEventTimeKind();
+          if (id === "event_time") {
+            const epochEl = document.getElementById("event_time_epoch");
+            if (epochEl) epochEl.value = "";
+            syncEventTimeKind();
+            requestLayout();
+          }
+          if (id === "table_name") requestLayout();
+          if (id === "event_column" || id === "entity") requestLayout();
           if (id === "write_dataset" || id === "write_schema" || id === "write_database") {
             syncManagedChrome();
+            requestWriteAccess();
           }
           resetFollowing(id);
         });
@@ -807,36 +848,612 @@ function syncSnowflakeAuthUi() {
     ? "Opens a browser on first connect. The connector caches the SSO token in the OS keyring (about four hours if the account allows it). Nothing is stored in <code>.factcat.json</code>."
     : "Key-pair JWT. Encrypted keys use env <code>SNOWFLAKE_PRIVATE_KEY_PASSPHRASE</code>. The passphrase is not saved in <code>.factcat.json</code>.";
 }
+function tableOption(row) {
+  if (typeof row === "string") return row;
+  const id = row.id || row.value || "";
+  const kind = row.kind || "table";
+  let label = id;
+  if (kind === "view") label += " (view)";
+  if (kind === "materialized_view") label += " (materialized view)";
+  return { value: id, label, kind };
+}
+function fcSql(name) {
+  const el = document.createElement("code");
+  el.textContent = name;
+  return el;
+}
+function grainParen(grain) {
+  const g = String(grain || "").toUpperCase();
+  if (g === "DAY") return "partitioned by date";
+  if (g === "HOUR") return "partitioned by hour";
+  if (g === "MONTH") return "partitioned by month";
+  if (g === "YEAR") return "partitioned by year";
+  return "";
+}
+function fmtBytes(n) {
+  if (n == null || n === "") return "";
+  const gb = n / (1024 ** 3);
+  if (gb >= 1) return (Math.round(gb * 10) / 10) + " GB";
+  const mb = n / (1024 ** 2);
+  if (mb >= 1) return Math.round(mb) + " MB";
+  return Math.round(n / 1024) + " KB";
+}
+let layoutPayload = null;
+let layoutCache = (saved.layout_cache && typeof saved.layout_cache === "object")
+  ? saved.layout_cache
+  : {};
+let layoutGen = 0;
+let writeAccessGen = 0;
+function relationHint(rel) {
+  if (!rel) return "";
+  const name = rel.name || tableNameEl.value;
+  const kind = rel.kind || "table";
+  const bases = rel.bases || [];
+  if (kind === "view" || kind === "materialized_view") {
+    const label = kind === "materialized_view" ? "materialized view" : "view";
+    if (bases.length >= 3) return name + " is a " + label + " over " + bases.length + " tables.";
+    if (bases.length === 1 || bases.length === 2) {
+      const names = bases.map((b) => b.name).filter(Boolean);
+      return name + " is a " + label + " over " + names.join(" and ") + ".";
+    }
+    return name + " is a " + label + ".";
+  }
+  const bits = [];
+  const part = rel.partition;
+  if (part && part.ingestion) bits.push("Partitioned by ingestion time.");
+  else if (part && part.field) bits.push("Partitioned by " + part.field + ".");
+  const lead = (rel.clustering && rel.clustering[0]) || "";
+  if (lead && lead.indexOf("(") < 0) bits.push("Clustered on " + lead + ".");
+  return bits.join(" ");
+}
+function paintTableHint() {
+  const el = document.getElementById("table-layout-hint");
+  if (!el) return;
+  const rel = layoutPayload && layoutPayload.relation;
+  el.textContent = relationHint(rel) || "";
+}
+function tickTitle(payload) {
+  return "Date filters on this column skip partitions outside the range (or the same through a view). A week still scans the whole month when partitions are monthly. Clustering is a second skip, inside each partition, when you filter a clustered column such as event name — this check does not measure that. BigQuery wants partitions around 10 GB so metadata stays cheap; month on a large events table is often the right size.";
+}
+function syncLayoutChecking() {
+  const dateBusy = !!loading._date;
+  const clusterBusy = !!loading._cluster;
+  const cols = !!loading._columns;
+  const hasTime = !!eventTimeEl.value;
+  const hasEvent = !!eventColumnEl.value;
+  const hasEntity = !!entityEl.value;
+  const timeSpin = document.getElementById("event_time-loading");
+  const timeCheck = document.getElementById("event-time-checking");
+  if (timeCheck) timeCheck.hidden = !(dateBusy && hasTime);
+  if (timeSpin) timeSpin.hidden = !(cols || (dateBusy && hasTime));
+  const evSpin = document.getElementById("event_column-loading");
+  const evCheck = document.getElementById("event-column-checking");
+  const entSpin = document.getElementById("entity-loading");
+  const entCheck = document.getElementById("entity-checking");
+  if (evCheck) evCheck.hidden = !(clusterBusy && hasEvent);
+  if (entCheck) entCheck.hidden = !(clusterBusy && hasEntity);
+  if (evSpin) evSpin.hidden = !(cols || (clusterBusy && hasEvent));
+  if (entSpin) entSpin.hidden = !(cols || (clusterBusy && hasEntity));
+}
+function paintEventTimeLayout() {
+  const box = document.getElementById("event-time-layout");
+  const check = document.getElementById("event-time-check");
+  syncLayoutChecking();
+  if (!box) return;
+  const canProbe = hasCap("dry_run");
+  const payload = layoutPayload;
+  const probe = payload && payload.probe;
+  const dateBusy = !!loading._date;
+  if (check) {
+    const meta = payload && payload.metadata_verdict;
+    const settled = meta === "match" || meta === "mismatch" || meta === "ingestion" || meta === "none";
+    check.hidden = dateBusy || !canProbe || !eventTimeEl.value || settled;
+  }
+  if (dateBusy) {
+    box.innerHTML = "";
+    return;
+  }
+  box.innerHTML = "";
+  if (!eventTimeEl.value || !payload) return;
+  const verdict = (probe && probe.verdict) || payload.metadata_verdict;
+  const grain = grainParen(payload.grain);
+  if (verdict === "prunes" || verdict === "require_filter") {
+    const p = document.createElement("span");
+    p.className = "hint ok";
+    p.title = tickTitle(payload);
+    const mark = document.createElement("span");
+    mark.className = "tick";
+    mark.textContent = "✓";
+    p.appendChild(mark);
+    p.appendChild(document.createTextNode(
+      "Pruning is effective on this timestamp" + (grain ? " (" + grain + ")." : ".")
+    ));
+    box.appendChild(p);
+    const avg = payload.partition_avg_bytes;
+    if (avg != null) {
+      const gb = avg / (1024 ** 3);
+      if (gb < 1) {
+        const call = document.createElement("div");
+        call.className = "callout";
+        const t = document.createElement("p");
+        t.textContent = "Day partitions look small (avg " + fmtBytes(avg) + "). BigQuery wants ~10 GB each so metadata stays cheap — month, or clustering only, is the usual fix.";
+        call.appendChild(t);
+        box.appendChild(call);
+      } else if (gb < 10) {
+        const note = document.createElement("span");
+        note.className = "hint";
+        note.textContent = "Average partition is " + fmtBytes(avg) + " (BigQuery’s rule of thumb is ~10 GB).";
+        box.appendChild(note);
+      }
+    }
+  } else if (verdict === "mismatch" || verdict === "ingestion" || verdict === "none" || verdict === "no_prune") {
+    const call = document.createElement("div");
+    call.className = "callout";
+    const t = document.createElement("p");
+    const part = payload.relation && payload.relation.partition;
+    const mapped = eventTimeEl.value;
+    if (verdict === "mismatch" && part && part.field) {
+      t.appendChild(document.createTextNode("Partitioned by "));
+      t.appendChild(fcSql(part.field));
+      t.appendChild(document.createTextNode(", not "));
+      t.appendChild(fcSql(mapped));
+      t.appendChild(document.createTextNode(". Confirm this is the event-time column — date filters won't prune."));
+    } else if (verdict === "ingestion") {
+      t.appendChild(document.createTextNode("Partitioned by ingestion time, not "));
+      t.appendChild(fcSql(mapped));
+      t.appendChild(document.createTextNode(". Date filters won't prune."));
+    } else if (verdict === "no_prune") {
+      t.textContent = "Date filters didn't reduce the scan. Queries still run.";
+    } else {
+      t.textContent = "Not partitioned. Queries still run; date filters won't prune.";
+    }
+    call.appendChild(t);
+    box.appendChild(call);
+  }
+}
+function clusterBoxes() {
+  return {
+    table: document.getElementById("table-cluster-layout"),
+    event: document.getElementById("event-column-layout"),
+    entity: document.getElementById("entity-layout"),
+  };
+}
+function clearClusterBoxes() {
+  const boxes = clusterBoxes();
+  Object.keys(boxes).forEach((key) => {
+    if (boxes[key]) boxes[key].innerHTML = "";
+  });
+}
+function mappedIsView() {
+  const rel = layoutPayload && layoutPayload.relation;
+  if (rel && (rel.kind === "view" || rel.kind === "materialized_view")) return true;
+  const opt = tableNameEl.selectedOptions && tableNameEl.selectedOptions[0];
+  const label = opt ? String(opt.textContent || opt.label || "") : "";
+  return /\(\s*materialized view\s*\)|\(\s*view\s*\)/i.test(label);
+}
+function paintEntityCluster(cluster, box) {
+  if (!box || currentKind() !== "bigquery") return;
+  const entityCol = entityEl.value;
+  if (!entityCol || !cluster) return;
+  const pos = cluster.entity_pos;
+  if (pos === 0) {
+    appendAdvice(box, (t) => {
+      t.appendChild(document.createTextNode("Not clustered on "));
+      t.appendChild(fcSql(entityCol));
+      t.appendChild(document.createTextNode(". Queries still run; entity filters won't prune."));
+    });
+    return;
+  }
+  if (pos === 2) {
+    appendPruneTick(
+      box,
+      "Pruning is effective on entity filters (clustered after "
+        + (eventColumnEl.value || "event_name") + ").",
+      "Entity filters skip clustered blocks only with the keys before this column (leftmost prefix)."
+    );
+    return;
+  }
+  if (pos > 2) {
+    appendAdvice(box, (t) => {
+      t.appendChild(fcSql(entityCol));
+      t.appendChild(document.createTextNode(" is cluster key " + pos + ". Queries still run; entity filters won't prune without the keys before it."));
+    });
+  }
+}
+function appendAdvice(box, build) {
+  if (!box) return;
+  const call = document.createElement("div");
+  call.className = "callout";
+  const t = document.createElement("p");
+  build(t);
+  call.appendChild(t);
+  box.appendChild(call);
+}
+function appendPruneTick(box, text, title) {
+  if (!box) return;
+  const p = document.createElement("span");
+  p.className = "hint ok";
+  if (title) p.title = title;
+  const mark = document.createElement("span");
+  mark.className = "tick";
+  mark.textContent = "✓";
+  p.appendChild(mark);
+  p.appendChild(document.createTextNode(text));
+  box.appendChild(p);
+}
+function clusterOkText(cluster) {
+  const lead = cluster.leading || (cluster.fields && cluster.fields[0]) || "";
+  const rest = (cluster.fields || []).slice(1).filter((c) => String(c).indexOf("(") < 0);
+  let mech = "clustered on " + lead;
+  if (rest[0]) mech += ", then " + rest[0];
+  if (cluster.on && (layoutPayload.relation && layoutPayload.relation.kind !== "table")) {
+    mech = cluster.on + " " + mech;
+  }
+  return "Pruning is effective on event-name filters (" + mech + ").";
+}
+function paintClusterNote(cluster) {
+  const boxes = clusterBoxes();
+  clearClusterBoxes();
+  if (!cluster) return;
+  const eventCol = eventColumnEl.value;
+  const eventBox = boxes.event;
+  const entityBox = boxes.entity;
+  const tableBox = boxes.table;
+  if (cluster.status === "prunes") {
+    if (eventBox && eventCol) {
+      appendPruneTick(
+        eventBox,
+        "Pruning is effective on event-name filters.",
+        "A named event-name filter reduced the dry-run scan. That can be clustering, or a view dropping unused event tables. BigQuery often only applies cluster prune when the query runs, so a later estimate may still look large."
+      );
+    }
+    paintEntityCluster(cluster, entityBox);
+    return;
+  }
+  if (cluster.status === "no_prune") {
+    if (eventBox) {
+      const p = document.createElement("span");
+      p.className = "hint";
+      p.textContent = "Estimate didn't drop for an event-name filter. Clustering often only applies when the query runs.";
+      eventBox.appendChild(p);
+    }
+    paintEntityCluster(cluster, entityBox);
+    return;
+  }
+  if (cluster.status === "ok" && cluster.fields && cluster.fields.length) {
+    if (eventBox && eventCol) {
+      appendPruneTick(
+        eventBox,
+        clusterOkText(cluster),
+        "Event-name filters skip clustered blocks inside each scanned partition when this column is the leading key. A view may also drop unused event tables."
+      );
+    }
+    paintEntityCluster(cluster, entityBox);
+    return;
+  }
+  if (cluster.status === "not_leading" || cluster.status === "missing") {
+    if (eventBox) {
+      const call = document.createElement("div");
+      call.className = "callout";
+      const t = document.createElement("p");
+      if (cluster.status === "not_leading" && cluster.leading) {
+        t.appendChild(document.createTextNode("Not clustered on "));
+        t.appendChild(fcSql(eventCol || "event_name"));
+        t.appendChild(document.createTextNode(" (leading key is "));
+        t.appendChild(fcSql(cluster.leading));
+        t.appendChild(document.createTextNode("). Queries still run; event-name filters won't prune."));
+      } else if (eventCol) {
+        t.appendChild(document.createTextNode("Not clustered on "));
+        t.appendChild(fcSql(eventCol));
+        t.appendChild(document.createTextNode(". Queries still run; event-name filters won't prune."));
+      } else {
+        paintEntityCluster(cluster, entityBox);
+        return;
+      }
+      call.appendChild(t);
+      eventBox.appendChild(call);
+    }
+    paintEntityCluster(cluster, entityBox);
+    return;
+  }
+  if (cluster.status === "spokes") {
+    if (eventBox) {
+      const p = document.createElement("span");
+      p.className = "hint";
+      p.textContent = "View over " + cluster.n + " tables. Event-name filters may prune by selecting a spoke; we do not expect event_name clustering on the view.";
+      eventBox.appendChild(p);
+      if (tableBox) {
+        const copy = document.createElement("span");
+        copy.className = "hint";
+        copy.textContent = p.textContent;
+        tableBox.appendChild(copy);
+      }
+    }
+    if (entityBox && entityEl.value && cluster.entity_pos > 0 && cluster.on) {
+      const ent = document.createElement("span");
+      ent.className = "hint";
+      ent.appendChild(document.createTextNode(cluster.on + " is clustered on "));
+      ent.appendChild(fcSql(entityEl.value));
+      ent.appendChild(document.createTextNode("."));
+      entityBox.appendChild(ent);
+    } else {
+      paintEntityCluster(cluster, entityBox);
+    }
+    return;
+  }
+  if (cluster.status === "no_key" && eventBox) {
+    const p = document.createElement("span");
+    p.className = "hint";
+    p.textContent = cluster.automatic_clustering
+      ? "Clustering key is set; automatic maintenance is off."
+      : "No clustering key. Date filters often still prune if rows are loaded in time order. Event-name filters usually will not.";
+    eventBox.appendChild(p);
+    if (tableBox && mappedIsView()) {
+      const copy = document.createElement("span");
+      copy.className = "hint";
+      copy.textContent = p.textContent;
+      tableBox.appendChild(copy);
+    }
+    return;
+  }
+  if (cluster.status === "unknown" && tableBox && mappedIsView()) {
+    const p = document.createElement("span");
+    p.className = "hint";
+    p.textContent = "Could not read clustering on the tables this view reads.";
+    tableBox.appendChild(p);
+  }
+}
+function relationFingerprint() {
+  return {
+    kind: currentKind(),
+    table: combinedTable(),
+    location: locationEl.value.trim(),
+  };
+}
+function dateFingerprint() {
+  return Object.assign(relationFingerprint(), {
+    event_time: eventTimeEl.value.trim(),
+    event_time_tz: document.getElementById("event_time_tz").value,
+    event_time_epoch: document.getElementById("event_time_epoch").value,
+    reporting_timezone: document.getElementById("reporting_timezone").value,
+    week_start: document.getElementById("week_start").value,
+  });
+}
+function clusterFingerprint() {
+  return Object.assign(relationFingerprint(), {
+    event_column: eventColumnEl.value.trim(),
+    entity: entityEl.value.trim(),
+  });
+}
+function fingerprintsEqual(a, b) {
+  if (!a || !b) return false;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((k) => String(a[k] || "") === String(b[k] || ""));
+}
+function rememberLayoutCache(payload) {
+  if (!payload) return;
+  const copy = Object.assign({}, payload);
+  delete copy.ok;
+  layoutCache = {
+    relation: { fingerprint: relationFingerprint(), payload: { relation: copy.relation } },
+    date: {
+      fingerprint: dateFingerprint(),
+      payload: {
+        probe: copy.probe,
+        metadata_verdict: copy.metadata_verdict,
+        grain: copy.grain,
+        partition_avg_bytes: copy.partition_avg_bytes,
+      },
+    },
+    cluster: { fingerprint: clusterFingerprint(), payload: copy.cluster },
+    payload: copy,
+  };
+}
+function applyLayoutCache() {
+  if (!fingerprintsEqual((layoutCache.relation || {}).fingerprint, relationFingerprint())) return false;
+  if (!fingerprintsEqual((layoutCache.date || {}).fingerprint, dateFingerprint())) return false;
+  if (!fingerprintsEqual((layoutCache.cluster || {}).fingerprint, clusterFingerprint())) return false;
+  if (!layoutCache.payload) return false;
+  layoutPayload = layoutCache.payload;
+  paintLayoutChrome();
+  return true;
+}
+function layoutBody(extra) {
+  return Object.assign({
+    ...authBody(),
+    dataset: datasetEl.value.trim(),
+    table_name: tableNameEl.value.trim(),
+    table: combinedTable(),
+    database: databaseEl.value.trim(),
+    schema: schemaEl.value.trim(),
+    event_time: eventTimeEl.value.trim(),
+    event_column: eventColumnEl.value.trim(),
+    event_names: Array.isArray(saved.event_names) ? saved.event_names : [],
+    entity: entityEl.value.trim(),
+    event_time_tz: document.getElementById("event_time_tz").value,
+    event_time_epoch: document.getElementById("event_time_epoch").value,
+    reporting_timezone: document.getElementById("reporting_timezone").value,
+    week_start: document.getElementById("week_start").value,
+    location: locationEl.value.trim(),
+  }, extra || {});
+}
+function paintLayoutChrome() {
+  paintTableHint();
+  paintEventTimeLayout();
+  paintClusterNote(layoutPayload && layoutPayload.cluster);
+}
+let avgGen = 0;
+async function requestPartitionAvg() {
+  if (!hasCap("dry_run")) return;
+  const payload = layoutPayload;
+  if (!payload || payload.partition_avg_bytes != null) return;
+  const verdict = (payload.probe && payload.probe.verdict) || payload.metadata_verdict;
+  if (verdict !== "prunes" && verdict !== "require_filter" && verdict !== "match") return;
+  const gen = ++avgGen;
+  try {
+    const data = await post("/api/layout", layoutBody({ include_partition_avg: true }));
+    if (gen !== avgGen) return;
+    if (!data.ok || !layoutPayload) return;
+    layoutPayload.partition_avg_bytes = data.partition_avg_bytes;
+    rememberLayoutCache(layoutPayload);
+    paintEventTimeLayout();
+  } catch (err) {}
+}
+async function requestLayout(force) {
+  if (!tableNameEl.value) {
+    layoutPayload = null;
+    clearClusterBoxes();
+    paintTableHint();
+    paintEventTimeLayout();
+    return;
+  }
+  if (currentKind() !== "bigquery" && currentKind() !== "snowflake") return;
+  const relMiss = !fingerprintsEqual((layoutCache.relation || {}).fingerprint, relationFingerprint());
+  const dateMiss = !fingerprintsEqual((layoutCache.date || {}).fingerprint, dateFingerprint());
+  const clusterMiss = !fingerprintsEqual((layoutCache.cluster || {}).fingerprint, clusterFingerprint());
+  if (!force && applyLayoutCache()) {
+    requestPartitionAvg();
+    return;
+  }
+  const gen = ++layoutGen;
+  avgGen += 1;
+  loading._date = !!(force || relMiss || dateMiss);
+  loading._cluster = !!(force || relMiss || clusterMiss);
+  if (loading._cluster) clearClusterBoxes();
+  paintEventTimeLayout();
+  if (!loading._cluster) paintClusterNote(layoutPayload && layoutPayload.cluster);
+  try {
+    const data = await post("/api/layout", layoutBody(force ? { force: true } : {}));
+    if (gen !== layoutGen) return;
+    if (!data.ok) {
+      layoutPayload = layoutPayload || null;
+      return;
+    }
+    layoutPayload = data;
+    rememberLayoutCache(data);
+  } catch (err) {
+    if (gen !== layoutGen) return;
+  } finally {
+    if (gen !== layoutGen) return;
+    loading._date = false;
+    loading._cluster = false;
+    paintLayoutChrome();
+    requestPartitionAvg();
+  }
+}
+function writeHintEls() {
+  return [
+    document.getElementById("write-access-hint-bq"),
+    document.getElementById("write-access-hint-sf"),
+  ].filter(Boolean);
+}
+async function requestWriteAccess() {
+  const destReady = writeDestReady();
+  writeHintEls().forEach((el) => { el.textContent = ""; el.className = "hint"; });
+  if (!destReady) return;
+  const gen = ++writeAccessGen;
+  try {
+    const data = await post("/api/write_access", {
+      ...authBody(),
+      write_project: document.getElementById("write_project").value.trim(),
+      write_dataset: document.getElementById("write_dataset").value.trim(),
+      write_database: document.getElementById("write_database").value.trim(),
+      write_schema: document.getElementById("write_schema").value.trim(),
+    });
+    if (gen !== writeAccessGen) return;
+    const el = currentKind() === "snowflake"
+      ? document.getElementById("write-access-hint-sf")
+      : document.getElementById("write-access-hint-bq");
+    if (!el) return;
+    if (!data.ok) {
+      el.textContent = data.error || "Could not check write permissions.";
+      return;
+    }
+    if (data.status === "ok") {
+      el.className = "hint ok";
+      el.textContent = "Can create tables and materialized views in " + (data.dest || "this destination") + ".";
+    } else if (data.status === "denied") {
+      el.className = "callout";
+      el.textContent = "This role cannot create tables in " + (data.dest || "this destination") + ". Mapping still saves.";
+    }
+  } catch (err) {
+    if (gen !== writeAccessGen) return;
+  }
+}
+function syncEventTimeStored() {
+  const storage = document.getElementById("event_time_storage_tz");
+  const hidden = document.getElementById("event_time_tz");
+  const wrap = document.getElementById("event-time-tz-wrap");
+  if (!hidden) return;
+  if (wrap && wrap.hidden) return;
+  const picked = (storage && storage.value) || "UTC";
+  hidden.value = picked === "UTC" ? "utc" : picked;
+}
+function seedEventTimeStored() {
+  const storage = document.getElementById("event_time_storage_tz");
+  const hidden = document.getElementById("event_time_tz");
+  const reporting = document.getElementById("reporting_timezone");
+  const raw = (hidden && hidden.value) || "utc";
+  if (!storage) return;
+  if (raw === "utc" || raw === "UTC") storage.value = "UTC";
+  else if (raw === "reporting") storage.value = (reporting && reporting.value) || "UTC";
+  else if (raw !== "instant") storage.value = raw;
+  syncEventTimeStored();
+}
+let epochGen = 0;
+async function inferUnixEpoch() {
+  const epochEl = document.getElementById("event_time_epoch");
+  const typ = ((eventTimeEl.selectedOptions[0] && eventTimeEl.selectedOptions[0].dataset.type) || "").toUpperCase();
+  if (!typeSet("event_time_unix").has(typ) || !eventTimeEl.value || !tableNameEl.value) return;
+  if (epochEl && epochEl.value) return;
+  const gen = ++epochGen;
+  try {
+    const data = await post("/api/infer_epoch", {
+      ...authBody(),
+      dataset: datasetEl.value.trim(),
+      table_name: tableNameEl.value.trim(),
+      table: combinedTable(),
+      database: databaseEl.value.trim(),
+      schema: schemaEl.value.trim(),
+      event_time: eventTimeEl.value.trim(),
+      location: locationEl.value.trim(),
+      columns: saved.columns || [],
+    });
+    if (gen !== epochGen) return;
+    if (data.ok && data.event_time_epoch && epochEl) {
+      epochEl.value = data.event_time_epoch;
+      scheduleSave();
+    }
+  } catch (err) {
+    if (gen !== epochGen) return;
+  }
+}
 function syncEventTimeKind() {
   const typ = ((eventTimeEl.selectedOptions[0] && eventTimeEl.selectedOptions[0].dataset.type) || "").toUpperCase();
   const tzEl = document.getElementById("event_time_tz");
   const wrap = document.getElementById("event-time-tz-wrap");
   const hint = document.getElementById("event-time-tz-hint");
-  const epochWrap = document.getElementById("event-time-epoch-wrap");
   const epochEl = document.getElementById("event_time_epoch");
   const instant = typeSet("event_time_instant").has(typ);
-  const wall = typeSet("event_time_wallclock").has(typ);
   const unix = typeSet("event_time_unix").has(typ);
   if (unix) {
     wrap.hidden = true;
-    epochWrap.hidden = false;
-    if (!epochEl.value) epochEl.value = "seconds";
     tzEl.value = "utc";
+    inferUnixEpoch();
     return;
   }
-  epochWrap.hidden = true;
-  epochEl.value = "";
+  if (epochEl) epochEl.value = "";
   if (instant) {
     tzEl.value = "instant";
     wrap.hidden = true;
     return;
   }
   wrap.hidden = false;
-  if (wall && tzEl.value === "instant") tzEl.value = "reporting";
-  if (!tzEl.value) tzEl.value = wall ? "reporting" : "utc";
+  seedEventTimeStored();
   hint.textContent = currentKind() === "snowflake"
-    ? "TIMESTAMP_NTZ / DATETIME have no zone. Say whether the stored numbers are UTC or already in the reporting timezone. TIMESTAMP_TZ / LTZ are instants and do not need this."
-    : "TIMESTAMP is a UTC instant. DATETIME has no zone: treat it as already in the reporting timezone.";
+    ? "TIMESTAMP_NTZ / DATETIME have no zone on the column. TIMESTAMP_TZ and TIMESTAMP_LTZ are instants and do not need this."
+    : "DATETIME has no zone on the column. TIMESTAMP is a UTC instant and does not need this.";
 }
 document.getElementById("snowflake_auth").addEventListener("change", () => {
   syncSnowflakeAuthUi();
@@ -868,7 +1485,20 @@ document.getElementById("write_project").addEventListener("input", () => {
   delete catalogLists.write_dataset;
   seedSelect(document.getElementById("write_dataset"), "");
   syncManagedChrome();
+  requestWriteAccess();
 });
+const storageEl = document.getElementById("event_time_storage_tz");
+if (storageEl) {
+  storageEl.addEventListener("change", () => {
+    syncEventTimeStored();
+    scheduleSave();
+    requestLayout();
+  });
+}
+const checkBtn = document.getElementById("event-time-check");
+if (checkBtn) {
+  checkBtn.addEventListener("click", () => requestLayout(true));
+}
 document.getElementById("write_database").addEventListener("change", () => {
   invalidateStep("write_schema");
   delete catalogLists.write_schema;
@@ -918,10 +1548,13 @@ kindSteps().forEach((step) => {
 });
 tableEl.value = combinedTable();
 syncSnowflakeAuthUi();
+seedEventTimeStored();
 syncEventTimeKind();
 catalogArmed = true;
 syncCatalogEnabled();
 syncManagedChrome();
+if (!applyLayoutCache()) requestLayout();
+requestWriteAccess();
 
 const ENTITY_NAME_PRESETS = {
   User: "Users",
@@ -963,6 +1596,7 @@ seedEntityName();
 const autosave = fcAutosave({
   save: async () => {
     syncEntityName();
+    syncEventTimeStored();
     tableEl.value = combinedTable();
     const body = Object.fromEntries(new FormData(form).entries());
     body.kind = currentKind();

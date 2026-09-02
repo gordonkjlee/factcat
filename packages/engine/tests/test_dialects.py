@@ -569,6 +569,26 @@ def test_utc_bound_is_datetime_so_column_stays_bare():
     assert "TIMESTAMP_NTZ" in sf_spliced.upper()
 
 
+def test_iana_storage_zone_bound_is_datetime_in_that_zone():
+    sql = splice_placeholders(
+        "occurred_at >= factcat_ts_at_date(DATE '2026-01-01', 'Europe/London', 'America/New_York')",
+        "bigquery",
+    )
+    assert sql == (
+        "occurred_at >= DATETIME(TIMESTAMP(DATE '2026-01-01', 'Europe/London'), "
+        "'America/New_York')"
+    )
+    instant = splice_placeholders(
+        "factcat_as_instant(occurred_at, 'America/New_York')",
+        "bigquery",
+    )
+    assert instant == "TIMESTAMP(occurred_at, 'America/New_York')"
+    sf = timestamp_at_date(
+        "DATE '2026-01-01'", "snowflake", "Europe/London", "America/New_York"
+    )
+    assert "CONVERT_TIMEZONE('Europe/London', 'America/New_York'" in sf
+
+
 def test_create_or_replace_relation_spelling():
     select = "SELECT event_name AS fc_value FROM t GROUP BY 1"
     mv = create_or_replace_relation("d.fc_event_names", select, "bigquery", materialized=True)

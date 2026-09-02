@@ -1950,6 +1950,16 @@ def test_civil_datetime_casts_instead_of_date_tz():
     assert "CURRENT_DATE('Europe/London')" in sql
 
 
+def test_iana_storage_zone_isolates_column_in_window():
+    spec = spec_from_form(_form(event_time_tz="America/New_York"))
+    assert spec.event_time == "factcat_as_instant(occurred_at, 'America/New_York')"
+    assert "occurred_at >=" in spec.where
+    sql = events_sql(spec, dialect="bigquery").replace("`", "")
+    assert "TIMESTAMP(occurred_at, 'America/New_York')" in sql
+    assert "DATETIME(TIMESTAMP(" in sql
+    assert "CAST(occurred_at AS TIMESTAMP) >=" not in sql
+
+
 def test_utc_kind_isolates_column_in_window():
     spec = spec_from_form(_form())
     assert spec.event_time == "factcat_as_instant(occurred_at)"
@@ -1970,6 +1980,15 @@ def test_unknown_timezone_is_rejected():
         spec_from_form(_form(reporting_timezone="Not/A_Zone"))
     with pytest.raises(ValueError, match="event_time_tz"):
         spec_from_form(_form(event_time_tz="local"))
+
+
+def test_classify_unix_epoch_from_magnitude():
+    from factcat_app.query import classify_unix_epoch
+
+    assert classify_unix_epoch([1_700_000_000]) == "seconds"
+    assert classify_unix_epoch([1_700_000_000_000]) == "milliseconds"
+    assert classify_unix_epoch([1_700_000_000_000_000]) == "microseconds"
+    assert classify_unix_epoch([]) == "seconds"
 
 
 def test_unix_epoch_seconds_uses_timestamp_seconds():

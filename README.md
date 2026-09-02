@@ -332,9 +332,10 @@ cap. **Refresh event names** on Events re-runs that window. The chevron next to 
 further back (6 months / 12 months / all time, only steps at least twice
 the current lookback). The time filter isolates
 the timestamp column so a date-partitioned table can prune.
-Optional **Factcat-managed tables**: allow Factcat to create and maintain
+Recommended **Factcat-managed tables**: allow Factcat to create and maintain
 tables in your warehouse for better performance. BigQuery is project and
-dataset; Snowflake is database and schema. First fetch creates
+dataset; Snowflake is database and schema. Setup checks create rights on
+that dest (no test object). First fetch creates
 `fc_event_names` if missing; later Refresh reads it. The object is stamped
 with a fingerprint of the mapped table and event-name column (JSON comment
 on the relation, plus `.factcat.json`) so a remapping rebuilds it. A table

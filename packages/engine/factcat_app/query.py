@@ -170,6 +170,103 @@ _EPOCH = {
     "us": "unix_us",
     "unix_us": "unix_us",
 }
+# Median |n| thresholds. 2026 is ~1.8e9 s, ~1.8e12 ms, ~1.8e15 µs.
+_EPOCH_MS = 1e11
+_EPOCH_US = 1e14
+_EPOCH_SAMPLE = 1000
+
+
+def classify_unix_epoch(values: list[Any]) -> str:
+    """Seconds / milliseconds / microseconds from sample magnitudes."""
+    nums: list[float] = []
+    for raw in values:
+        if raw is None or raw is True or raw is False:
+            continue
+        try:
+            nums.append(abs(float(raw)))
+        except (TypeError, ValueError):
+            continue
+    if not nums:
+        return "seconds"
+    nums.sort()
+    mid = nums[len(nums) // 2]
+    if mid >= _EPOCH_US:
+        return "microseconds"
+    if mid >= _EPOCH_MS:
+        return "milliseconds"
+    return "seconds"
+
+
+def _event_time_is_unix(form: dict[str, Any]) -> bool:
+    from factcat_app.catalog import type_sets
+    from factcat_app.config import load as load_cfg
+
+    name = str(form.get("event_time") or "").strip()
+    if not name:
+        return False
+    cols = form.get("columns")
+    if not isinstance(cols, list) or not cols:
+        cols = load_cfg().get("columns") or []
+    typ = ""
+    for col in cols:
+        if str(col.get("name") or "") == name:
+            typ = str(col.get("type") or "").upper()
+            break
+    if not typ:
+        return False
+    if "(" in typ:
+        typ = typ.split("(", 1)[0].strip()
+    return typ in type_sets(form_kind(form))["event_time_unix"]
+
+
+def infer_epoch_sql(form: dict[str, Any]) -> str:
+    table = _ident_table(str(form.get("table") or ""), "table")
+    event_time = _ident_column(str(form.get("event_time") or ""), "event_time")
+    sql = (
+        f"SELECT {event_time} AS fc_n FROM {table} "
+        f"WHERE {event_time} IS NOT NULL LIMIT {_EPOCH_SAMPLE}"
+    )
+    dialect = form_kind(form)
+    return splice_placeholders(transpile(sql, dialect), dialect)
+
+
+def infer_epoch_from_form(form: dict[str, Any]) -> str:
+    """Sample the timestamp column and classify the Unix unit. Catalog-like job."""
+    from factcat.warehouses import connect
+
+    if not _event_time_is_unix(form):
+        return ""
+    existing = str(form.get("event_time_epoch") or "").strip().lower()
+    if existing in _EPOCH:
+        return {
+            "unix_s": "seconds",
+            "unix_ms": "milliseconds",
+            "unix_us": "microseconds",
+        }.get(_EPOCH[existing], existing)
+    conn = connection_from_form(form, apply_scan_cap=False)
+    warehouse = connect(form_kind(form), **conn)
+    result = warehouse.run(infer_epoch_sql(form))
+    values = [row.get("fc_n") for row in (result.rows or [])]
+    return classify_unix_epoch(values)
+
+
+def ensure_epoch(form: dict[str, Any]) -> dict[str, Any]:
+    """Fill ``event_time_epoch`` when the mapped timestamp is a Unix integer."""
+    if not _event_time_is_unix(form):
+        return form
+    raw = str(form.get("event_time_epoch") or "").strip().lower()
+    if raw in _EPOCH:
+        return form
+    try:
+        unit = infer_epoch_from_form(form)
+    except (ValueError, AdapterError, ImportError):
+        unit = "seconds"
+    if not unit:
+        unit = "seconds"
+    from factcat_app.config import save as save_cfg
+
+    save_cfg({"event_time_epoch": unit})
+    return {**form, "event_time_epoch": unit}
 
 
 def _event_time_kind(form: dict[str, Any]) -> str:
@@ -181,10 +278,16 @@ def _event_time_kind(form: dict[str, Any]) -> str:
                 "event_time_epoch must be seconds, milliseconds, or microseconds"
             )
         return mapped
-    raw = str(form.get("event_time_tz") or "utc").strip().lower()
-    if raw not in {"utc", "reporting", "instant"}:
-        raise ValueError("event_time_tz must be utc, reporting, or instant")
-    return raw
+    raw = str(form.get("event_time_tz") or "utc").strip()
+    lowered = raw.lower()
+    if lowered in {"utc", "reporting", "instant"}:
+        return lowered
+    for tz in REPORTING_TIMEZONES:
+        if tz.lower() == lowered:
+            return tz
+    raise ValueError(
+        "event_time_tz must be utc, reporting, instant, or an IANA name from Setup"
+    )
 
 
 def _range_unit(form: dict[str, Any], default: str = "day") -> str:
@@ -327,7 +430,7 @@ def _event_time_lhs(event_time: str, form: dict[str, Any]) -> str:
     kind = _event_time_kind(form)
     if kind == "reporting":
         return event_time
-    if kind.startswith("unix_"):
+    if kind.startswith("unix_") or "/" in kind:
         return f"factcat_as_instant({event_time}, '{kind}')"
     return f"factcat_as_instant({event_time})"
 

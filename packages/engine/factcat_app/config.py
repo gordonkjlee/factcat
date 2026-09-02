@@ -71,6 +71,7 @@ DEFAULTS: dict[str, Any] = {
     "catalog_lookback_days": 90,
     "event_name_cache": {},
     "catalog_lists": {},
+    "layout_cache": {},
     "write_project": "",
     "write_dataset": "",
     "write_database": "",
