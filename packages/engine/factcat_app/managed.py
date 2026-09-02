@@ -1048,6 +1048,22 @@ def pending_note(
     if unsure:
         what = ", ".join(f"`{l}`" for l in unsure)
         return f"May also index {what}, which makes later runs cheaper"
+    # A refusal the caller can act on is worth one line: an expensive mode on
+    # a column Factcat will never index is a permanent silent slow path, and
+    # the reason was write-only until an owner asked why nothing appeared.
+    for cp in plan.columns:
+        if cp.action != "live":
+            continue
+        if cp.reason == NON_TEXT:
+            return (
+                f"Not indexing `{cp.column.label}`: the index stores text. "
+                f"Use `CAST({cp.column.expr} AS STRING)` as the breakdown to index it."
+            )
+        if cp.reason.startswith("no create rights"):
+            return (
+                f"Not indexing `{cp.column.label}`: no rights to create tables in the "
+                f"write destination."
+            )
     return ""
 
 

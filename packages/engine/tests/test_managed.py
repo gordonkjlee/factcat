@@ -725,3 +725,19 @@ def test_drop_on_a_stale_column_drops_the_table():
     assert any(u.startswith("DROP TABLE") for u in ups), "the stale rows were left behind"
     assert out["columns"] == {}
     assert out["fp"] == config_fingerprint(form)
+
+
+def test_a_refusal_the_caller_can_act_on_is_said_out_loud():
+    """An expensive mode on a column Factcat will never index is a permanent
+    silent slow path. The reason was write-only until an owner asked why the
+    run row said nothing. Mutation: drop the refusal branch in pending_note."""
+    form = _form(columns=[{"name": "plan", "type": "NUMERIC"}])
+    plan = build_plan(form, _Run(density=0.01), now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "live" and plan.columns[0].reason == managed.NON_TEXT
+    note = managed.pending_note(plan)
+    assert note.startswith("Not indexing `plan`: the index stores text.")
+    assert "CAST(plan AS STRING)" in note
+    # a refusal with no remedy stays quiet: it is not the user's problem
+    dense = build_plan(_form(), _Run(density=0.9), now=NOW, allow_probe=True)
+    assert dense.columns[0].action == "live"
+    assert managed.pending_note(dense) == ""
