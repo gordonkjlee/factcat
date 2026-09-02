@@ -2301,7 +2301,7 @@ def test_breakdown_value_at_carried_with_fill_from_event():
     ).breakdowns[0]
     assert plain.own_value_first is False
     sql = events_sql(spec, dialect="bigquery")
-    assert "fc_stamps" in sql
+    assert "fc_values" in sql
     assert "fc_self_0" in sql
     assert "IGNORE NULLS" not in sql.upper()
 

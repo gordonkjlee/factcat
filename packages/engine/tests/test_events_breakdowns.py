@@ -2,17 +2,20 @@
 
 Mutation: ignore ``breakdowns`` (always one series) and the US/UK as-of
 tests go red. Drop the ``(other)`` fold and the high-card test goes red.
-Carried/bounds mutations that must go red: build stamps from ``src`` not
-the table (S1's pre-window stamp is lost); drop the ``until`` bound
+Carried/bounds mutations that must go red: build values from ``src`` not
+the table (S1's pre-window value is lost); drop the ``until`` bound
 (as-of-start returns silver); substitute unbounded ``last`` for as-of-end
-(returns gold); flip the stamp/needle tie key (S2 loses its own-instant
-stamp); drop the value tiebreak (S4 flips); drop ``fill_from`` (S5 gains
-enterprise); drop ``WHERE fc_is_row = 1`` (stamp rows inflate totals);
+(returns gold); flip the value/needle tie key (S2 loses its own-instant
+value); drop the value tiebreak (S4 flips); drop ``fill_from`` (S5 gains
+enterprise); drop ``WHERE fc_is_row = 1`` (value rows inflate totals);
 apply spec ``breakdown_at`` over per-column ``at`` (the mixed test);
 drop ``backfill`` (S2 stays NULL at range start).
 """
 
 from __future__ import annotations
+
+import dataclasses
+import re
 
 import duckdb
 import pytest
@@ -166,7 +169,7 @@ def test_rows_first_last_differ_on_us_then_uk(visits):
     }
 
 
-def test_sparse_stamp_found_by_first_not_rows(visits):
+def test_sparse_value_found_by_first_not_rows(visits):
     """S3's US is on signup, outside where. rows → NULL; first → US."""
     rows = {(d, c): v for d, c, v in _rows(visits, _spec(breakdown_at="rows"))}
     first = {(d, c): v for d, c, v in _rows(visits, _spec(breakdown_at="first"))}
@@ -384,13 +387,13 @@ def test_invalid_breakdown_at_is_rejected():
 
 
 # entity_id, occurred_at, event_name, plan_tier. Logins are the metric;
-# plan_tier is stamped sparsely. Hand-computed paper for every mode:
-#   S1  free stamped pre-window (Dec 1); pro stamped Jan 5.
+# plan_tier is recorded sparsely. Hand-computed paper for every mode:
+#   S1  free recorded pre-window (Dec 1); pro recorded Jan 5.
 #       carried: Jan 2 login = free, Jan 6 login = pro.
-#   S2  stamp and login share one instant (Jan 3 08:00): the login sees it.
-#   S3  never stamped: NULL in every mode, never (other).
-#   S4  two stamps at one instant (pro, free): greatest value (pro) wins.
-#   S5  enterprise stamped on profile_update only: fill_from
+#   S2  value and login share one instant (Jan 3 08:00): the login sees it.
+#   S3  never recorded: NULL in every mode, never (other).
+#   S4  two values at one instant (pro, free): greatest value (pro) wins.
+#   S5  enterprise recorded on profile_update only: fill_from
 #       'subscription_started' excludes it.
 #   S6  bronze Dec 15, silver Jan 10, gold Feb 5. With a January window:
 #       as-of start = bronze, as-of end = silver, last ever = gold,
@@ -418,7 +421,7 @@ SUBS = [
     ("S7", "2026-01-15 00:00:00", "subscription_started", "free"),
     ("S7", "2026-01-15 00:00:00", "subscription_started", "pro"),
     ("S7", "2026-01-16 10:00:00", "login", None),
-    # S8's only stamp lands at exactly the window's EXCLUSIVE end — the
+    # S8's only value lands at exactly the window's EXCLUSIVE end — the
     # midnight snapshot job. before=end must not see it; until=end would.
     ("S8", "2026-01-25 08:00:00", "login", None),
     ("S8", "2026-02-01 00:00:00", "subscription_started", "edge"),
@@ -462,11 +465,11 @@ def _subs_spec(*breakdowns, **overrides) -> EventsSpec:
     return EventsSpec(**base)
 
 
-def test_carried_resolves_stamps_outside_window_and_where(subs):
-    """S1's free stamp is pre-window AND outside where (not a login).
+def test_carried_resolves_values_outside_window_and_where(subs):
+    """S1's free value is pre-window AND outside where (not a login).
 
-    Mutations: stamps built from ``src`` (the filtered scan) lose it;
-    so does bounding the stamp scan to the chart window.
+    Mutations: values built from ``src`` (the filtered scan) lose it;
+    so does bounding the value scan to the chart window.
     """
     got = {(d, t): v for d, t, v in _rows(subs, _subs_spec())}
     assert got[("2026-01-02", "free")] == 1.0  # S1 before the upgrade
@@ -474,15 +477,15 @@ def test_carried_resolves_stamps_outside_window_and_where(subs):
     assert got[("2026-01-20", "silver")] == 1.0  # S6: latest at-or-before
 
 
-def test_carried_same_instant_stamp_is_seen(subs):
-    """S2's stamp shares the login's instant; the login sees it."""
+def test_carried_same_instant_value_is_seen(subs):
+    """S2's value shares the login's instant; the login sees it."""
     got = {(d, t): v for d, t, v in _rows(subs, _subs_spec())}
     assert got[("2026-01-03", "pro")] == 1.0
     assert ("2026-01-03", None) not in got
 
 
 def test_carried_same_instant_greatest_value_wins(subs):
-    """S4 has pro and free stamped at one instant; pro > free."""
+    """S4 has pro and free recorded at one instant; pro > free."""
     got = {(d, t): v for d, t, v in _rows(subs, _subs_spec())}
     assert got[("2026-01-02", "pro")] == 1.0
     assert ("2026-01-02", "free") in got  # that one is S1, not S4
@@ -494,7 +497,7 @@ def test_carried_never_stamped_stays_null_not_other(subs):
     assert all(t != OTHER_LABEL for d, t in got if d == "2026-01-04")
 
 
-def test_carried_fill_from_excludes_other_stamps(subs):
+def test_carried_fill_from_excludes_other_values(subs):
     """S5's enterprise lives on profile_update; fill_from must drop it."""
     spec = _subs_spec(
         Breakdown(
@@ -504,12 +507,12 @@ def test_carried_fill_from_excludes_other_stamps(subs):
         )
     )
     got = {(d, t): v for d, t, v in _rows(subs, spec)}
-    assert got[("2026-01-02", None)] == 1.0  # S5, no authoritative stamp
+    assert got[("2026-01-02", None)] == 1.0  # S5, no authoritative value
     without = {(d, t): v for d, t, v in _rows(subs, _subs_spec())}
     assert without[("2026-01-02", "enterprise")] == 1.0
 
 
-def test_attr_fill_from_excludes_other_stamps(subs):
+def test_attr_fill_from_excludes_other_values(subs):
     """S5's enterprise lives on profile_update; fill_from must drop it on
     the first/last path too, not only under carried.
 
@@ -523,7 +526,7 @@ def test_attr_fill_from_excludes_other_stamps(subs):
         )
     )
     got = {(d, t): v for d, t, v in _rows(subs, spec)}
-    assert got[("2026-01-02", None)] == 1.0  # S5: no authoritative stamp
+    assert got[("2026-01-02", None)] == 1.0  # S5: no authoritative value
     without = {(d, t): v for d, t, v in _rows(subs, _subs_spec(
         Breakdown("plan_tier", at="last")
     ))}
@@ -534,7 +537,7 @@ def test_own_value_first_beats_narrowed_fill_from(subs):
     """S9's charted login carries its own speculative 'trial' while the
     fill_from stream says basic. Source-of-truth (default) ignores the
     row's own value; own_value_first keeps it. Without fill_from the two
-    contracts agree — the row is its own stamp.
+    contracts agree — the row is its own value.
 
     Mutation: drop the COALESCE / fc_self column and the own-first case
     returns basic.
@@ -570,7 +573,7 @@ def test_own_value_first_requires_carried():
 def test_carried_slices_sum_to_unsplit_total(subs):
     """Attribution assigns groups; it must not invent or drop rows.
 
-    Mutation: drop ``WHERE fc_is_row = 1`` and stamp rows inflate this.
+    Mutation: drop ``WHERE fc_is_row = 1`` and value rows inflate this.
     """
     unsplit = {
         d: v
@@ -620,15 +623,15 @@ def test_every_anchor_answers_differently_on_s6(subs):
 
 
 def test_asof_boundary_is_inclusive(subs):
-    """S4's stamps land exactly at the window-start instant and count."""
+    """S4's values land exactly at the window-start instant and count."""
     spec = _subs_spec(Breakdown("plan_tier", at="last", until=WINDOW_START))
     got = {(d, t): v for d, t, v in _rows(subs, spec)}
     assert got[("2026-01-02", "pro")] == 1.0  # S4: at-boundary, greatest
 
 
 def test_before_bound_excludes_the_boundary_instant(subs):
-    """S8's stamp sits at exactly the exclusive window end. ``before``
-    keeps it out (the stamp belongs to the next period); ``until`` — the
+    """S8's value sits at exactly the exclusive window end. ``before``
+    keeps it out (the value belongs to the next period); ``until`` — the
     inclusive-anchor spelling — would read it.
 
     Mutation: substitute ``<=`` for ``<`` (or until for before).
@@ -647,7 +650,7 @@ def test_before_bound_excludes_the_boundary_instant(subs):
 
 
 def test_attr_same_instant_greatest_value_wins(subs):
-    """S7 has free and pro stamped at one instant, free inserted first;
+    """S7 has free and pro recorded at one instant, free inserted first;
     the attr pick must choose pro by value, not by a stable sort."""
     spec = _subs_spec(Breakdown("plan_tier", at="last", until=WINDOW_END))
     got = {(d, t): v for d, t, v in _rows(subs, spec)}
@@ -731,7 +734,7 @@ def test_breakdown_object_matches_string_spec_sql():
 
 def test_rows_only_spec_emits_no_stream_ctes():
     sql = events_sql(_spec())
-    assert "fc_stamps" not in sql
+    assert "fc_values" not in sql
     assert "fc_stream" not in sql
 
 
@@ -782,3 +785,166 @@ def test_distinct_measure_with_breakdown_executes(subs):
         rows = _rows(subs, spec)
         assert rows, breakdowns
         assert all(v == 1.0 for *_dims, v in rows)
+
+
+# ---------------------------------------------------------------------------
+# values_table: a column's recorded values read from a relation (item 12).
+# The keystone is equivalence — every mode, cached vs live, identical on the
+# fixture. VALUES_THROUGH splits it so the live tail matters: S6's silver
+# (Jan 10) and gold (Feb 5), S7's pair (Jan 15), S8's edge (Feb 1) and S9's
+# trial (Jan 10) all land after it.
+VALUES_THROUGH = "TIMESTAMP '2026-01-09 00:00:00'"
+AUTH = "event_name = 'subscription_started'"
+
+
+def _load_values(con, *, name="plan_values", fill_from=None, through=VALUES_THROUGH):
+    narrow = f" AND ({fill_from})" if fill_from else ""
+    con.execute(
+        f"CREATE TABLE {name} AS "
+        f"SELECT entity_id AS fc_entity, occurred_at AS fc_t, plan_tier AS fc_value "
+        f"FROM subs WHERE plan_tier IS NOT NULL AND entity_id IS NOT NULL{narrow} "
+        f"AND occurred_at <= {through}"
+    )
+
+
+def _indexed(bd: Breakdown, table="plan_values", watermark=VALUES_THROUGH) -> Breakdown:
+    return dataclasses.replace(bd, values_table=table, values_watermark=watermark)
+
+
+VALUE_MODES = [
+    ("carried", Breakdown("plan_tier", at="carried")),
+    ("carried_fill", Breakdown("plan_tier", at="carried", fill_from=AUTH)),
+    (
+        "carried_own",
+        Breakdown("plan_tier", at="carried", fill_from=AUTH, own_value_first=True),
+    ),
+    ("first", Breakdown("plan_tier", at="first")),
+    ("last", Breakdown("plan_tier", at="last")),
+    ("last_fill", Breakdown("plan_tier", at="last", fill_from=AUTH)),
+    ("asof_start", Breakdown("plan_tier", at="last", until=WINDOW_START)),
+    (
+        "asof_start_backfill",
+        Breakdown("plan_tier", at="last", until=WINDOW_START, backfill=True),
+    ),
+    (
+        "asof_end_strict_backfill",
+        Breakdown("plan_tier", at="last", before=WINDOW_END, backfill=True),
+    ),
+    (
+        "first_in_window",
+        Breakdown("plan_tier", at="first", since=WINDOW_START, until=WINDOW_END),
+    ),
+]
+
+
+@pytest.mark.parametrize("label,bd", VALUE_MODES, ids=[m[0] for m in VALUE_MODES])
+def test_values_table_matches_live(subs, label, bd):
+    """Cached vs live, identical, every mode. The relation carries the
+    fill_from narrowing itself — the engine never applies fill_from to it.
+
+    Mutations that must go red: drop the live tail (S6 says bronze on
+    Jan 20); put the bounds on the wrong side; rank fc_value without the
+    greatest-value tiebreak (S7 flips).
+    """
+    _load_values(subs, fill_from=bd.fill_from)
+    live = _rows(subs, _subs_spec(bd))
+    cached = _rows(subs, _subs_spec(_indexed(bd)))
+    assert cached == live
+    assert sum(v for *_, v in live) == 10.0  # every login accounted for
+
+
+def test_values_table_shares_the_live_scan_with_live_columns(subs):
+    """An indexed carried column beside a live carried column and a rows
+    column: the indexed column's tail folds into the live column's scan
+    (the table appears twice — src and ONE shared scan) and the answer
+    matches the all-live spec."""
+    _load_values(subs)
+    live_bds = (
+        Breakdown("plan_tier", at="carried"),
+        Breakdown("event_name", at="carried"),
+        "event_name",
+    )
+    cached_bds = (_indexed(live_bds[0]), live_bds[1], live_bds[2])
+    cached_spec = _subs_spec(*cached_bds, breakdown_at="rows")
+    assert _rows(subs, cached_spec) == _rows(
+        subs, _subs_spec(*live_bds, breakdown_at="rows")
+    )
+    assert events_sql(cached_spec).count("FROM subs") == 2
+
+
+def test_values_table_is_read_not_scanned_around(subs):
+    """A complete relation (no watermark) whose contents disagree with the
+    table decides the answer — proof the emitter reads it and reads
+    nothing else for that column.
+
+    Mutation: scan the table anyway and S1 reverts to free / pro.
+    """
+    subs.execute(
+        "CREATE TABLE fake_values (fc_entity VARCHAR, fc_t TIMESTAMP, fc_value VARCHAR)"
+    )
+    subs.execute(
+        "INSERT INTO fake_values VALUES ('S1', TIMESTAMP '2025-12-01 00:00:00', 'mystery')"
+    )
+    # A NULL-instant decoy must never win: BigQuery sorts NULL first under
+    # DESC, so at="last" would pick it without the fc_t guard. DuckDB sorts
+    # NULLS LAST by default, so the shape assertion below is the proof.
+    subs.execute("INSERT INTO fake_values VALUES ('S1', NULL, 'decoy')")
+    for at in ("carried", "last", "first"):
+        spec = _subs_spec(Breakdown("plan_tier", at=at, values_table="fake_values"))
+        assert "fc_t IS NOT NULL" in events_sql(spec), at
+        got = {(d, t): v for d, t, v in _rows(subs, spec)}
+        assert ("2026-01-02", "decoy") not in got, at
+        assert got[("2026-01-02", "mystery")] == 1.0, at
+        assert got[("2026-01-06", "mystery")] == 1.0, at
+        assert got[("2026-01-02", None)] == 2.0, at  # S4, S5: nothing recorded
+
+
+def test_values_watermark_reads_the_live_tail(subs):
+    """Values through Jan 9 plus live rows after it: S6's Jan-10 silver
+    exists only in the tail. Declared complete (no watermark) the tail is
+    not read and S6 stays bronze — the caller's statement, kept.
+
+    Mutation: drop the tail branch and the first assertion fails.
+    """
+    _load_values(subs)
+    bd = Breakdown("plan_tier", at="carried")
+    tailed = {(d, t): v for d, t, v in _rows(subs, _subs_spec(_indexed(bd)))}
+    assert tailed[("2026-01-20", "silver")] == 1.0
+    complete = {
+        (d, t): v
+        for d, t, v in _rows(subs, _subs_spec(_indexed(bd, watermark=None)))
+    }
+    assert complete[("2026-01-20", "bronze")] == 1.0
+
+
+def test_event_time_column_bounds_the_tail_on_the_stored_column(subs):
+    """event_time is an expression; event_time_column names the stored
+    column. The tail bound compares the bare column (so a partitioned
+    warehouse prunes) and the answer still matches the live spec.
+
+    Mutation: bound on event_time instead and the second assertion fails.
+    """
+    _load_values(subs)
+    wrapped = dict(
+        event_time="CAST(occurred_at AS TIMESTAMP)", event_time_column="occurred_at"
+    )
+    live = _rows(subs, _subs_spec(Breakdown("plan_tier", at="carried"), **wrapped))
+    cached_spec = _subs_spec(_indexed(Breakdown("plan_tier", at="carried")), **wrapped)
+    assert _rows(subs, cached_spec) == live
+    sql = events_sql(cached_spec)
+    assert re.search(r"\boccurred_at\s*\)?\s*>\s*", sql)
+    assert not re.search(r"CAST\(occurred_at AS \w+\)\s*\)?\s*>", sql)
+
+
+def test_values_table_validation():
+    with pytest.raises(ValueError, match="values_table does not apply"):
+        Breakdown("plan", at="rows", values_table="plan_values")
+    with pytest.raises(ValueError, match="values_watermark requires"):
+        Breakdown("plan", at="carried", values_watermark="TIMESTAMP '2026-01-01'")
+    with pytest.raises(ValueError, match="values_table must be SQL"):
+        Breakdown("plan", at="carried", values_table="  ")
+    with pytest.raises(ValueError, match="event_time_column"):
+        EventsSpec(
+            table="t", entity="e", event_time="ts", measure="total",
+            event_time_column=" ",
+        )

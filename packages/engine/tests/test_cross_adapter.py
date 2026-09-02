@@ -120,7 +120,7 @@ def test_breakdown_value_semantics_compile(kind, sqlglot_warnings):
             ],
         )
     )
-    assert "fc_stamps" in sql
+    assert "fc_values" in sql
     assert "FACTCAT_" not in sql.upper()
     assert "IGNORE NULLS" not in sql.upper()
     assert sqlglot_warnings.messages == [], (

@@ -107,16 +107,31 @@ Each column carries its own value semantics: a plain string means
 value per entity, whole unfiltered table), the same bounded by ``since`` /
 ``until`` timestamp expressions ("as of the window start" is ``last`` plus
 ``until``), or ``carried`` — the last non-null value at or before each
-row's instant, so a tier stamped only on ``subscription_started`` still
-labels every later login. A row never borrows a future stamp.
-``fill_from`` names which rows may stamp a value (with
+row's instant, so a tier recorded only on ``subscription_started`` still
+labels every later login. A row never borrows a future value.
+``fill_from`` names which rows may supply a value (with
 ``own_value_first`` the charted row's own value still outranks the
 narrowed stream); the strict ``before`` bound is the exclusive-boundary
-spelling, so "state at the window end" never reads a stamp at exactly
-the end instant; ``backfill=True`` (with an upper bound) falls back to
-the entity's first recorded value when nothing exists by it. Attribution always reads the unfiltered table — the
-stamp can sit on an event the chart excludes — and none of it replaces
-the expression.
+spelling, so "state at the window end" never reads a value recorded at
+exactly the end instant; ``backfill=True`` (with an upper bound) falls
+back to the entity's first recorded value when nothing exists by it.
+Attribution always reads the unfiltered table — the value can sit on an
+event the chart excludes — and none of it replaces the expression.
+
+``values_table`` points a column at a relation that already holds its
+recorded values — three columns, ``fc_entity``, ``fc_t`` (the type of
+``event_time``) and ``fc_value`` (the type of the expression), one row per
+recorded value — so the full-history scan is not paid on every run. It
+can be your own model or a small derived index; narrow it yourself, since
+``fill_from`` applies only to live rows — an un-narrowed relation paired
+with ``fill_from`` returns values ``fill_from`` would have excluded.
+``values_watermark`` says the
+relation is complete through that instant; rows after it are read live
+from the table, so a relation that lags still yields exact results (leave
+it unset to declare the relation complete). When ``event_time`` is an
+expression, name the stored column in ``EventsSpec.event_time_column`` so
+the live-tail bound compares the bare column and a partitioned warehouse
+prunes it.
 
 ```python
 from factcat import Breakdown
@@ -139,18 +154,19 @@ print(events_sql(EventsSpec(
 ), dialect="bigquery"))
 ```
 
-Two honest costs. The stamp scan is unbounded history by design (a
-pre-window stamp must resolve): on BigQuery that is the referenced
-columns' full history in bytes. ``fill_from`` prunes rows, not bytes, on
-an unclustered table — but when the table clusters by the event-name
-column (a common hub layout), an event-named ``fill_from`` prunes storage
-blocks too (observed ~20× on a month-partitioned hub with event name as
-the leading cluster key). A column you break down every week still
-belongs as an as-of column in your mart, with ``carried`` as the
-exploration mode. And under ``rows`` /
-``carried``, Uniques slices can sum to more than the unsplit line (an
-entity whose value changes inside a bucket counts in both groups); the
-one-value-per-entity modes partition entities instead.
+Two honest costs. Without ``values_table`` the value scan is unbounded
+history by design (a pre-window value must resolve): on BigQuery that is
+the referenced columns' full history in bytes. ``fill_from`` prunes rows,
+not bytes, on an unclustered table — but when the table clusters by the
+event-name column (a common hub layout), an event-named ``fill_from``
+prunes storage blocks too (observed ~20× on a month-partitioned hub with
+event name as the leading cluster key). ``values_table`` is the remedy
+for a column you break down every week: the relation costs the bytes of
+the values actually recorded, and the live tail is a short
+partition-pruned read. And under ``rows`` / ``carried``, Uniques slices
+can sum to more than the unsplit line (an entity whose value changes
+inside a bucket counts in both groups); the one-value-per-entity modes
+partition entities instead.
 
 Uniques, Distinct, and Median default to **approx** (`exact=False`).
 **Break down by** picks the top-N series the same way (labels only; measures
@@ -336,8 +352,8 @@ Recommended **Factcat-managed tables**: allow Factcat to create and maintain
 tables in your warehouse for better performance. BigQuery is project and
 dataset; Snowflake is database and schema. Setup checks create rights on
 that dest (no test object). First fetch creates
-`fc_event_names` if missing; later Refresh reads it. The object is stamped
-with a fingerprint of the mapped table and event-name column (JSON comment
+`fc_event_names` if missing; later Refresh reads it. The object carries
+a fingerprint of the mapped table and event-name column (JSON comment
 on the relation, plus `.factcat.json`) so a remapping rebuilds it. A table
 fallback is a snapshot — Refresh rebuilds it. Lookback and the Refresh chevron are
 hidden while that dest is set. Catalog jobs do not use the scan cap.
@@ -366,7 +382,7 @@ recorded value). **Fill from** narrows which events may supply the value —
 mode, one event name, or a SQL predicate; the mode entries carry
 parentheses so they never read as an event literally so named, and the
 event names sit in their own labelled group. The anchors are the chart's date range;
-the history search always reads the whole table, so a tier stamped only on
+the history search always reads the whole table, so a tier recorded only on
 `subscription_started` still labels logins, and the meaning of a legend
 label never changes per series. Watch the estimate when flipping these on
 a large table: every option except the plain each-event one reads the

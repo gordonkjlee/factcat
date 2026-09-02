@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 
+import re
+
 import pytest
 
 from factcat import (
@@ -287,6 +289,79 @@ EVENTS_BREAKDOWN_CARRIED_DISTINCT = EventsSpec(
     top_n=8,
 )
 
+# values_table specs (item 12): a column's recorded values read from a
+# relation plus the live tail after the watermark; a complete relation
+# (no watermark) skips the table for that column; event_time_column keeps
+# the tail bound on the stored column so partitions prune.
+EVENTS_BREAKDOWN_VALUES = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=(
+        Breakdown(
+            "plan",
+            at="carried",
+            fill_from="event_name = 'plan_set'",
+            own_value_first=True,
+            values_table="plan_values",
+            values_watermark="TIMESTAMP '2026-01-09'",
+        ),
+    ),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_VALUES_COMPLETE_PAIR = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=(
+        Breakdown("plan", at="carried", values_table="plan_values"),
+        Breakdown("country", at="carried"),
+    ),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_VALUES_ASOF = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=(
+        Breakdown(
+            "plan",
+            at="last",
+            before="TIMESTAMP '2026-02-01'",
+            backfill=True,
+            values_table="plan_values",
+            values_watermark="TIMESTAMP '2026-01-09'",
+        ),
+    ),
+    top_n=8,
+)
+
+EVENTS_BREAKDOWN_VALUES_RAW_COLUMN = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="CAST(occurred_at AS TIMESTAMP)",
+    event_time_column="occurred_at",
+    measure="total",
+    exact=True,
+    breakdowns=(
+        Breakdown(
+            "plan",
+            at="carried",
+            values_table="plan_values",
+            values_watermark="TIMESTAMP '2026-01-09'",
+        ),
+    ),
+    top_n=8,
+)
+
 # Regression: rows-mode distinct + breakdown emitted a missing comma
 # before per_entity; nothing walked the combination.
 EVENTS_BREAKDOWN_DISTINCT = EventsSpec(
@@ -421,17 +496,59 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS_BREAKDOWN_CARRIED_MEDIAN, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_CARRIED_DISTINCT, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_DISTINCT, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_VALUES, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_VALUES_COMPLETE_PAIR, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_VALUES_ASOF, dialect=dialect)
+    events_sql(EVENTS_BREAKDOWN_VALUES_RAW_COLUMN, dialect=dialect)
 
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
     )
 
 
-def test_carried_shares_one_stamp_scan():
-    """Two carried columns must not scan the table twice for stamps: the
-    raw table appears exactly twice (src, fc_stamps)."""
+def test_carried_shares_one_value_scan():
+    """Two carried columns must not scan the table twice for their values:
+    the raw table appears exactly twice (src, fc_values)."""
     sql = events_sql(EVENTS_BREAKDOWN_CARRIED_PAIR, dialect="duckdb")
     assert sql.count("FROM events") == 2
+
+
+def test_values_table_replaces_the_live_scan():
+    """A complete relation (no watermark): the table is scanned once (src)
+    and the column's values come from the relation. With a watermark the
+    live tail is one more scan — shared with any live carried column, so a
+    pair with one complete relation still scans the table twice, not three
+    times."""
+    complete = events_sql(
+        EventsSpec(
+            table="events",
+            entity="entity_id",
+            event_time="occurred_at",
+            measure="total",
+            exact=True,
+            breakdowns=(Breakdown("plan", at="carried", values_table="plan_values"),),
+        ),
+        dialect="duckdb",
+    )
+    assert complete.count("FROM events") == 1
+    assert "FROM plan_values" in complete
+    pair = events_sql(EVENTS_BREAKDOWN_VALUES_COMPLETE_PAIR, dialect="duckdb")
+    assert pair.count("FROM events") == 2
+    tailed = events_sql(EVENTS_BREAKDOWN_VALUES, dialect="duckdb")
+    assert tailed.count("FROM events") == 2
+    asof = events_sql(EVENTS_BREAKDOWN_VALUES_ASOF, dialect="duckdb")
+    # attr + its backfill twin each read the relation and the tail.
+    assert asof.count("FROM plan_values") == 2
+    assert asof.count("FROM events") == 3
+
+
+def test_bigquery_values_tail_bound_is_on_the_stored_column():
+    """event_time_column keeps the watermark comparison on the bare
+    column: a function around the partition column defeats pruning, and
+    the tail exists to be cheap."""
+    sql = events_sql(EVENTS_BREAKDOWN_VALUES_RAW_COLUMN, dialect="bigquery")
+    assert re.search(r"\boccurred_at\s*\)?\s*>\s*", sql)
+    assert not re.search(r"CAST\(occurred_at AS \w+\)\s*\)?\s*>", sql)
 
 
 def test_bigquery_carried_has_no_ignore_nulls_and_clean_windows():
