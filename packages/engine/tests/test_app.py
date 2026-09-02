@@ -3097,3 +3097,22 @@ def test_a_build_is_recorded_even_when_the_chart_then_fails(monkeypatch, tmp_pat
     saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
     cols = (saved.get("managed_tables") or {}).get("columns") or {}
     assert "plan" in cols, "the index was built and then forgotten"
+
+
+def test_the_cap_override_is_offered_while_an_estimate_is_in_flight(monkeypatch, tmp_path):
+    """Until the answer lands we do not know the query is under the cap, and
+    an owner who knows it is not should be able to pre-authorise rather than
+    wait for a refusal round trip. #64 made the tickbox appear only on an
+    over-cap verdict; this adds the pending state to the same single writer.
+    Mutation: drop estimatePending from syncCostGate."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    events = client.get("/events").text
+    gate = events.split("function syncCostGate")[1][:600]
+    assert "estimatePending" in gate, "the gate does not consider a pending estimate"
+    # one writer, and the flag is retired on every exit
+    assert events.count("function setEstimatePending") == 1
+    assert "setEstimatePending(true)" in events
+    assert "if (gen === estimateGen) setEstimatePending(false);" in events
+    cancel = events.split("function cancelEstimate")[1][:260]
+    assert "setEstimatePending(false)" in cancel
