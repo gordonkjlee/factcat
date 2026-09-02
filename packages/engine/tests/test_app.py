@@ -2634,6 +2634,13 @@ def test_setup_and_events_carry_the_managed_chrome(monkeypatch, tmp_path):
     # an action failure states its verdict and leaves them live.
     status_js = setup.split("function managedSetStatus")[1][:900]
     assert "pause !== false" in status_js
+    # The section shows the moment the destination is set; only the list waits
+    # for /api/managed. Hidden until the round trip returned read as "missing".
+    load_js = setup.split("async function loadManaged")[1]
+    load_js = load_js[:load_js.index("await post(\"/api/managed\"")]
+    assert load_js.rstrip().endswith("try {") or "renderManaged();" in load_js.split("managedSetLoading(true);")[1]
+    assert "renderManaged();" in load_js.split("managedSetLoading(true);")[1]
+    assert "if (managedListLoading) return;" in setup.split("function renderManaged")[1]
     assert 'managedSetStatus((err && err.message) || "The action did not run.", true, false)' in setup
     assert "appendMarked(el, text" in events.split("function setRunNote")[1][:200]
     assert events.split("function setRunningCopy")[1][:700].count("appendMarked(copy") == 2

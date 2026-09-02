@@ -1731,7 +1731,9 @@ function managedSetStatus(text, fail, pause) {
     : text;
   managedStatus.appendChild(p);
 }
+let managedListLoading = false;
 function managedSetLoading(on) {
+  managedListLoading = !!on;
   document.getElementById("managed-list-loading").hidden = !on;
   document.getElementById("managed-refresh-list").hidden = !!on;
 }
@@ -1803,6 +1805,9 @@ function renderManaged() {
   }
   if (!names && !cols.length) {
     const row = document.createElement("div");
+    // While the first read is in flight the label-line spinner says so;
+    // "Nothing here yet" is a verdict, not a placeholder.
+    if (managedListLoading) return;
     row.className = "mt-empty";
     row.innerHTML = "<span class=\"hint\" style=\"margin:0\">Nothing here yet. Factcat creates tables when a chart needs one.</span>";
     managedBody.appendChild(row);
@@ -1827,7 +1832,11 @@ async function loadManaged(force) {
     renderManaged();
     return;
   }
+  // Show the section now: the knobs are server-rendered and the destination
+  // is set; only the list waits for the warehouse (spinner on the label line).
+  // Hidden-until-the-round-trip-returns read as "the section is missing".
   managedSetLoading(true);
+  renderManaged();
   try {
     const data = await post("/api/managed", managedBodyFor());
     managedPayload = data;
