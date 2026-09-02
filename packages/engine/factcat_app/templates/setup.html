@@ -1716,20 +1716,21 @@ function fmtAgo(iso) {
   if (hours < 48) return hours + " h ago";
   return Math.round(hours / 24) + " d ago";
 }
-function managedSetStatus(text, fail) {
+function managedSetStatus(text, fail, pause) {
   // Failure is the #66 callout shape: the situation, then the consequence.
-  // The actions pause (disabled, visible) until the registry reads again.
-  managedUnreadable = !!fail && !!text;
-  managedStatus.classList.toggle("callout", managedUnreadable);
+  // A read failure pauses the actions (disabled, visible) until the registry
+  // reads again; an action failure states its verdict and leaves them live.
+  const failing = !!fail && !!text;
+  managedUnreadable = failing && pause !== false;
+  managedStatus.classList.toggle("callout", failing);
   managedStatus.textContent = "";
   if (!text) return;
-  if (managedUnreadable) {
-    const p = document.createElement("p");
-    p.textContent = "Could not read the managed tables: " + text + " The list shows the last known state; actions are paused until it reads.";
-    managedStatus.appendChild(p);
-  } else {
-    managedStatus.textContent = text;
-  }
+  if (!failing) { managedStatus.textContent = text; return; }
+  const p = document.createElement("p");
+  p.textContent = managedUnreadable
+    ? "Could not read the managed tables: " + text + " The list shows the last known state; actions are paused until it reads."
+    : text;
+  managedStatus.appendChild(p);
 }
 function managedSetLoading(on) {
   document.getElementById("managed-list-loading").hidden = !on;
@@ -1851,7 +1852,7 @@ async function managedAction(key, act, extra) {
     await loadManaged(true);
   } catch (err) {
     delete managedBusy[key];
-    managedSetStatus((err && err.message) || "The action failed.", true);
+    managedSetStatus((err && err.message) || "The action did not run.", true, false);
     renderManaged();
   }
 }

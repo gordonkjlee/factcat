@@ -2630,6 +2630,11 @@ def test_setup_and_events_carry_the_managed_chrome(monkeypatch, tmp_path):
     # One convention for backticked labels: the note and both running-copy
     # branches render through the same helper (never literal backticks).
     assert events.count("appendMarked(") >= 3
+    # A read failure pauses the row actions until the registry reads again;
+    # an action failure states its verdict and leaves them live.
+    status_js = setup.split("function managedSetStatus")[1][:900]
+    assert "pause !== false" in status_js
+    assert 'managedSetStatus((err && err.message) || "The action did not run.", true, false)' in setup
     assert "appendMarked(el, text" in events.split("function setRunNote")[1][:200]
     assert events.split("function setRunningCopy")[1][:700].count("appendMarked(copy") == 2
 
@@ -2781,3 +2786,30 @@ def test_managed_actions_run_under_the_scan_cap(monkeypatch, tmp_path):
     res = client.post("/api/managed/action", json={**_managed_body(bytes_cap_gb=2), "action": "index", "key": "plan", "expr": "plan", "label": "plan"})
     assert res.status_code == 200, res.text
     assert seen.get("maximum_bytes_billed") == 2 * 1024 ** 3
+
+
+def test_managed_action_over_the_cap_reports_its_figures(monkeypatch, tmp_path):
+    """A capped Rebuild / Index rejection comes back with the figures and the
+    cap in the Setup callout's own sentence — never a raw warehouse message.
+    Mutation: drop the BytesCapError branch in api_managed_action."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat.warehouses import BytesCapError
+    from factcat_app import managed as managed_mod
+
+    class _Capped(_ManagedWarehouse):
+        def run(self, sql, *, dry_run=False):
+            if sql.upper().startswith("INSERT") and not dry_run:
+                raise BytesCapError("Query exceeded limit for bytes billed", bytes_processed=12 * 1024 ** 3, maximum_bytes_billed=2 * 1024 ** 3)
+            return super().run(sql, dry_run=dry_run)
+
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: _Capped())
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: ({}, None))
+    client = TestClient(app)
+    res = client.post("/api/managed/action", json={**_managed_body(bytes_cap_gb=2), "action": "index", "key": "plan", "expr": "plan", "label": "plan"})
+    assert res.status_code == 400, res.text
+    body = res.json()
+    assert body["over_cap"] is True
+    assert (body["bytes"], body["cap"]) == (12 * 1024 ** 3, 2 * 1024 ** 3)
+    gb = managed_mod._gb
+    assert body["error"] == f"Index did not run: it would scan {gb(12 * 1024 ** 3)}, over the {gb(2 * 1024 ** 3)} scan cap. Raise the cap above and try again."
+    assert "exceeded limit" not in body["error"]
