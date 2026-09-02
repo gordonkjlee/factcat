@@ -30,6 +30,7 @@ Rules that shaped it (spec: item 12):
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -162,7 +163,10 @@ def registry_from_form(form: dict[str, Any]) -> dict[str, Any]:
             return {}
     if not isinstance(raw, dict):
         return {}
-    return raw
+    # Never hand back the caller's object: the planner mutates the registry
+    # (probe cache, bookmarks) and a shared default dict would leak across
+    # configs — a probe from one run appeared in the next process's plan.
+    return copy.deepcopy(raw)
 
 
 def parse_registry(comment: str | None) -> dict[str, Any]:
@@ -190,11 +194,17 @@ def registry_comment(registry: dict[str, Any]) -> str:
     for col in cols.values():
         col.pop("names", None)
     body["columns"] = cols
+    # Say so: without the snapshot the census diff cannot repair, and a
+    # silent drop would look like a healthy registry.
+    body["names_dropped"] = True
     return json.dumps(body, separators=(",", ":"), sort_keys=True)
 
 
-def _now_iso(now: datetime | None) -> str:
+def now_iso(now: datetime | None = None) -> str:
     return (now or datetime.now(timezone.utc)).replace(microsecond=0).isoformat()
+
+
+_now_iso = now_iso
 
 
 def _parse_iso(text: Any) -> datetime | None:
@@ -285,21 +295,16 @@ def _select_values(
     )
 
 
-def _partition_expr(form: dict[str, Any]) -> str | None:
-    """BigQuery partition expression for ``fc_at``. Day partitions through
-    DATE() work for TIMESTAMP and DATETIME alike; a DATE column partitions
-    directly. Other kinds have no table partitioning here."""
-    if form_kind(form) != "bigquery":
-        return None
-    kind = _event_time_kind(form)
-    if kind == "reporting":
-        for col in form.get("columns") or []:
-            if isinstance(col, dict) and str(col.get("name") or "") == str(
-                form.get("event_time") or ""
-            ):
-                if str(col.get("type") or "").upper() == "DATE":
-                    return "fc_at"
-    return "DATE(fc_at)"
+def _time_column_is_date(form: dict[str, Any]) -> bool:
+    """Mapping knowledge, not SQL: is the stored time column a DATE?"""
+    if _event_time_kind(form) != "reporting":
+        return False
+    for col in form.get("columns") or []:
+        if isinstance(col, dict) and str(col.get("name") or "") == str(
+            form.get("event_time") or ""
+        ):
+            return str(col.get("type") or "").upper() == "DATE"
+    return False
 
 
 def ensure_table_sql(form: dict[str, Any], registry: dict[str, Any]) -> str:
@@ -320,7 +325,8 @@ def ensure_table_sql(form: dict[str, Any], registry: dict[str, Any]) -> str:
         _emit_relation(dest, dialect),
         select,
         dialect,
-        partition=_partition_expr(form),
+        partition_day="fc_at",
+        partition_is_date=_time_column_is_date(form),
         cluster=("fc_column", "fc_entity"),
         comment=registry_comment(registry),
     )
@@ -528,6 +534,10 @@ class Plan:
     def builds(self) -> list[ColumnPlan]:
         return [c for c in self.columns if c.action in ("build", "rebuild", "refresh")]
 
+    def maybe(self) -> list[ColumnPlan]:
+        """Eligible but unprobed: the Run will check density and may build."""
+        return [c for c in self.columns if c.action == "live" and c.reason == NOT_CHECKED]
+
     def attachable(self) -> dict[str, ColumnPlan]:
         return {c.column.key: c for c in self.columns if c.action != "live"}
 
@@ -577,19 +587,30 @@ def _probe_density(
     return density
 
 
+NOT_CHECKED = "not yet checked"
+NO_PREVIEW = (
+    "automatic preparation needs a cost preview, which this warehouse cannot "
+    "give; use Index a column now on Setup"
+)
+
+
 def build_plan(
     form: dict[str, Any],
     run: RunFn | None,
     *,
     now: datetime | None = None,
     allow_probe: bool = False,
+    auto_ok: bool = True,
 ) -> Plan:
     """Decide per expensive column: attach the index, build it first,
     refresh it first, rebuild it, or run live.
 
     ``run`` may be None (estimate path): only cached facts are used and
     nothing is billed. ``allow_probe`` lets the run path measure density
-    for a column the mirror has not seen.
+    for a column the mirror has not seen. ``auto_ok`` is whether this
+    warehouse can price a job before running it (dry run): without a
+    preview there is no consent moment, so nothing builds automatically —
+    an admin's explicit Index-a-column-now still can.
     """
     now = now or datetime.now(timezone.utc)
     cfg = settings(form)
@@ -637,6 +658,9 @@ def build_plan(
         if not _mode_open(form, cfg):
             plan.columns.append(ColumnPlan(col, "live", "automatic indexing is off"))
             continue
+        if not auto_ok:
+            plan.columns.append(ColumnPlan(col, "live", NO_PREVIEW))
+            continue
         if not _write_ok(form):
             plan.columns.append(ColumnPlan(col, "live", "no create rights on the write destination"))
             continue
@@ -644,7 +668,7 @@ def build_plan(
             cached = probes.get(col.key) if isinstance(probes, dict) else None
             density = cached.get("density") if isinstance(cached, dict) else None
             if density is None:
-                plan.columns.append(ColumnPlan(col, "live", "not yet checked"))
+                plan.columns.append(ColumnPlan(col, "live", NOT_CHECKED))
                 continue
         else:
             density = _probe_density(form, run, col.expr, probes, col.key, now)
@@ -904,6 +928,44 @@ def notes_for(plan: Plan, *, bytes_build: int | None = None, bytes_after: int | 
     if bytes_build is not None:
         text += f" (one-time ≈ {_gb(bytes_build)})"
     text += "."
+    if bytes_after is not None:
+        text += f" Later runs ≈ {_gb(bytes_after)}."
+    return text
+
+
+def rows_mode_form(form: dict[str, Any]) -> dict[str, Any]:
+    """The same chart with every expensive Value-at slot downgraded to
+    each-event + keep NULL: its dry-run bytes are the honest "later runs"
+    price before an index exists (the index read itself is small)."""
+    import copy
+
+    out = copy.deepcopy(form)
+
+    def downgrade(slots: Any) -> None:
+        if not isinstance(slots, list):
+            return
+        for slot in slots:
+            if isinstance(slot, dict):
+                slot["value_at"] = "event"
+                slot["if_missing"] = "null"
+
+    downgrade(out.get("breakdowns"))
+    for unit in out.get("series") or []:
+        if isinstance(unit, dict):
+            downgrade(unit.get("breakdowns"))
+    out["breakdown_at"] = "rows"
+    return out
+
+
+def maybe_note(plan: Plan, *, bytes_after: int | None = None) -> str:
+    """Before the first build: preparing a column costs about what reading
+    its history once costs, which this run pays anyway — so the chip already
+    covers it; say what later runs cost."""
+    labels = [cp.column.label for cp in plan.maybe()]
+    if not labels:
+        return ""
+    what = ", ".join(f"`{l}`" for l in labels)
+    text = f"May also prepare {what} for faster breakdowns (one-time, included above)."
     if bytes_after is not None:
         text += f" Later runs ≈ {_gb(bytes_after)}."
     return text

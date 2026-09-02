@@ -130,8 +130,12 @@ timestamp column so partitions prune; results are exact regardless of how
 stale the index is.
 
 **Mode** Automatic prepares a sparse column the first time an expensive
-mode uses it (that run costs about one full-history scan of the column,
-shown on the estimate's second line; later runs read the index), refreshes
+mode uses it. That run costs about one full-history scan of the column —
+what the chart would have scanned anyway, so the estimate already covers
+it; its second line says the run may prepare the column and what later
+runs cost, and once the index exists the chip prices the cheap query. The
+build runs under the same scan cap as a chart; over the cap it fails
+cleanly and the chart reads the full history. Automatic refreshes
 it when older than **Refresh when older than**, and drops columns no
 chart has used for **Drop unused after** on a daily sweep. **Late-arrival
 lookback** is how late a row can land after its event time; a refresh
@@ -141,7 +145,8 @@ automatically — **Value at: each event** already has them; **Index a
 column now** overrides that. Off builds nothing new and drops nothing.
 
 The list shows size and age per table, with Refresh, Rebuild, Drop, Pin
-(never drop) and per-column overrides. Its bookkeeping (fingerprints,
+(never drop) and per-column overrides; Rebuild and Index a column now run
+under the scan cap too. Its bookkeeping (fingerprints,
 last use, census snapshot) lives in the table's own description; a
 mapping change rebuilds, a new event name with backfilled history is
 back-filled on the next refresh, a name whose row count shrank is rebuilt.

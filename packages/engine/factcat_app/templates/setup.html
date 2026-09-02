@@ -113,7 +113,9 @@
     .mt-unit { font-size: 0.8rem; color: var(--fc-slate); margin-left: 0.35rem; }
     /* The Setup column is ~24rem: one stacked row per table, never a wide
        table (the first render overflowed the column). .mt owns the list,
-       .mt-row the row rhythm, .mt-acts the action spacing. */
+       .mt-row the row rhythm, .mt-acts the action spacing (there is no
+       td.acts any more). Failures are ochre callouts (#66 grammar), never
+       red text; while the registry is unreadable the actions are disabled. */
     .mt { margin-top: 0.5rem; font-size: 0.82rem; border-top: 1px solid var(--fc-line); }
     .mt-row { padding: 0.55rem 0; border-bottom: 1px solid var(--fc-line); }
     .mt-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.25rem 0.75rem; flex-wrap: wrap; }
@@ -141,7 +143,9 @@
     #managed-add select { width: auto; min-width: 12rem; margin: 0; }
     #managed-add .hint { margin: 0; }
     #managed-status { font-size: 0.75rem; color: var(--fc-slate); margin: 0.4rem 0 0; }
-    #managed-status.fail { color: var(--fc-alert); }
+    #managed-status:empty { display: none; }
+    #managed-status.callout { font-size: 0.85rem; color: var(--fc-ink); margin: 0.6rem 0 0; }
+    #managed-list-loading[hidden] { display: none !important; }
     @media (max-width: 56rem) {
       .setup-page { overflow-y: auto; }
       .setup-cols {
@@ -369,7 +373,7 @@
         <span class="hint">How late a row can arrive after its event time. A refresh re-reads this much before each bookmark.</span>
       </div>
     </div>
-    <label>Tables Factcat keeps here <button type="button" class="linkish" id="managed-refresh-list">Refresh list</button></label>
+    <label>Tables Factcat keeps here <span id="managed-list-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish" id="managed-refresh-list">Refresh list</button></label>
     <div class="mt" id="managed-list" role="list" aria-label="Factcat-managed tables"></div>
     <div id="managed-add">
       <span>Index a column now</span>
@@ -377,7 +381,7 @@
       <button type="button" class="linkish" id="managed-add-go" style="margin:0">Index</button>
       <span class="hint">Skips the sparsity check. One full scan of that column, once.</span>
     </div>
-    <p id="managed-status"></p>
+    <div id="managed-status" role="status"></div>
   </div>
 
   <p id="error"></p>
@@ -1679,6 +1683,7 @@ const managedBody = document.getElementById("managed-list");
 const managedStatus = document.getElementById("managed-status");
 let managedPayload = null;
 let managedBusy = {};
+let managedUnreadable = false;
 function managedDestSet() {
   if (currentKind() === "snowflake") {
     return !!(document.getElementById("write_database").value.trim()
@@ -1712,8 +1717,23 @@ function fmtAgo(iso) {
   return Math.round(hours / 24) + " d ago";
 }
 function managedSetStatus(text, fail) {
-  managedStatus.textContent = text || "";
-  managedStatus.classList.toggle("fail", !!fail);
+  // Failure is the #66 callout shape: the situation, then the consequence.
+  // The actions pause (disabled, visible) until the registry reads again.
+  managedUnreadable = !!fail && !!text;
+  managedStatus.classList.toggle("callout", managedUnreadable);
+  managedStatus.textContent = "";
+  if (!text) return;
+  if (managedUnreadable) {
+    const p = document.createElement("p");
+    p.textContent = "Could not read the managed tables: " + text + " The list shows the last known state; actions are paused until it reads.";
+    managedStatus.appendChild(p);
+  } else {
+    managedStatus.textContent = text;
+  }
+}
+function managedSetLoading(on) {
+  document.getElementById("managed-list-loading").hidden = !on;
+  document.getElementById("managed-refresh-list").hidden = !!on;
 }
 function managedRegistryColumns(payload) {
   if (payload && Array.isArray(payload.columns)) return payload.columns;
@@ -1778,6 +1798,9 @@ function renderManaged() {
     row.innerHTML = head + serves + acts + overrides;
     managedBody.appendChild(row);
   });
+  if (managedUnreadable) {
+    managedBody.querySelectorAll("button, input").forEach((el) => { el.disabled = true; });
+  }
   if (!names && !cols.length) {
     const row = document.createElement("div");
     row.className = "mt-empty";
@@ -1804,14 +1827,16 @@ async function loadManaged(force) {
     renderManaged();
     return;
   }
-  managedSetStatus("Reading table sizes\u2026");
+  managedSetLoading(true);
   try {
     const data = await post("/api/managed", managedBodyFor());
     managedPayload = data;
     if (data.registry) saved.managed_tables = data.registry;
     managedSetStatus("");
   } catch (err) {
-    managedSetStatus((err && err.message) || "Could not read the managed tables.", true);
+    managedSetStatus((err && err.message) || "the warehouse did not answer.", true);
+  } finally {
+    managedSetLoading(false);
   }
   renderManaged();
 }

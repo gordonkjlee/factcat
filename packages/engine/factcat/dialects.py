@@ -553,30 +553,34 @@ def create_table_as(
     select_sql: str,
     dialect: str,
     *,
-    partition: str | None = None,
+    partition_day: str | None = None,
+    partition_is_date: bool = False,
     cluster: tuple[str, ...] = (),
     comment: str | None = None,
 ) -> str:
     """CREATE TABLE IF NOT EXISTS ``dest`` shaped by ``select_sql``.
 
-    Hand-written per dialect because layout clauses are not portable:
-    BigQuery ``PARTITION BY expr CLUSTER BY a, b``, Snowflake
-    ``CLUSTER BY (a, b)``; every other dialect gets the plain form.
+    The caller states layout INTENT (day-partition on ``partition_day``,
+    cluster on ``cluster``); the spelling per warehouse lives here.
+    BigQuery: ``PARTITION BY DATE(col)`` (or the bare column when it is
+    already a DATE) and ``CLUSTER BY a, b``. Snowflake: no layout clause at
+    all — micro-partitions already prune, and a ``CLUSTER BY`` key would
+    switch on Automatic Clustering, a standing serverless credit charge the
+    caller never asked for. Every other dialect gets the plain form.
     sqlglot has no cross-dialect model for table partitioning options,
     which is the bar this file sets for a hand-written construct.
     """
     head = f"CREATE TABLE IF NOT EXISTS {dest}"
     safe = _comment_literal(comment)
     if dialect == "bigquery":
-        if partition:
-            head += f" PARTITION BY {partition}"
+        if partition_day:
+            expr = partition_day if partition_is_date else f"DATE({partition_day})"
+            head += f" PARTITION BY {expr}"
         if cluster:
             head += " CLUSTER BY " + ", ".join(cluster)
         if safe:
             head += f" OPTIONS(description='{safe}')"
     elif dialect == "snowflake":
-        if cluster:
-            head += " CLUSTER BY (" + ", ".join(cluster) + ")"
         if safe:
             head += f" COMMENT = '{safe}'"
     return f"{head} AS {select_sql}"

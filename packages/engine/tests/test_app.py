@@ -2529,13 +2529,17 @@ def test_run_falls_back_live_when_the_build_fails(monkeypatch, tmp_path):
 
 
 def test_run_respects_mode_off_and_no_destination(monkeypatch, tmp_path):
+    """Mode lives in the config file (Setup writes it); the Events request
+    never carries it. Off must still close the gate on Run."""
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_mode": "off"}), encoding="utf-8")
     wh = _ManagedWarehouse()
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
     client = TestClient(app)
-    res = client.post("/api/run", json=_managed_body(managed_mode="off"))
+    res = client.post("/api/run", json=_managed_body())
     assert res.status_code == 200
     assert not any(c[0].upper().startswith("CREATE TABLE") for c in wh.calls)
+    assert not any("FC_PRESENT" in c[0].upper() for c in wh.calls)
     wh2 = _ManagedWarehouse()
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh2)
     res2 = client.post("/api/run", json=_managed_body(write_project="", write_dataset=""))
@@ -2554,16 +2558,21 @@ def test_estimate_never_probes_or_writes(monkeypatch, tmp_path):
     assert res.status_code == 200, res.text
     assert all(c[1] for c in wh.calls)  # every call was a dry run
     assert not any("FC_PRESENT" in c[0].upper() for c in wh.calls)
-    assert "managed_note" not in res.json()
+    # unprobed: the chip already covers a possible build; the line says "may"
+    assert res.json()["managed_note"].startswith("May also prepare `plan`")
+    assert "managed_build" not in res.json()
 
 
 def test_estimate_prices_the_build_once_the_probe_is_cached(monkeypatch, tmp_path):
+    """The registry mirror lives in the config file; the estimate must read
+    it from there (the request never carries it)."""
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     wh = _ManagedWarehouse()
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
     client = TestClient(app)
     mirror = {"v": 1, "columns": {}, "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}}}
-    res = client.post("/api/estimate", json=_managed_body(managed_tables=mirror))
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": mirror}), encoding="utf-8")
+    res = client.post("/api/estimate", json=_managed_body())
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["managed_build"] == ["plan"]
@@ -2636,7 +2645,8 @@ def test_estimate_prices_the_build_as_a_select_and_survives_a_missing_table(monk
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
     client = TestClient(app)
     mirror = {"v": 1, "columns": {}, "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}}}
-    res = client.post("/api/estimate", json=_managed_body(managed_tables=mirror))
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": mirror}), encoding="utf-8")
+    res = client.post("/api/estimate", json=_managed_body())
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["managed_build"] == ["plan"]
@@ -2668,3 +2678,101 @@ def test_run_reconciles_the_mirror_with_the_table(monkeypatch, tmp_path):
     ups = [c[0].upper() for c in wh.calls if not c[1]]
     assert any(u.startswith("CREATE TABLE IF NOT EXISTS") for u in ups)  # rebuilt, not attached blind
     assert "fc_column_index" in res.json()["sql"]
+
+
+def test_run_falls_back_live_when_the_attached_table_vanishes(monkeypatch, tmp_path):
+    """The plan attaches, the query hits a missing relation: rerun live,
+    report it once, forget the bookmarks, no usage write, no built note."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    reg = {
+        "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1, "pinned": False, "overrides": {}}},
+        "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}},
+    }
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
+    # the description still says the column is there (stale metadata), but the query finds no table
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+
+    class _W(_ManagedWarehouse):
+        def run(self, sql, *, dry_run=False):
+            if not dry_run and "fc_column_index" in sql and sql.upper().startswith("SELECT"):
+                self.calls.append((sql, dry_run))
+                raise AdapterError("Not found: Table dest-proj:analytics_fc.fc_column_index")
+            return super().run(sql, dry_run=dry_run)
+
+    wh = _W()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    out = res.json()
+    assert "fc_column_index" not in out["sql"]
+    assert out["managed_failed"].startswith("The prepared table was not found")
+    assert "managed_note" not in out
+    ups = [c[0].upper() for c in wh.calls if not c[1]]
+    assert not any(u.startswith("ALTER TABLE") or u.startswith("COMMENT ON") for u in ups)
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert "columns" not in saved["managed_tables"]
+    assert saved["managed_tables"]["probes"]["plan"]["density"] == 0.01
+
+
+def test_estimate_attaches_an_existing_index_from_the_config_mirror(monkeypatch, tmp_path):
+    """With an index on file the estimate prices the spliced query, not the
+    full history — otherwise the cost gate blocks a run that is now cheap."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    reg = {
+        "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1, "pinned": False, "overrides": {}}},
+    }
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/estimate", json=body)
+    assert res.status_code == 200, res.text
+    dry = [c[0] for c in wh.calls if c[1]]
+    assert any("fc_column_index" in s for s in dry)
+    assert "managed_note" not in res.json()
+
+
+def test_estimate_before_the_first_build_says_may_prepare_and_prices_later_runs(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/estimate", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["managed_note"].startswith("May also prepare `plan` for faster breakdowns (one-time, included above).")
+    assert "Later runs" in body["managed_note"]
+    assert "managed_build" not in body
+    assert all(c[1] for c in wh.calls)  # still a pure dry run
+
+
+def test_managed_actions_run_under_the_scan_cap(monkeypatch, tmp_path):
+    """Rebuild / Index now are real scans, not catalog jobs: the cap stays on."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    seen = {}
+
+    def fake_connect(kind, **kw):
+        seen.update(kw)
+        return _ManagedWarehouse()
+
+    monkeypatch.setattr("factcat_app.main.connect", fake_connect)
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: ({}, None))
+    client = TestClient(app)
+    res = client.post("/api/managed/action", json={**_managed_body(bytes_cap_gb=2), "action": "index", "key": "plan", "expr": "plan", "label": "plan"})
+    assert res.status_code == 200, res.text
+    assert seen.get("maximum_bytes_billed") == 2 * 1024 ** 3

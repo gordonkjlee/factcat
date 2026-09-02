@@ -115,30 +115,32 @@ event-name column. Lookback does not apply (and is hidden here) while that
 dest is set. Catalog jobs do not use the scan cap. Events then filters
 `event_name = '…'`. The object is a census — names, rows per month, first
 and last seen. Snowflake materialized views refresh on their own schedule
-and need Enterprise edition; otherwise it is a table snapshot that Refresh
-rebuilds.
+and need Enterprise edition; otherwise it is a table snapshot, and every
+Refresh of that table is a full recompute of the event-name and timestamp
+columns' history.
 
 ## Factcat-managed tables
 
 With a write database and schema set, Factcat keeps `fc_column_index`
 there: for a few breakdown columns, every row where the column had a
-value (entity, instant, value, event name), clustered by column and
-entity. The expensive Value-at modes read it plus the live rows after its
-bookmark, bounded on the bare timestamp column so micro-partitions prune;
-results are exact regardless of how stale the index is.
+value (entity, instant, value, event name). No clustering key is set: one
+would switch on Automatic Clustering, a standing serverless credit charge
+you did not ask for; micro-partitions prune on the time bounds as they do
+for your events table, and you can add a key yourself if the table grows
+large. The expensive Value-at modes read it plus the live rows after its
+bookmark, bounded on the bare timestamp column; results are exact
+regardless of how stale the index is.
 
-**Mode** Automatic prepares a sparse column the first time an expensive
-mode uses it (that run costs about one full-history scan of the column;
-later runs read the index), refreshes it when older than **Refresh when
-older than**, and drops columns no chart has used for **Drop unused
-after** on a daily sweep. **Late-arrival lookback** is how late a row can
-land after its event time; a refresh re-reads that much before each event
-name's bookmark. Dense columns (the value on more than about a quarter of
-recent rows) are not indexed automatically — **Value at: each event**
-already has them; **Index a column now** overrides that. Off builds
-nothing new and drops nothing. There is no dry-run on Snowflake, so the
-estimate's second line does not appear; the running copy still names the
-extra step.
+**Snowflake has no dry run, so nothing is prepared automatically.** A
+cost preview is the consent moment for a build, and without one Factcat
+does not start a full-history scan on its own — **Mode** governs refresh
+and the daily sweep here, not building. Use **Index a column now** to
+build a column; it runs under the scan settings of your warehouse, and a
+first build reads that column's full history once. **Refresh when older
+than** decides when newer rows are folded in, **Drop unused after** drops
+columns no chart has used (daily sweep), **Late-arrival lookback** is how
+late a row can land after its event time. Off builds nothing new and drops
+nothing.
 
 The list shows size and age per table (from `SHOW TABLES`), with Refresh,
 Rebuild, Drop, Pin (never drop) and per-column overrides. Its bookkeeping

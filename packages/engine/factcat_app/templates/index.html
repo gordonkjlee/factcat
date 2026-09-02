@@ -4624,27 +4624,45 @@ function stepRunDots(gen, n) {
 // estimate) and the line under the run row. Business register only:
 // cost, reason, next-run cost; never the mechanism.
 let managedBuildLabels = [];
+// Server copy marks column labels with backticks (the house SQL-chrome
+// convention); render them as code.fc-sql, never as literal backticks.
+function appendMarked(el, text) {
+  String(text || "").split(/(`[^`]+`)/g).forEach((part) => {
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
+      const code = document.createElement("code");
+      code.className = "fc-sql";
+      code.textContent = part.slice(1, -1);
+      el.appendChild(code);
+    } else if (part) {
+      el.appendChild(document.createTextNode(part));
+    }
+  });
+}
 function setRunNote(text, ochre) {
   const el = document.getElementById("run-note");
   if (!el) return;
-  el.textContent = text || "";
+  el.textContent = "";
+  appendMarked(el, text || "");
   el.classList.toggle("ochre", !!ochre && !!text);
   el.hidden = !text;
 }
 function runningPrefix() {
+  // Same backtick convention as the note; setRunningCopy renders it.
   if (!managedBuildLabels.length) return "";
-  const names = managedBuildLabels.map((l) => "\u2018" + l + "\u2019").join(", ");
+  const names = managedBuildLabels.map((l) => "`" + l + "`").join(", ");
   return "Preparing " + names + " for faster breakdowns\u2026 then r";
 }
 function setRunningCopy(copy) {
   const prefix = runningPrefix();
   if (!catReduceMotion()) {
-    copy.textContent = prefix ? prefix + "unning…" : "Running…";
+    copy.textContent = "";
+    appendMarked(copy, prefix ? prefix + "unning…" : "Running…");
     return;
   }
   // Reduced motion: the cat freezes, so the dots carry liveness instead.
   if (copy.querySelector(".run-dots")) return;
-  copy.textContent = prefix ? prefix + "unning" : "Running";
+  copy.textContent = "";
+  appendMarked(copy, prefix ? prefix + "unning" : "Running");
   copy.appendChild(buildRunDots());
 }
 let runBtnTimer = 0;

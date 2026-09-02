@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -141,7 +142,9 @@ def config_path() -> Path:
 
 
 def _merge(raw: dict[str, Any]) -> dict[str, Any]:
-    data = dict(DEFAULTS)
+    # Deep copy: DEFAULTS holds mutable dicts (managed_tables, caches) and a
+    # shallow copy hands every caller the same object to mutate.
+    data = copy.deepcopy(DEFAULTS)
     for key in DEFAULTS:
         if key in raw and raw[key] is not None:
             data[key] = raw[key]
@@ -150,7 +153,7 @@ def _merge(raw: dict[str, Any]) -> dict[str, Any]:
 
 def load() -> dict[str, Any]:
     path = config_path()
-    data = dict(DEFAULTS)
+    data = copy.deepcopy(DEFAULTS)
     loaded: dict[str, Any] = {}
     if path.is_file():
         loaded = json.loads(path.read_text(encoding="utf-8"))

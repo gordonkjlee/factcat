@@ -490,6 +490,28 @@ def _client_error(exc: BaseException, sql: str | None = None) -> str:
     return "\n".join(lines) if lines else "Query failed. See SQL below."
 
 
+MANAGED_KEYS = (
+    "managed_tables",
+    "managed_last_sweep",
+    "write_access_status",
+    "managed_mode",
+    "managed_drop_days",
+    "managed_refresh_days",
+    "managed_lookback_days",
+)
+
+
+def _with_managed(form: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    """Events requests carry the chart, not the bookkeeping: the config file
+    owns the registry mirror, the sweep clock and the Setup knobs. Merge
+    them in for any key the request did not send (Setup's own form does)."""
+    out = dict(form)
+    for key in MANAGED_KEYS:
+        if key not in out or out[key] in (None, ""):
+            out[key] = cfg.get(key)
+    return out
+
+
 def _fail(
     exc: BaseException,
     sql: str | None,
@@ -556,13 +578,15 @@ async def api_estimate(request: Request) -> JSONResponse:
                 }
             )
         conn = connection_from_form(form)
+        form = _with_managed(form, load())
         # An estimate is a free dry run: the plan reads only cached facts
         # (no probe, no bookmark query) and nothing is written.
-        plan = managed_mod.build_plan(form, None)
+        plan = managed_mod.build_plan(form, None, auto_ok=CAP_DRY_RUN in caps)
         sql = events_sql_from_form(form, managed=plan)
         warehouse = await run_in_threadpool(connect, kind, **conn)
         result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
         build_bytes = None
+        after_bytes = None
         if plan.builds():
             try:
                 build_bytes = 0
@@ -575,6 +599,16 @@ async def api_estimate(request: Request) -> JSONResponse:
             except AdapterError:
                 # The chart is still estimable; the build just goes unpriced.
                 build_bytes = None
+        elif plan.maybe():
+            # Before the first build the chip already covers it (a build costs
+            # about one history scan, which this run pays anyway); price what
+            # later runs cost as the same chart without history.
+            try:
+                later = events_sql_from_form(managed_mod.rows_mode_form(form))
+                probe = await run_in_threadpool(warehouse.run, later, dry_run=True)
+                after_bytes = probe.bytes_processed
+            except (AdapterError, ValueError):
+                after_bytes = None
     except BytesCapError as exc:
         return JSONResponse(
             _estimate_payload(
@@ -597,6 +631,8 @@ async def api_estimate(request: Request) -> JSONResponse:
             plan, bytes_build=build_bytes, bytes_after=query_bytes
         )
         payload["managed_build"] = [cp.column.label for cp in plan.builds()]
+    elif plan.maybe():
+        payload["managed_note"] = managed_mod.maybe_note(plan, bytes_after=after_bytes)
     return JSONResponse(payload)
 
 
@@ -610,15 +646,10 @@ async def api_run(request: Request) -> JSONResponse:
         form = await run_in_threadpool(ensure_epoch, form)
         conn = connection_from_form(form)
         cfg = load()
-        # The config file owns the registry mirror and the sweep clock; the
-        # request carries the chart, not the bookkeeping.
-        form = {
-            **form,
-            "managed_tables": cfg.get("managed_tables") or {},
-            "managed_last_sweep": cfg.get("managed_last_sweep") or "",
-            "write_access_status": cfg.get("write_access_status") or "",
-        }
-        save({k: v for k, v in form.items() if k not in ("managed_tables", "managed_last_sweep")})
+        save(form)
+        # The config file owns the registry mirror, the sweep clock and the
+        # Setup knobs; the request carries the chart, not the bookkeeping.
+        form = _with_managed(form, cfg)
         warehouse = await run_in_threadpool(connect, form_kind(form), **conn)
         extra_save: dict[str, Any] = {}
         if managed_mod.index_table(form) is not None:
@@ -628,7 +659,7 @@ async def api_run(request: Request) -> JSONResponse:
             if ran:
                 form = {**form, "managed_tables": registry}
                 extra_save["managed_tables"] = registry
-                extra_save["managed_last_sweep"] = managed_mod._now_iso(None)
+                extra_save["managed_last_sweep"] = managed_mod.now_iso()
         if managed_mod.index_table(form) is not None and managed_mod.registry_from_form(form).get("columns"):
             # The table's own description is the authority: a dropped table
             # or a new destination must not inherit the mirror's bookmarks.
@@ -636,7 +667,11 @@ async def api_run(request: Request) -> JSONResponse:
             form = {**form, "managed_tables": reconciled}
             extra_save["managed_tables"] = reconciled
         plan = await run_in_threadpool(
-            managed_mod.build_plan, form, warehouse.run, allow_probe=True
+            managed_mod.build_plan,
+            form,
+            warehouse.run,
+            allow_probe=True,
+            auto_ok=CAP_DRY_RUN in capabilities(form_kind(form)),
         )
         if plan.builds():
             registry = await run_in_threadpool(managed_mod.apply_plan, plan, form, warehouse.run)
@@ -644,25 +679,30 @@ async def api_run(request: Request) -> JSONResponse:
             managed_failed = managed_mod.failure_note(plan)
             managed_note = managed_mod.built_note(plan)
         sql = events_sql_from_form(form, managed=plan)
+        fell_back = False
         try:
             result = await run_in_threadpool(warehouse.run, sql)
         except AdapterError as exc:
             if not (plan.attachable() and is_missing_relation(exc)):
                 raise
             # The prepared table vanished between the plan and the query:
-            # answer from the full history and forget the stale bookmarks.
+            # answer from the full history, forget the stale bookmarks, and
+            # say only that — no usage bump, no "prepared" note.
+            fell_back = True
             for cp in plan.columns:
                 cp.action = "live"
             sql = events_sql_from_form(form)
             result = await run_in_threadpool(warehouse.run, sql)
+            managed_note = ""
             managed_failed = (
                 "The prepared table was not found, so this run read the full "
                 "history; the chart is correct. It is rebuilt on the next run."
             )
             extra_save["managed_tables"] = {"probes": plan.registry.get("probes") or {}}
-        registry = await run_in_threadpool(managed_mod.bump_usage, plan, form, warehouse.run)
-        if plan.attachable():
-            extra_save["managed_tables"] = registry
+        if not fell_back:
+            registry = await run_in_threadpool(managed_mod.bump_usage, plan, form, warehouse.run)
+            if plan.attachable():
+                extra_save["managed_tables"] = registry
         if extra_save:
             save(extra_save)
     except BytesCapError as exc:
@@ -726,7 +766,9 @@ async def api_managed_action(request: Request) -> JSONResponse:
     action = str(form.get("action") or "").strip().lower()
     merged = {**cfg, **{k: v for k, v in form.items() if k not in ("action", "key", "expr", "label", "value")}}
     try:
-        conn = connection_from_form(merged, apply_scan_cap=False)
+        # A backfill is a real scan, not a catalog job: it runs under the
+        # same cap as a chart, and a rejection reports its figures.
+        conn = connection_from_form(merged)
         warehouse = await run_in_threadpool(connect, form_kind(merged), **conn)
         registry = await run_in_threadpool(
             managed_mod.apply_action,

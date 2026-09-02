@@ -10,6 +10,7 @@ Events register.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -195,7 +196,9 @@ def test_index_sql_emits_without_warnings(kind, sqlglot_warnings):
         assert "CLUSTER BY FC_COLUMN, FC_ENTITY" in up[0]
         assert up[8].startswith("ALTER TABLE") and "DESCRIPTION" in up[8]
     else:
-        assert "CLUSTER BY (FC_COLUMN, FC_ENTITY)" in up[0]
+        # No CLUSTER BY on Snowflake: a clustering key switches on Automatic
+        # Clustering, a standing credit charge the caller never asked for.
+        assert "CLUSTER BY" not in up[0]
         assert up[8].startswith("COMMENT ON TABLE")
     assert up[1].startswith("INSERT INTO") and "IS NULL" in up[1]  # sqlglot spells NOT (x) IS NULL
     assert "SUBSCRIPTION_STARTED" in up[2]
@@ -453,12 +456,16 @@ def test_refresh_folds_in_rows_with_no_event_name():
         _form(), "plan", "plan",
         bookmarks={"login": NOW.date()}, lookback_days=3,
     )
-    assert "event_name IS NULL" in sql
+    import re as _re
+    # the OR branch, not the anti-join's NULL-equality clause (which also
+    # says "event_name IS NULL"): NULL-named rows bounded by the floor
+    branch = _re.compile(r"event_name IS NULL\s+AND\s+\(?\s*occurred_at\s*\)?\s*>=")
+    assert branch.search(sql), sql
     with_null = refresh_sql(
         _form(), "plan", "plan",
         bookmarks={"login": NOW.date(), None: (NOW - timedelta(days=10)).date()}, lookback_days=0,
     )
-    assert "event_name IS NULL" in with_null and "2026-08-23" in with_null
+    assert branch.search(with_null) and "2026-08-23" in with_null
 
 
 def test_backfill_select_is_the_insert_without_the_insert():
@@ -480,3 +487,49 @@ def test_reconcile_prefers_the_table_description_and_forgets_a_dropped_table(mon
     monkeypatch.setattr(managed, "authoritative_registry", lambda f: (authority, {"bytes": 1}))
     out2 = managed.reconcile_registry({**form, "managed_tables": mirror})
     assert out2["columns"]["plan"]["bookmark"] == (NOW - timedelta(days=3)).isoformat()
+
+
+def test_no_preview_means_no_automatic_build():
+    """Without a dry run there is no consent moment: the column stays live
+    with a reason that points at Index a column now. Mutation: ignore
+    auto_ok and the run builds unpriced."""
+    plan = build_plan(_form(), _Run(density=0.01), now=NOW, allow_probe=True, auto_ok=False)
+    assert plan.columns[0].action == "live"
+    assert plan.columns[0].reason == managed.NO_PREVIEW
+    # an existing index still attaches — reading is free of the consent question
+    form = _form()
+    att = build_plan({**form, "managed_tables": _registry(form)}, None, now=NOW, auto_ok=False)
+    assert att.columns[0].action == "attach"
+
+
+def test_maybe_note_and_rows_mode_form():
+    plan = build_plan(_form(), None, now=NOW)  # unprobed: maybe
+    assert [c.column.key for c in plan.maybe()] == ["plan"]
+    note = managed.maybe_note(plan, bytes_after=259 * 1024 ** 2)
+    assert note == "May also prepare `plan` for faster breakdowns (one-time, included above). Later runs ≈ 259 MB."
+    downgraded = managed.rows_mode_form(_form())
+    slot = downgraded["breakdowns"][0]
+    assert (slot["value_at"], slot["if_missing"]) == ("event", "null")
+    assert expensive_columns(downgraded) == []
+
+
+def test_registry_comment_flags_a_dropped_census():
+    big = {"v": 1, "fp": {}, "columns": {"plan": {"expr": "plan", "names": {f"e{i}": {"rows": i, "first": "2026-01-01T00:00:00+00:00", "last": "2026-09-01T00:00:00+00:00"} for i in range(400)}}}}
+    assert json.loads(registry_comment(big)).get("names_dropped") is True
+    small = {"v": 1, "fp": {}, "columns": {"plan": {"expr": "plan"}}}
+    assert "names_dropped" not in json.loads(registry_comment(small))
+
+
+def test_planning_never_mutates_the_shared_config_defaults():
+    """A probing plan built from a config that lacks managed_tables must not
+    write its probe into config.DEFAULTS (shallow-copy leak: the next fresh
+    config would inherit it). Mutation: return the caller's dict from
+    registry_from_form, or shallow-copy DEFAULTS in config.load."""
+    from factcat_app import config
+
+    before = copy.deepcopy(config.DEFAULTS["managed_tables"])
+    form = {**_form(), "managed_tables": config.DEFAULTS["managed_tables"]}
+    plan = build_plan(form, _Run(density=0.01), now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "build"
+    assert plan.registry["probes"]["plan"]["density"] == pytest.approx(0.01)
+    assert config.DEFAULTS["managed_tables"] == before == {}
