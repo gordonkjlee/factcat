@@ -44,7 +44,7 @@ from factcat.dialects import (
     splice_placeholders,
 )
 from factcat._emit import transpile
-from factcat.warehouses import AdapterError, QueryResult, is_missing_relation
+from factcat.warehouses import AdapterError, BytesCapError, QueryResult, is_missing_relation
 
 from factcat_app.query import (
     _as_event_time,
@@ -204,7 +204,6 @@ def now_iso(now: datetime | None = None) -> str:
     return (now or datetime.now(timezone.utc)).replace(microsecond=0).isoformat()
 
 
-_now_iso = now_iso
 
 
 def _parse_iso(text: Any) -> datetime | None:
@@ -529,6 +528,9 @@ class Plan:
     settings: dict[str, Any]
     notes: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
+    # The exceptions behind `failures`, in order: a scan-cap rejection keeps
+    # its figures so Setup can show them (a string would flatten it).
+    errors: list[BaseException] = field(default_factory=list)
     built: list[str] = field(default_factory=list)
 
     def builds(self) -> list[ColumnPlan]:
@@ -583,7 +585,7 @@ def _probe_density(
     density = None
     if total:
         density = float(present or 0) / float(total)
-    probes[key] = {"density": density, "at": _now_iso(now)}
+    probes[key] = {"density": density, "at": now_iso(now)}
     return density
 
 
@@ -792,9 +794,9 @@ def apply_plan(
                 entry = {
                     "expr": cp.column.expr,
                     "label": label,
-                    "built_at": _now_iso(now),
-                    "refreshed_at": _now_iso(now),
-                    "last_used_at": _now_iso(now),
+                    "built_at": now_iso(now),
+                    "refreshed_at": now_iso(now),
+                    "last_used_at": now_iso(now),
                     "use_count": int((cols.get(key) or {}).get("use_count") or 0),
                     "pinned": bool((cols.get(key) or {}).get("pinned")),
                     "overrides": dict((cols.get(key) or {}).get("overrides") or {}),
@@ -818,9 +820,9 @@ def apply_plan(
                 if known:
                     days = {n: bm.date() for n, bm in known.items()}
                     run(refresh_sql(form, key, cp.column.expr, bookmarks=days, lookback_days=lookback))
-                entry["refreshed_at"] = _now_iso(now)
+                entry["refreshed_at"] = now_iso(now)
             marks = _read_bookmarks(form, run, key)
-            entry["bookmark"] = _now_iso(max(marks.values())) if marks else None
+            entry["bookmark"] = now_iso(max(marks.values())) if marks else None
             if census is not None:
                 entry["names"] = {n: census[n] for n in census}
             cols[key] = entry
@@ -833,10 +835,12 @@ def apply_plan(
             cp.action = "live"
             cp.reason = str(exc)
             plan.failures.append(f"{label}: {exc}")
+            plan.errors.append(exc)
     try:
         run(registry_comment_sql(form, registry))
     except AdapterError as exc:
         plan.failures.append(f"registry: {exc}")
+        plan.errors.append(exc)
     return registry
 
 
@@ -858,7 +862,7 @@ def bump_usage(
         last = _parse_iso(entry.get("last_used_at"))
         entry["use_count"] = int(entry.get("use_count") or 0) + 1
         if last is None or now - last >= timedelta(minutes=USAGE_BUMP_MINUTES):
-            entry["last_used_at"] = _now_iso(now)
+            entry["last_used_at"] = now_iso(now)
             dirty = True
     if dirty and run is not None and plan.dest is not None:
         try:
@@ -937,7 +941,6 @@ def rows_mode_form(form: dict[str, Any]) -> dict[str, Any]:
     """The same chart with every expensive Value-at slot downgraded to
     each-event + keep NULL: its dry-run bytes are the honest "later runs"
     price before an index exists (the index read itself is small)."""
-    import copy
 
     out = copy.deepcopy(form)
 
@@ -1123,6 +1126,18 @@ def list_payload(form: dict[str, Any], *, now: datetime | None = None) -> dict[s
     return payload
 
 
+def _raise_first_failure(plan: Plan) -> None:
+    """Setup actions surface the first failure. A cap rejection is re-raised
+    as itself so the handler can report bytes and cap; anything else as the
+    labelled message."""
+    if not plan.failures:
+        return
+    first = plan.errors[0] if plan.errors else None
+    if isinstance(first, BytesCapError):
+        raise first
+    raise AdapterError(plan.failures[0])
+
+
 def apply_action(
     form: dict[str, Any],
     run: RunFn,
@@ -1197,8 +1212,7 @@ def apply_action(
         column = IndexColumn(column_key(expr, label or expr), expr, label or expr, "any", None)
         plan = Plan([ColumnPlan(column, "build", "admin")], dest, None, registry, settings(form))
         registry = apply_plan(plan, form, run, now=now)
-        if plan.failures:
-            raise AdapterError(plan.failures[0])
+        _raise_first_failure(plan)
         return registry
     entry = cols.get(key)
     if not isinstance(entry, dict):
@@ -1215,7 +1229,6 @@ def apply_action(
     else:
         raise ValueError("action must be refresh, rebuild, drop, index, pin, or override")
     registry = apply_plan(plan, form, run, now=now)
-    if plan.failures:
-        raise AdapterError(plan.failures[0])
+    _raise_first_failure(plan)
     return registry
 

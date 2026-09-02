@@ -780,10 +780,36 @@ async def api_managed_action(request: Request) -> JSONResponse:
             label=str(form.get("label") or ""),
             value=form.get("value"),
         )
+    except BytesCapError as exc:
+        # Over the cap: the figures, the cap, and where to raise it — the same
+        # facts the Events report shows, in the Setup callout.
+        cap = _cap_from_error(exc, merged)
+        scanned = (
+            f"would scan {managed_mod._gb(exc.bytes_processed)}"
+            if exc.bytes_processed is not None
+            else "is over the scan cap"
+        )
+        over = f", over the {managed_mod._gb(cap)} scan cap" if cap is not None and exc.bytes_processed is not None else ""
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": f"{_action_verb(action)} did not run: it {scanned}{over}. Raise the cap above and try again.",
+                "over_cap": True,
+                "bytes": exc.bytes_processed,
+                "cap": cap,
+            },
+            status_code=400,
+        )
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
-        return _catalog_error(exc, merged)
+        if isinstance(exc, ImportError):
+            return _catalog_error(exc, merged)
+        return JSONResponse({"ok": False, "error": f"{_action_verb(action)} did not run: {exc}"}, status_code=400)
     save({"managed_tables": registry})
     return JSONResponse({"ok": True, "registry": registry})
+
+
+def _action_verb(action: str) -> str:
+    return {"refresh": "Refresh", "rebuild": "Rebuild", "drop": "Drop", "index": "Index", "pin": "Pin", "override": "The override"}.get(action, "The action")
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
