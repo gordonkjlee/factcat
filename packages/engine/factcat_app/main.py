@@ -46,6 +46,7 @@ from .config import load, mapping_ready, save, warehouse_kind
 from .filters import filter_ui
 from .sql_display import apply_sql_keyword_case, sql_chrome, sql_plain
 from . import managed as managed_mod
+from .build import BUILD_ID, build_info
 from . import prefs as prefs_mod
 from .query import (
     REPORTING_TIMEZONES,
@@ -125,6 +126,7 @@ def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLRespon
             },
             "filter_ui": filter_ui(user),
             "mapping_ready": mapping_ready(cfg),
+            "build_id": BUILD_ID,
         },
     )
 
@@ -167,6 +169,7 @@ def setup(request: Request) -> HTMLResponse:
                 name: setup_docs_html(name) for name in ADAPTERS
             },
             "reporting_timezones": REPORTING_TIMEZONES,
+            "build_id": BUILD_ID,
             "capabilities": sorted(capabilities(kind)),
             "capabilities_by_kind": {
                 name: sorted(capabilities(name)) for name in ADAPTERS
@@ -191,6 +194,14 @@ def _catalog_error(exc: Exception, form: dict | None = None) -> JSONResponse:
             payload["missing_extra"] = kind
             payload["command"] = install_command(kind)
     return JSONResponse(payload, status_code=400)
+
+
+@app.get("/api/build")
+async def api_build() -> JSONResponse:
+    """What this process is serving. The page compares it with its own copy
+    so a tab left open across a restart says so instead of quietly showing
+    yesterday's code."""
+    return JSONResponse(build_info())
 
 
 @app.post("/api/roles")
@@ -578,6 +589,7 @@ async def api_sql(request: Request) -> JSONResponse:
 async def api_estimate(request: Request) -> JSONResponse:
     form = await request.json()
     sql = None
+    plan = None
     try:
         form = await run_in_threadpool(ensure_epoch, form)
         kind = form_kind(form)
@@ -625,13 +637,20 @@ async def api_estimate(request: Request) -> JSONResponse:
                 # The chart is still estimable; the build just goes unpriced.
                 build_bytes = None
     except BytesCapError as exc:
-        return JSONResponse(
-            _estimate_payload(
-                exc.bytes_processed,
-                _cap_from_error(exc, form),
-                over_cap=True,
-            )
+        payload = _estimate_payload(
+            exc.bytes_processed,
+            _cap_from_error(exc, form),
+            over_cap=True,
         )
+        # Over the cap is exactly when knowing an index would make later runs
+        # cheaper matters most: dropping the note here made it vanish the
+        # moment a chart grew (a second group-by was enough), which read as
+        # the feature being broken.
+        if plan is not None:
+            note = managed_mod.pending_note(plan)
+            if note:
+                payload["managed_note"] = note
+        return JSONResponse(payload)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _fail(exc, sql)
     query_bytes = result.bytes_processed

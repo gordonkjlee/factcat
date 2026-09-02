@@ -3116,3 +3116,48 @@ def test_the_cap_override_is_offered_while_an_estimate_is_in_flight(monkeypatch,
     assert "if (gen === estimateGen) setEstimatePending(false);" in events
     cancel = events.split("function cancelEstimate")[1][:260]
     assert "setEstimatePending(false)" in cancel
+
+
+def test_every_page_states_the_build_it_came_from(monkeypatch, tmp_path):
+    """A tab left open across a restart keeps running the code it loaded, and
+    nothing on the page used to say so - an owner tested a fix for an hour
+    against a page that predated it. The page carries its build and checks
+    it against the server on focus. Mutation: drop build_id from the page
+    context, or the /api/build endpoint."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app.build import BUILD_ID
+
+    client = TestClient(app)
+    info = client.get("/api/build")
+    assert info.status_code == 200
+    assert info.json()["build"] == BUILD_ID
+    assert info.json()["root"].endswith("engine")
+    for page in ("/events", "/setup"):
+        html = client.get(page).text
+        assert f'window.FACTCAT_BUILD = "{BUILD_ID}"' in html, page
+        assert 'id="stale-build"' in html, page
+        assert '/api/build' in html, page
+
+
+def test_an_over_cap_estimate_still_says_the_index_would_help(monkeypatch, tmp_path):
+    """Over the cap is exactly when knowing that later runs get cheaper
+    matters most. Dropping the note there made it vanish the moment a chart
+    grew - a second group-by was enough - which read as the feature being
+    broken. Mutation: return the cap payload without the note."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat.warehouses import BytesCapError
+
+    class _OverCap(_ManagedWarehouse):
+        def run(self, sql, *, dry_run: bool = False):
+            if dry_run:
+                raise BytesCapError("too big", bytes_processed=40 * 1024 ** 3,
+                                    maximum_bytes_billed=10 * 1024 ** 3)
+            return super().run(sql, dry_run=dry_run)
+
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: _OverCap())
+    client = TestClient(app)
+    res = client.post("/api/estimate", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["over_cap"] is True
+    assert body["managed_note"] == "May also index `plan`, which makes later runs cheaper"
