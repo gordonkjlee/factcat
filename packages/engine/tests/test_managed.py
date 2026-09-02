@@ -614,17 +614,22 @@ def test_a_mapping_change_drops_the_whole_index():
 
 
 def test_a_registry_write_failure_is_not_reported_as_a_column():
-    """The index is in place when only the description write fails: saying
+    """The index IS in place when only the description write fails, so
     "could not index `registry`; this run read the full history" is false
-    twice. Mutation: put registry failures back in plan.failures."""
+    twice over. Driven through apply_plan so the routing is what is tested,
+    not the field. Mutation: append registry failures to plan.failures."""
     form = _form()
-    plan = Plan([], None, None, {}, settings(form))
-    plan.registry_failures = ["Access Denied: table fc_column_index"]
+    run = _Run(density=0.01, fail_on=("SET OPTIONS",))
+    plan = build_plan(form, run, now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "build"
+    apply_plan(plan, form, run, now=NOW)
+    assert plan.registry_failures, "the comment write did not fail"
+    assert not plan.failures, "a bookkeeping failure was filed as a column failure"
     note = failure_note(plan)
     assert note.startswith("Saved no record of the prepared columns:")
     assert "The chart is correct" in note
-    assert "index `registry`" not in note
-    assert "read the full history" not in note
+    assert "index `registry`" not in note and "read the full history" not in note
+    # a real column failure still reads as one
     plan.failures = ["plan: boom"]
     assert failure_note(plan).startswith("Could not index `plan`: boom")
 
