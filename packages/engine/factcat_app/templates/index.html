@@ -1760,10 +1760,11 @@ function paintFillEventSelect(sel, current) {
   [...eventNameCache].sort((a, b) => String(a).localeCompare(String(b))).forEach((name) => {
     named(sel, name);
   });
-  add(sel, CUSTOM_BREAKDOWN, t("sql_expr_ellipsis"));
   // A stale series sentinel restored onto a chart-wide slot would render
   // its raw value; coerce it to charted, matching the backend's
-  // degradation. A stale saved NAME joins the group, never the tail.
+  // degradation. A stale saved NAME joins the group, never the tail —
+  // BEFORE the SQL sentinel, so the group cannot land after it when the
+  // cache is empty.
   const fixed =
     cur === FILL_SERIES && !sel.closest(".series-bd") ? FILL_CHARTED : cur;
   if (
@@ -1773,6 +1774,7 @@ function paintFillEventSelect(sel, current) {
   ) {
     named(sel, fixed);
   }
+  add(sel, CUSTOM_BREAKDOWN, t("sql_expr_ellipsis"));
   sel.value = fixed || "";
 }
 function slotColumnValue(slotEl) {
