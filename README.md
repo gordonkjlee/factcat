@@ -374,7 +374,9 @@ the column — which is what the chart would have scanned anyway, so the
 estimate chip already covers it; its second line says the run may also
 prepare the column and what later runs cost. Once the index exists the
 chip prices the cheap query. Dense columns (the value is on most rows)
-are left alone; **Value at: each event** already reads them for free.
+are left alone; **Value at: each event** already reads them for free. Columns that are not text are left alone too (the
+index stores text); write `CAST(x AS STRING)` as the breakdown expression to
+index one.
 Automatic preparation needs a cost preview, so it happens only on
 warehouses with a dry run (BigQuery); elsewhere use **Index a column
 now** on Setup. A column no chart has used for

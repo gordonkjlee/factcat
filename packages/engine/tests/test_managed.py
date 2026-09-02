@@ -430,7 +430,7 @@ def test_events_notes_never_say_index():
     form = _form()
     plan = build_plan(form, _Run(density=0.01), now=NOW, allow_probe=True)
     note = notes_for(plan, bytes_build=12 * 1024**3, bytes_after=int(1.9 * 1024**3))
-    assert note == "Also prepares `plan` for faster breakdowns (one-time ≈ 12 GB). Later runs ≈ 1.9 GB."
+    assert note == "Also prepares `plan` for faster breakdowns (one-time ~ 12 GB). Later runs ~ 1.9 GB."
     assert "index" not in note.lower()
     assert notes_for(Plan([], None, None, {}, settings(form))) == ""
 
@@ -506,7 +506,7 @@ def test_maybe_note_and_rows_mode_form():
     plan = build_plan(_form(), None, now=NOW)  # unprobed: maybe
     assert [c.column.key for c in plan.maybe()] == ["plan"]
     note = managed.maybe_note(plan, bytes_after=259 * 1024 ** 2)
-    assert note == "May also prepare `plan` for faster breakdowns (one-time, included above). Later runs ≈ 259 MB."
+    assert note == "May also prepare `plan` for faster breakdowns (one-time, included above). Later runs ~ 259 MB."
     downgraded = managed.rows_mode_form(_form())
     slot = downgraded["breakdowns"][0]
     assert (slot["value_at"], slot["if_missing"]) == ("event", "null")
@@ -533,3 +533,48 @@ def test_planning_never_mutates_the_shared_config_defaults():
     assert plan.columns[0].action == "build"
     assert plan.registry["probes"]["plan"]["density"] == pytest.approx(0.01)
     assert config.DEFAULTS["managed_tables"] == before == {}
+
+
+def test_mode_off_reads_an_existing_index_as_is_and_never_writes():
+    """Off is the kill-switch for every automatic write: a stale index is
+    read as-is (the live tail keeps results exact), a moved mapping or a
+    missing bookmark means live rather than a rebuild, and the sweep neither
+    drops nor advances its clock. Mutation: gate only the build branch."""
+    form = {**_form(), "managed_mode": "off"}
+    stale = _registry(form, refreshed_at=(NOW - timedelta(days=30)).isoformat())
+    run = _Run()
+    plan = build_plan({**form, "managed_tables": stale}, run, now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "attach"
+    assert run.calls == []
+    moved = {**stale, "fp": {"moved": True}}
+    plan2 = build_plan({**form, "managed_tables": moved}, run, now=NOW, allow_probe=True)
+    assert plan2.columns[0].action == "live" and "off" in plan2.columns[0].reason
+    nobm = _registry(form, bookmark=None)
+    plan3 = build_plan({**form, "managed_tables": nobm}, run, now=NOW, allow_probe=True)
+    assert plan3.columns[0].action == "live" and "off" in plan3.columns[0].reason
+    assert run.calls == []
+    unused = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
+    run2 = _Run()
+    registry, dropped, ran = sweep({**form, "managed_tables": unused}, run2, now=NOW)
+    assert (ran, dropped, run2.calls) == (False, [], [])
+    assert "plan" in registry["columns"]
+
+
+def test_non_text_columns_stay_live_with_a_cast_hint(monkeypatch):
+    """fc_value is text: an INT64 or DATE column would fail the INSERT on
+    every Run. The planner leaves it live with the CAST hint, spends no probe
+    on it, Index a column now refuses it, and Setup does not offer it.
+    Expressions and unknown types pass. Mutation: is_text_column -> True."""
+    form = _form(columns=[{"name": "plan", "type": "INT64"}, {"name": "occurred_at", "type": "TIMESTAMP"}, {"name": "tier", "type": "STRING"}])
+    run = _Run(density=0.01)
+    plan = build_plan(form, run, now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "live"
+    assert plan.columns[0].reason == managed.NON_TEXT
+    assert not any("FC_PRESENT" in c.upper() for c in run.calls)
+    monkeypatch.setattr(managed, "authoritative_registry", lambda f: ({}, None))
+    with pytest.raises(ValueError, match="CAST"):
+        managed.apply_action(form, run, action="index", key="plan", expr="plan", label="plan")
+    assert managed.is_text_column(form, "tier")
+    assert managed.is_text_column(_form(), "plan")  # unmapped: the caller knows
+    assert managed.is_text_column(form, "CAST(plan AS STRING)")
+    assert [c["name"] for c in managed.text_columns(form)] == ["tier"]

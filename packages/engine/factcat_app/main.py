@@ -157,6 +157,7 @@ def setup(request: Request) -> HTMLResponse:
         "setup.html",
         {
             "config": cfg,
+            "managed_text_columns": managed_mod.text_columns(cfg),
             "prefs": prefs_mod.load(),
             "screen": "setup",
             "entity_types": sorted(types["entity"]),
@@ -294,6 +295,10 @@ async def api_write_access(request: Request) -> JSONResponse:
         payload = await run_in_threadpool(write_access_from_form, form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
+    if payload.get("status") in ("ok", "denied"):
+        # The verdict is what gates an automatic index build on Run
+        # (managed._write_ok); Setup re-checks whenever the destination moves.
+        save({"write_access_status": payload["status"]})
     return JSONResponse({"ok": True, **payload})
 
 
@@ -653,6 +658,15 @@ async def api_run(request: Request) -> JSONResponse:
         warehouse = await run_in_threadpool(connect, form_kind(form), **conn)
         extra_save: dict[str, Any] = {}
         if managed_mod.index_table(form) is not None:
+            if managed_mod.registry_from_form(form).get("columns"):
+                # The table's own description is the authority: a dropped
+                # table or a new destination must not inherit the mirror's
+                # bookmarks - and the sweep below must plan from it too, or a
+                # workstation that has not charted for the TTL would drop a
+                # column another one uses every day.
+                reconciled = await run_in_threadpool(managed_mod.reconcile_registry, form)
+                form = {**form, "managed_tables": reconciled}
+                extra_save["managed_tables"] = reconciled
             registry, _dropped, ran = await run_in_threadpool(
                 managed_mod.sweep, form, warehouse.run
             )
@@ -660,12 +674,6 @@ async def api_run(request: Request) -> JSONResponse:
                 form = {**form, "managed_tables": registry}
                 extra_save["managed_tables"] = registry
                 extra_save["managed_last_sweep"] = managed_mod.now_iso()
-        if managed_mod.index_table(form) is not None and managed_mod.registry_from_form(form).get("columns"):
-            # The table's own description is the authority: a dropped table
-            # or a new destination must not inherit the mirror's bookmarks.
-            reconciled = await run_in_threadpool(managed_mod.reconcile_registry, form)
-            form = {**form, "managed_tables": reconciled}
-            extra_save["managed_tables"] = reconciled
         plan = await run_in_threadpool(
             managed_mod.build_plan,
             form,

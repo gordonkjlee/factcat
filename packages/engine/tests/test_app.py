@@ -2813,3 +2813,72 @@ def test_managed_action_over_the_cap_reports_its_figures(monkeypatch, tmp_path):
     gb = managed_mod._gb
     assert body["error"] == f"Index did not run: it would scan {gb(12 * 1024 ** 3)}, over the {gb(2 * 1024 ** 3)} scan cap. Raise the cap above and try again."
     assert "exceeded limit" not in body["error"]
+
+
+def test_sweep_plans_from_the_table_registry_not_the_mirror(monkeypatch, tmp_path):
+    """Two workstations, one index. A's mirror says the column is 90 days
+    unused; the table's own description (B charts daily) says an hour ago.
+    A's Run must drop nothing. Mutation: sweep before reconcile."""
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    now = datetime.now(timezone.utc)
+
+    def registry(last_used):
+        return {
+            "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+            "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": (now - timedelta(days=100)).isoformat(),
+                                 "refreshed_at": (now - timedelta(hours=1)).isoformat(), "last_used_at": last_used.isoformat(),
+                                 "bookmark": (now - timedelta(hours=1)).isoformat(), "use_count": 9, "pinned": False, "overrides": {}}},
+            "probes": {"plan": {"density": 0.01, "at": now.isoformat()}},
+        }
+
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": registry(now - timedelta(days=90))}), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (registry(now - timedelta(hours=1)), {"bytes": 1}))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    ups = [c[0].upper() for c in wh.calls if not c[1]]
+    assert not any(u.startswith("DELETE FROM") or u.startswith("DROP TABLE") for u in ups)
+    # control: when the table's own registry agrees the column is unused, the sweep does drop it
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": registry(now - timedelta(days=90))}), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (registry(now - timedelta(days=90)), {"bytes": 1}))
+    wh2 = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh2)
+    res2 = client.post("/api/run", json=body)
+    assert res2.status_code == 200, res2.text
+    assert any(c[0].upper().startswith("DELETE FROM") for c in wh2.calls if not c[1])
+
+
+def test_write_access_verdict_is_saved_for_the_run_gate(monkeypatch, tmp_path):
+    """The Setup check's verdict is what stops an automatic build on a denied
+    destination (managed._write_ok); it must be persisted, not just painted."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr("factcat_app.main.write_access_from_form", lambda form: {"status": "denied", "granted": []})
+    client = TestClient(app)
+    res = client.post("/api/write_access", json={"kind": "bigquery", "project": "p", "write_project": "p", "write_dataset": "d"})
+    assert res.status_code == 200, res.text
+    assert json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))["write_access_status"] == "denied"
+    monkeypatch.setattr("factcat_app.main.write_access_from_form", lambda form: {"status": "skipped"})
+    client.post("/api/write_access", json={"kind": "bigquery"})
+    assert json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))["write_access_status"] == "denied"
+    monkeypatch.setattr("factcat_app.main.write_access_from_form", lambda form: {"status": "ok", "granted": ["bigquery.tables.create"]})
+    client.post("/api/write_access", json={"kind": "bigquery", "project": "p", "write_project": "p", "write_dataset": "d"})
+    assert json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))["write_access_status"] == "ok"
+
+
+def test_setup_offers_only_text_columns_to_index_now(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    (tmp_path / "cfg.json").write_text(json.dumps({"columns": [
+        {"name": "plan", "type": "STRING"}, {"name": "rows_count", "type": "INT64"}, {"name": "occurred_at", "type": "TIMESTAMP"},
+    ]}), encoding="utf-8")
+    client = TestClient(app)
+    html = client.get("/setup").text
+    payload = html.split("managed_columns:")[1].split("\n")[0]
+    assert "plan" in payload
+    assert "rows_count" not in payload and "occurred_at" not in payload

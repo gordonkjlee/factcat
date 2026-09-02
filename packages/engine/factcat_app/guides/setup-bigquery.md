@@ -142,7 +142,9 @@ lookback** is how late a row can land after its event time; a refresh
 re-reads that much before each event name's bookmark. Dense columns (the
 value on more than about a quarter of recent rows) are not indexed
 automatically — **Value at: each event** already has them; **Index a
-column now** overrides that. Off builds nothing new and drops nothing.
+column now** overrides that. Columns that are not text are left alone too (the
+index stores text); write `CAST(x AS STRING)` as the breakdown expression to
+index one. Off builds nothing new and drops nothing.
 
 The list shows size and age per table, with Refresh, Rebuild, Drop, Pin
 (never drop) and per-column overrides; Rebuild and Index a column now run

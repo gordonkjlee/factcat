@@ -142,6 +142,13 @@ columns no chart has used (daily sweep), **Late-arrival lookback** is how
 late a row can land after its event time. Off builds nothing new and drops
 nothing.
 
+Columns that are not text are left alone (the index stores text); write
+`CAST(x AS STRING)` as the breakdown expression to index one. The build
+statements for Snowflake are verified by compiling them against Snowflake's
+grammar in the test suite; no live Snowflake account ran them for this
+release. If a build fails, the chart reads the full history and the Setup
+list says why.
+
 The list shows size and age per table (from `SHOW TABLES`), with Refresh,
 Rebuild, Drop, Pin (never drop) and per-column overrides. Its bookkeeping
 lives in the table's comment; a mapping change rebuilds, a new event name

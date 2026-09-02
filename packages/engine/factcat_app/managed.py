@@ -569,6 +569,36 @@ def _write_ok(form: dict[str, Any]) -> bool:
     return status != "denied"
 
 
+def _mapped_type(form: dict[str, Any], expr: str) -> str:
+    """The mapped type of a bare column expression, upper-cased; "" for an
+    expression or an unmapped name. Mapping knowledge, not SQL."""
+    name = expr.strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return ""
+    for col in form.get("columns") or []:
+        if isinstance(col, dict) and str(col.get("name") or "").lower() == name.lower():
+            return str(col.get("type") or "").upper()
+    return ""
+
+
+def is_text_column(form: dict[str, Any], expr: str) -> bool:
+    """False only for a bare column whose mapped type is known and not text:
+    ``fc_value`` is text, and an INT64 or DATE column would fail the INSERT
+    on every Run. Expressions and unknown types pass (the caller casts)."""
+    kind = _mapped_type(form, expr)
+    return not (kind and kind.startswith(_TEXTLESS))
+
+
+def text_columns(form: dict[str, Any]) -> list[dict[str, Any]]:
+    """The mapped columns Setup may offer to Index a column now: the text
+    ones (the same gate the planner applies), in mapping order."""
+    out = []
+    for col in form.get("columns") or []:
+        if isinstance(col, dict) and col.get("name") and is_text_column(form, str(col["name"])):
+            out.append({"name": str(col["name"]), "type": str(col.get("type") or "")})
+    return out
+
+
 def _probe_density(
     form: dict[str, Any], run: RunFn, expr: str, probes: dict[str, Any], key: str, now: datetime
 ) -> float | None:
@@ -590,6 +620,12 @@ def _probe_density(
 
 
 NOT_CHECKED = "not yet checked"
+NON_TEXT = "not a text column (index CAST(... AS STRING) as an expression instead)"
+_TEXTLESS = (
+    "INT", "BIGINT", "SMALLINT", "TINYINT", "NUMBER", "NUMERIC", "DECIMAL", "FLOAT", "DOUBLE", "REAL",
+    "BOOL", "DATE", "TIME", "TIMESTAMP", "DATETIME", "ARRAY", "STRUCT", "JSON", "VARIANT", "OBJECT",
+    "GEOGRAPHY", "BYTES", "BINARY",
+)
 NO_PREVIEW = (
     "automatic preparation needs a cost preview, which this warehouse cannot "
     "give; use Index a column now on Setup"
@@ -639,6 +675,11 @@ def build_plan(
         if col.fill == "expr":
             plan.columns.append(ColumnPlan(col, "live", "fill from is a SQL expression"))
             continue
+        # Mode: Off is the kill-switch for every automatic write - build,
+        # refresh, rebuild and sweep. An index whose fingerprint still matches
+        # is read as-is (the live tail keeps results exact however stale it
+        # is); Setup's own actions remain the way to change it.
+        mode_open = _mode_open(form, cfg)
         if entry:
             bookmark = _parse_iso(entry.get("bookmark"))
             refreshed = _parse_iso(entry.get("refreshed_at")) or _parse_iso(entry.get("built_at"))
@@ -647,18 +688,27 @@ def build_plan(
             if override not in (None, ""):
                 days = int(override)
             if bookmark is None:
-                plan.columns.append(ColumnPlan(col, "rebuild", "index has no bookmark", None))
+                if mode_open:
+                    plan.columns.append(ColumnPlan(col, "rebuild", "index has no bookmark", None))
+                else:
+                    plan.columns.append(ColumnPlan(col, "live", "index has no bookmark; automatic indexing is off"))
                 continue
-            if refreshed is not None and days >= 0 and now - refreshed > timedelta(days=days) and run is not None:
+            if mode_open and refreshed is not None and days >= 0 and now - refreshed > timedelta(days=days) and run is not None:
                 plan.columns.append(ColumnPlan(col, "refresh", "older than the staleness target", bookmark))
             else:
                 plan.columns.append(ColumnPlan(col, "attach", "", bookmark))
             continue
         if stale_config and col.key in reg_cols:
-            plan.columns.append(ColumnPlan(col, "rebuild", "mapping changed since the index was built"))
+            if mode_open:
+                plan.columns.append(ColumnPlan(col, "rebuild", "mapping changed since the index was built"))
+            else:
+                plan.columns.append(ColumnPlan(col, "live", "mapping changed since the index was built; automatic indexing is off"))
             continue
-        if not _mode_open(form, cfg):
+        if not mode_open:
             plan.columns.append(ColumnPlan(col, "live", "automatic indexing is off"))
+            continue
+        if not is_text_column(form, col.expr):
+            plan.columns.append(ColumnPlan(col, "live", NON_TEXT))
             continue
         if not auto_ok:
             plan.columns.append(ColumnPlan(col, "live", NO_PREVIEW))
@@ -886,6 +936,9 @@ def sweep(
     if last is not None and now - last < timedelta(hours=SWEEP_HOURS):
         return registry, [], False
     cfg = settings(form)
+    if not _mode_open(form, cfg):
+        # Off: no automatic write of any kind, and the clock does not advance.
+        return registry, [], False
     dest = index_table(form)
     cols = registry.get("columns") if isinstance(registry.get("columns"), dict) else {}
     dropped: list[str] = []
@@ -930,17 +983,21 @@ def notes_for(plan: Plan, *, bytes_build: int | None = None, bytes_after: int | 
     verb = "prepares" if len(labels) == 1 else "prepare"
     text = f"Also {verb} {what} for faster breakdowns"
     if bytes_build is not None:
-        text += f" (one-time ≈ {_gb(bytes_build)})"
+        text += f" (one-time ~ {_gb(bytes_build)})"
     text += "."
     if bytes_after is not None:
-        text += f" Later runs ≈ {_gb(bytes_after)}."
+        text += f" Later runs ~ {_gb(bytes_after)}."
     return text
 
 
 def rows_mode_form(form: dict[str, Any]) -> dict[str, Any]:
     """The same chart with every expensive Value-at slot downgraded to
     each-event + keep NULL: its dry-run bytes are the honest "later runs"
-    price before an index exists (the index read itself is small)."""
+    price before an index exists. Deliberately approximate ("~" in the
+    copy): a real post-index run also reads the index and its live tail,
+    and the first Run pays a density probe (~PROBE_DAYS of one column,
+    cached PROBE_TTL_DAYS). Do not "fix" this by pricing the spliced query:
+    the index does not exist yet, so that dry run cannot be made."""
 
     out = copy.deepcopy(form)
 
@@ -970,7 +1027,7 @@ def maybe_note(plan: Plan, *, bytes_after: int | None = None) -> str:
     what = ", ".join(f"`{l}`" for l in labels)
     text = f"May also prepare {what} for faster breakdowns (one-time, included above)."
     if bytes_after is not None:
-        text += f" Later runs ≈ {_gb(bytes_after)}."
+        text += f" Later runs ~ {_gb(bytes_after)}."
     return text
 
 
@@ -1209,6 +1266,8 @@ def apply_action(
     if action == "index":
         if not expr:
             raise ValueError("a column or expression is required")
+        if not is_text_column(form, expr):
+            raise ValueError(f"{label or expr} is {NON_TEXT}")
         column = IndexColumn(column_key(expr, label or expr), expr, label or expr, "any", None)
         plan = Plan([ColumnPlan(column, "build", "admin")], dest, None, registry, settings(form))
         registry = apply_plan(plan, form, run, now=now)

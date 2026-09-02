@@ -105,7 +105,7 @@
       color: var(--fc-ochre-deep);
     }
     /* Managed tables (item 12). #managed-wrap owns the section; .mt owns
-       the list geometry; .mt td.acts owns action spacing. */
+       the list geometry; .mt-acts owns action spacing. */
     #managed-wrap[hidden] { display: none !important; }
     #managed-knobs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.5rem; }
     #managed-knobs > div { min-width: 0; }
@@ -413,7 +413,7 @@ const saved = {
   warehouse: {{ config.warehouse|tojson }},
   write_project: {{ config.write_project|tojson }},
   managed_tables: {{ (config.managed_tables or {})|tojson }},
-  managed_columns: {{ (config.columns or [])|tojson }},
+  managed_columns: {{ (managed_text_columns or [])|tojson }},
   write_dataset: {{ config.write_dataset|tojson }},
   write_database: {{ config.write_database|tojson }},
   write_schema: {{ config.write_schema|tojson }},
@@ -1884,7 +1884,16 @@ document.getElementById("managed-add-go").addEventListener("click", () => {
   if (!name) return;
   managedAction(name, "index", {expr: name, label: name});
 });
-form.addEventListener("change", () => { const was = managedWrap.hidden; renderManaged(); if (was && !managedWrap.hidden) loadManaged(false); });
+form.addEventListener("change", (e) => {
+  // Only the destination decides whether the section shows; any other
+  // Setup change must not rebuild the list (an open Overrides would
+  // collapse and a half-typed override would be lost).
+  const id = (e.target && e.target.id) || "";
+  if (!/^write_(project|dataset|database|schema)$/.test(id)) return;
+  const was = managedWrap.hidden;
+  renderManaged();
+  if (was && !managedWrap.hidden) loadManaged(false);
+});
 loadManaged(false);
 
 const autosave = fcAutosave({
