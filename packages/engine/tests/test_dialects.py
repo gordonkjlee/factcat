@@ -940,3 +940,40 @@ def test_missing_with_clause_is_loud_not_silent():
     """A query the grid cannot attach to must raise, never emit broken SQL."""
     with pytest.raises(RuntimeError, match="WITH clause"):
         transpile_with_grid("SELECT 1 AS x", "duckdb", 2)
+
+
+def test_a_numeric_breakdown_folds_into_other_without_a_type_clash():
+    """`(other)` is a text label, so the value branches of the fold CASE are
+    cast to text. A CASE has one type: a numeric or date breakdown column
+    against '(other)' is rejected by BigQuery outright ("all THEN/ELSE
+    arguments must be coercible to a common type"), which is what an owner
+    hit on a real chart. DuckDB coerces silently, so the equivalence
+    fixtures cannot see this, and sqlglot does not type-check, so a
+    compile-only walk cannot either - the shape is the guard.
+
+    Mutation: drop the CAST from either value branch of the fold.
+    """
+    for dialect in sorted(SUPPORTED):
+        spec = EventsSpec(
+            table="events",
+            entity="entity_id",
+            event_time="occurred_at",
+            measure="total",
+            breakdowns=("amount_cents",),
+            include_other=True,
+            top_n=8,
+        )
+        sql = events_sql(spec, dialect=dialect)
+        fold = sql[sql.index("fc_fold_0") - 400 : sql.index("fc_fold_0")]
+        assert "(other)" in fold, dialect
+        # both value branches carry a cast to the label's own type
+        assert fold.upper().count("CAST(") >= 2, (dialect, fold)
+        assert "fc_bd_0" in fold, dialect
+    # and with the fold off there is nothing to reconcile, so no cast is forced
+    plain = events_sql(
+        EventsSpec(
+            table="events", entity="entity_id", event_time="occurred_at",
+            measure="total", breakdowns=("amount_cents",), include_other=False, top_n=8,
+        )
+    )
+    assert "(other)" not in plain
