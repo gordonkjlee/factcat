@@ -675,8 +675,10 @@ def build_plan(
         if col.fill == "expr":
             plan.columns.append(ColumnPlan(col, "live", "fill from is a SQL expression"))
             continue
-        # Mode: Off is the kill-switch for every automatic write - build,
-        # refresh, rebuild and sweep. An index whose fingerprint still matches
+        # Mode: Off is the kill-switch for every automatic build, refresh,
+        # rebuild and drop (the hourly usage bump on an attached column is
+        # metadata-only and keeps last_used_at honest, so nothing is evicted
+        # the moment Mode returns to auto). An index whose fingerprint still matches
         # is read as-is (the live tail keeps results exact however stale it
         # is); Setup's own actions remain the way to change it.
         mode_open = _mode_open(form, cfg)
