@@ -66,16 +66,40 @@ Must be an **event time**, not a calendar DATE and not a TIME-of-day.
 |---|---|---|
 | `TIMESTAMP_TZ` | UTC + the **offset** from the value (not the IANA name) | Instant. Reporting timezone is whose midnight is a day. |
 | `TIMESTAMP_LTZ` | UTC. Session `TIMEZONE` is display only | Instant. Same. |
-| `TIMESTAMP_NTZ` / `DATETIME` | Wall-clock numbers, **no zone** | You must say whether those numbers are UTC or already in the reporting timezone. |
+| `TIMESTAMP_NTZ` / `DATETIME` | Wall-clock numbers, **no zone** | Pick the zone those numbers are in (shown under Timestamp). |
 | Bare `TIMESTAMP` | Alias; default mapping is NTZ | Treat as NTZ. |
-| `NUMBER` / `INT` / `BIGINT` | Unix epoch | Seconds, milliseconds, or microseconds since 1970-01-01 UTC. Instant. |
+| `NUMBER` / `INT` / `BIGINT` | Unix epoch | Instant. Unit (seconds / ms / µs) is inferred from a sample of values. |
 
 `CONVERT_TIMEZONE` with two arguments is for instants (TZ/LTZ). NTZ
 needs three arguments (source zone, target zone, value). We do not rely
-on the session `TIMEZONE` for NTZ.
+on the session `TIMEZONE` for NTZ. TIMESTAMP_TZ, TIMESTAMP_LTZ, and Unix
+epochs do not show a timezone picker.
 
 **Reporting timezone** is whose midnight is a “day”, and whose Monday is
 a “week”.
+
+## Clustering
+
+Snowflake has no partition column. Micro-partitions always exist; date
+filters often prune if rows are loaded in time order, with no `CLUSTER
+BY`. That is not Automatic Clustering — Automatic Clustering only
+maintains a key you already set.
+
+When you do cluster a large events table, order keys from lowest
+cardinality to highest. Do not cluster on a raw nanosecond timestamp
+(too many values; use `TO_DATE(event_time)`). Do not cluster on month
+(too few values). A typical Factcat layout:
+
+```sql
+CLUSTER BY (event_name, TO_DATE(event_time))
+```
+
+A unique entity id as the leading key is usually too expensive to
+maintain. Setup lists views as well as tables.
+
+Recommended: allow Factcat to create and maintain tables in a database
+and schema for better performance. Setup checks create rights on that
+schema (no test object).
 
 ## Event name
 
@@ -83,8 +107,7 @@ Optional string column. Mapping persists as you pick fields; it does not query.
 **Look back for event names** on this page (90 days by default; 0 is all
 time) is the window for the Events picker. That job does not use the scan
 cap. Events **Refresh event names** re-runs it; the chevron next to it raises the window. The filter isolates the timestamp column so Snowflake
-can prune micro-partitions. Optional: allow Factcat to create and maintain
-tables in a database and schema for better performance. First fetch creates
+can prune micro-partitions. First fetch creates
 `fc_event_names` if it is missing (materialized view, or a table if the
 source cannot back a view). Later Refresh reads the view, or rebuilds the
 table snapshot. The object stores a fingerprint of the mapped table and

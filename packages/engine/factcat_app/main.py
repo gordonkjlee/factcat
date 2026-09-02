@@ -36,6 +36,10 @@ from .catalog import (
     type_sets,
     warehouses_from_form,
 )
+from .layout import (
+    assemble_layout,
+    write_access_from_form,
+)
 from .extras import extra_commands, install_command, run_install
 from .config import load, mapping_ready, save, warehouse_kind
 from .filters import filter_ui
@@ -48,9 +52,11 @@ from .query import (
     catalog_lookback_days,
     connection_from_form,
     event_values_sql,
+    ensure_epoch,
     events_sql_from_form,
     fill_cyclic_buckets,
     form_kind,
+    infer_epoch_from_form,
     job_bytes_cap,
     query_row_limit,
     stored_event_name_cache,
@@ -243,6 +249,61 @@ async def api_columns(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, **payload})
 
 
+def _layout_force(form: dict[str, Any]) -> bool:
+    raw = form.get("force")
+    if raw is True or raw == 1:
+        return True
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _want_layout_avg(form: dict[str, Any]) -> bool:
+    raw = form.get("include_partition_avg")
+    if raw is True or raw == 1:
+        return True
+    return str(raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+@app.post("/api/layout")
+async def api_layout(request: Request) -> JSONResponse:
+    form = await request.json()
+    stored = load().get("layout_cache") or {}
+    force = _layout_force(form)
+    want_avg = _want_layout_avg(form)
+    try:
+        def _run() -> tuple:
+            return assemble_layout(
+                form, stored, force=force, want_avg=want_avg
+            )
+
+        payload, store = await run_in_threadpool(_run)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc, form)
+    save({"layout_cache": store})
+    return JSONResponse({"ok": True, **payload})
+
+
+@app.post("/api/write_access")
+async def api_write_access(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        payload = await run_in_threadpool(write_access_from_form, form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc, form)
+    return JSONResponse({"ok": True, **payload})
+
+
+@app.post("/api/infer_epoch")
+async def api_infer_epoch(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        unit = await run_in_threadpool(infer_epoch_from_form, form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc, form)
+    if unit:
+        save({"event_time_epoch": unit})
+    return JSONResponse({"ok": True, "event_time_epoch": unit})
+
+
 def _event_value_text(row: dict) -> str | None:
     raw = row.get("fc_value")
     if raw is None:
@@ -257,6 +318,7 @@ async def api_event_values(request: Request) -> JSONResponse:
     sql = None
     cache_kind = None
     try:
+        form = await run_in_threadpool(ensure_epoch, form)
         catalog = form.get("catalog") in (True, "true", "on", "1", 1)
         conn = connection_from_form(form, apply_scan_cap=not catalog)
         warehouse = await run_in_threadpool(connect, form_kind(form), **conn)
@@ -460,6 +522,7 @@ async def api_sql(request: Request) -> JSONResponse:
     """Compile Events SQL from the form. No warehouse round-trip."""
     form = await request.json()
     try:
+        form = await run_in_threadpool(ensure_epoch, form)
         sql = events_sql_from_form(form)
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
@@ -474,6 +537,7 @@ async def api_estimate(request: Request) -> JSONResponse:
     form = await request.json()
     sql = None
     try:
+        form = await run_in_threadpool(ensure_epoch, form)
         kind = form_kind(form)
         caps = capabilities(kind)
         if CAP_DRY_RUN not in caps:
@@ -512,6 +576,7 @@ async def api_run(request: Request) -> JSONResponse:
     form = await request.json()
     sql = None
     try:
+        form = await run_in_threadpool(ensure_epoch, form)
         sql = events_sql_from_form(form)
         conn = connection_from_form(form)
         save(form)

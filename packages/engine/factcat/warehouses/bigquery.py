@@ -323,6 +323,52 @@ def list_datasets(
     return [{"id": name} for name in sorted(ids)]
 
 
+def _object_kind(raw: object) -> str:
+    text = str(raw or "TABLE").strip().upper().replace(" ", "_")
+    if text == "VIEW":
+        return "view"
+    if text == "MATERIALIZED_VIEW":
+        return "materialized_view"
+    if text in {"EXTERNAL", "EXTERNAL_TABLE"}:
+        return "external"
+    return "table"
+
+
+def relation_from_table(tbl: Any, *, name: str = "") -> dict[str, Any]:
+    """Partition / clustering / kind from a ``get_table`` object."""
+    kind = _object_kind(getattr(tbl, "table_type", None))
+    partition = None
+    tp = getattr(tbl, "time_partitioning", None)
+    rp = getattr(tbl, "range_partitioning", None)
+    if tp is not None:
+        field = getattr(tp, "field", None) or None
+        ptype = getattr(tp, "type_", None) or getattr(tp, "type", None)
+        partition = {
+            "field": field,
+            "type": str(ptype or "DAY").upper(),
+            "ingestion": not bool(field),
+        }
+    elif rp is not None:
+        partition = {
+            "field": getattr(rp, "field", None),
+            "type": "RANGE",
+            "ingestion": False,
+        }
+    clustering = [
+        str(col) for col in (getattr(tbl, "clustering_fields", None) or []) if col
+    ]
+    ident = name or getattr(tbl, "table_id", None) or ""
+    return {
+        "name": ident,
+        "kind": kind,
+        "partition": partition,
+        "clustering": clustering,
+        "require_partition_filter": bool(
+            getattr(tbl, "require_partition_filter", False)
+        ),
+    }
+
+
 def list_tables(
     *, project: str, dataset: str, credentials: object | None = None
 ) -> dict[str, Any]:
@@ -333,7 +379,13 @@ def list_tables(
     try:
         client = _make_client(project, credentials)
         ds = client.get_dataset(dataset)
-        tables = [item.table_id for item in client.list_tables(ds)]
+        tables = []
+        for item in client.list_tables(ds):
+            ident = item.table_id
+            tables.append(
+                {"id": ident, "kind": _object_kind(getattr(item, "table_type", None))}
+            )
+        tables.sort(key=lambda row: str(row["id"]).lower())
         location = getattr(ds, "location", None) or ""
     except (ValueError, AdapterError, ImportError):
         raise
@@ -341,7 +393,7 @@ def list_tables(
         raise _wrap_google_error(
             exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
         ) from exc
-    return {"location": location, "tables": sorted(tables)}
+    return {"location": location, "tables": tables}
 
 
 def list_columns(
@@ -366,13 +418,155 @@ def list_columns(
             for field in (tbl.schema or [])
         ]
         location = getattr(tbl, "location", None) or ""
+        relation = relation_from_table(tbl, name=table)
     except (ValueError, AdapterError, ImportError):
         raise
     except Exception as exc:
         raise _wrap_google_error(
             exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
         ) from exc
-    return {"location": location, "columns": columns}
+    return {"location": location, "columns": columns, "relation": relation}
+
+
+def dry_run_scan(
+    *,
+    project: str,
+    location: str,
+    sql: str,
+    credentials: object | None = None,
+) -> dict[str, Any]:
+    """Bytes a query would scan, plus referenced tables. No rows."""
+    sql = _require_sql(sql)
+    try:
+        client = _make_client(project, credentials)
+        bigquery, _service_account = _load_google()
+        job_config = bigquery.QueryJobConfig()
+        job_config.dry_run = True
+        job_config.use_query_cache = False
+        job = client.query(sql, job_config=job_config, location=location)
+        refs = []
+        for item in getattr(job, "referenced_tables", None) or []:
+            proj = getattr(item, "project", None) or project
+            ds = getattr(item, "dataset_id", None) or ""
+            name = getattr(item, "table_id", None) or ""
+            if ds and name:
+                refs.append(f"{proj}.{ds}.{name}")
+        processed = _optional_int(getattr(job, "total_bytes_processed", None))
+    except (ValueError, AdapterError, ImportError):
+        raise
+    except Exception as exc:
+        raise _wrap_google_error(
+            exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
+        ) from exc
+    return {"bytes_processed": processed, "referenced_tables": refs}
+
+
+def partition_avg_bytes(
+    *,
+    project: str,
+    dataset: str,
+    table: str,
+    location: str,
+    credentials: object | None = None,
+) -> int | None:
+    """Average logical bytes per partition. Metadata query, not a catalog list."""
+    dataset = (dataset or "").strip()
+    table = (table or "").strip()
+    if not dataset or not table:
+        raise ValueError("dataset and table are required")
+    if not re.fullmatch(r"[A-Za-z0-9_]+", dataset):
+        raise ValueError("dataset must be an identifier")
+    if not re.fullmatch(r"[A-Za-z0-9_]+", table):
+        raise ValueError("table must be an identifier")
+    sql = (
+        f"SELECT AVG(total_logical_bytes) AS fc_avg "
+        f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.PARTITIONS` "
+        f"WHERE table_name = '{table}'"
+    )
+    try:
+        client = _make_client(project, credentials)
+        bigquery, _service_account = _load_google()
+        job_config = bigquery.QueryJobConfig()
+        job_config.use_query_cache = False
+        job = client.query(sql, job_config=job_config, location=location)
+        rows = list(job.result(timeout=DEFAULT_TIMEOUT) or [])
+    except (ValueError, AdapterError, ImportError):
+        raise
+    except Exception as exc:
+        raise _wrap_google_error(
+            exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
+        ) from exc
+    if not rows:
+        return None
+    row = rows[0]
+    if isinstance(row, dict):
+        raw = row.get("fc_avg")
+    else:
+        raw = row[0] if len(row) else None
+    if raw is None:
+        return None
+    return int(raw)
+
+
+def test_dataset_iam(
+    *,
+    project: str,
+    dataset: str,
+    credentials: object | None = None,
+    permissions: list[str] | None = None,
+) -> list[str]:
+    """Permissions this identity has on ``dataset``. Metadata API — no query job."""
+    dataset = (dataset or "").strip()
+    if not dataset:
+        raise ValueError("dataset is required")
+    wanted = permissions or [
+        "bigquery.tables.create",
+        "bigquery.tables.update",
+        "bigquery.tables.get",
+    ]
+    try:
+        client = _make_client(project, credentials)
+        ds = client.get_dataset(dataset)
+        path = getattr(ds, "path", None) or f"/projects/{project}/datasets/{dataset}"
+        conn = getattr(client, "_connection", None)
+        if conn is None:
+            raise AdapterError("could not check dataset permissions")
+        payload = conn.api_request(
+            method="POST",
+            path=f"{path}:testIamPermissions",
+            data={"permissions": wanted},
+        )
+        granted = list(payload.get("permissions") or [])
+    except (ValueError, AdapterError, ImportError):
+        raise
+    except Exception as exc:
+        raise _wrap_google_error(
+            exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
+        ) from exc
+    return granted
+
+
+def get_table_relation(
+    *,
+    project: str,
+    dataset: str,
+    table: str,
+    credentials: object | None = None,
+) -> dict[str, Any]:
+    dataset = (dataset or "").strip()
+    table = (table or "").strip()
+    if not dataset or not table:
+        raise ValueError("dataset and table are required")
+    try:
+        client = _make_client(project, credentials)
+        tbl = client.get_table(f"{project}.{dataset}.{table}")
+        return relation_from_table(tbl, name=table)
+    except (ValueError, AdapterError, ImportError):
+        raise
+    except Exception as exc:
+        raise _wrap_google_error(
+            exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
+        ) from exc
 
 
 def _optional_int(value: Any) -> int | None:

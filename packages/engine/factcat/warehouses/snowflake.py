@@ -105,6 +105,16 @@ def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def _sql_like(name: str) -> str:
+    escaped = (
+        name.replace("\\", "\\\\")
+        .replace("'", "''")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return f"'{escaped}'"
+
+
 def _row_get(row: Any, *keys: str) -> Any:
     if isinstance(row, dict):
         lower = {str(k).lower(): v for k, v in row.items()}
@@ -120,6 +130,63 @@ def _normalise_type(field_type: str) -> str:
     if "(" in raw:
         raw = raw.split("(", 1)[0].strip()
     return raw
+
+
+def _object_kind(raw: object) -> str:
+    text = str(raw or "TABLE").strip().upper().replace(" ", "_")
+    if text in {"VIEW"}:
+        return "view"
+    if text in {"MATERIALIZED_VIEW", "MATERIALIZED VIEW"}:
+        return "materialized_view"
+    return "table"
+
+
+def _cluster_fields(cluster_by: object) -> list[str]:
+    raw = str(cluster_by or "").strip()
+    if not raw:
+        return []
+    upper = raw.upper()
+    if upper.startswith("LINEAR(") and raw.endswith(")"):
+        raw = raw[7:-1]
+    fields: list[str] = []
+    depth = 0
+    buf: list[str] = []
+    for ch in raw:
+        if ch == "(":
+            depth += 1
+            buf.append(ch)
+        elif ch == ")":
+            depth -= 1
+            buf.append(ch)
+        elif ch == "," and depth == 0:
+            piece = "".join(buf).strip()
+            if piece:
+                fields.append(piece)
+            buf = []
+        else:
+            buf.append(ch)
+    piece = "".join(buf).strip()
+    if piece:
+        fields.append(piece)
+    return fields
+
+
+def _sf_relation(
+    *,
+    name: str,
+    kind: str,
+    cluster_by: object = None,
+    automatic_clustering: object = None,
+) -> dict[str, Any]:
+    auto = str(automatic_clustering or "").strip().upper()
+    return {
+        "name": name,
+        "kind": kind,
+        "partition": None,
+        "clustering": _cluster_fields(cluster_by),
+        "require_partition_filter": False,
+        "automatic_clustering": auto == "ON",
+    }
 
 
 def passphrase_from_env() -> str | None:
@@ -519,13 +586,18 @@ def list_tables(
         )
         cur = ctx.cursor()
         cur.execute(
-            f"SHOW TABLES IN SCHEMA {_quote_ident(database)}.{_quote_ident(schema)}"
+            f"SHOW OBJECTS IN SCHEMA {_quote_ident(database)}.{_quote_ident(schema)}"
         )
-        names = []
+        tables = []
         for row in _fetch_maps(cur):
             name = _row_get(row, "name", "table_name")
-            if name:
-                names.append(str(name))
+            if not name:
+                continue
+            kind = _object_kind(_row_get(row, "kind", "table_type"))
+            if kind not in {"table", "view", "materialized_view"}:
+                continue
+            tables.append({"id": str(name), "kind": kind})
+        tables.sort(key=lambda row: str(row["id"]).lower())
     except (AdapterError, ImportError, ValueError):
         raise
     except Exception as exc:
@@ -535,7 +607,7 @@ def list_tables(
             cur.close()
         if ctx is not None:
             ctx.close()
-    return {"tables": sorted(names, key=str.lower)}
+    return {"tables": tables}
 
 
 def list_columns(
@@ -586,6 +658,31 @@ def list_columns(
                     "type": _normalise_type(str(raw_type)),
                 }
             )
+        cur.execute(
+            f"SHOW OBJECTS LIKE {_sql_like(table)} IN SCHEMA "
+            f"{_quote_ident(database)}.{_quote_ident(schema)}"
+        )
+        relation = {
+            "name": table,
+            "kind": "table",
+            "partition": None,
+            "clustering": [],
+            "require_partition_filter": False,
+            "automatic_clustering": False,
+        }
+        for row in _fetch_maps(cur):
+            name = _row_get(row, "name", "table_name")
+            if str(name or "") != table:
+                continue
+            relation = _sf_relation(
+                name=table,
+                kind=_object_kind(_row_get(row, "kind", "table_type")),
+                cluster_by=_row_get(row, "cluster_by", "clustering_key"),
+                automatic_clustering=_row_get(
+                    row, "automatic_clustering", "auto_clustering_on"
+                ),
+            )
+            break
     except (AdapterError, ImportError, ValueError):
         raise
     except Exception as exc:
@@ -596,4 +693,59 @@ def list_columns(
         if ctx is not None:
             ctx.close()
     columns.sort(key=lambda c: str(c.get("name") or "").lower())
-    return {"columns": columns}
+    return {"columns": columns, "relation": relation}
+
+
+def schema_write_privileges(
+    *,
+    account: str,
+    user: str,
+    warehouse: str = "",
+    database: str,
+    schema: str,
+    private_key_path: str,
+    role: str | None = None,
+    private_key_passphrase: str | None = None,
+    authenticator: str = "key_pair",
+) -> dict[str, bool]:
+    """Whether this role can create tables / materialized views in the schema."""
+    database = _require_ident(database, "database")
+    schema = _require_ident(schema, "schema")
+    ctx = None
+    cur = None
+    privileges: set[str] = set()
+    try:
+        ctx = _catalog_connect(
+            account=account,
+            user=user,
+            warehouse=warehouse,
+            database=database,
+            schema=schema,
+            private_key_path=private_key_path,
+            role=role,
+            private_key_passphrase=private_key_passphrase,
+            authenticator=authenticator,
+        )
+        cur = ctx.cursor()
+        cur.execute(
+            f"SHOW GRANTS ON SCHEMA {_quote_ident(database)}.{_quote_ident(schema)}"
+        )
+        for row in _fetch_maps(cur):
+            priv = str(_row_get(row, "privilege", "privilege_type") or "").upper()
+            if priv:
+                privileges.add(priv)
+    except (AdapterError, ImportError, ValueError):
+        raise
+    except Exception as exc:
+        raise AdapterError(str(exc) or "could not list schema grants") from exc
+    finally:
+        if cur is not None:
+            cur.close()
+        if ctx is not None:
+            ctx.close()
+    owner = "OWNERSHIP" in privileges
+    return {
+        "create_table": owner or "CREATE TABLE" in privileges,
+        "create_materialized_view": owner
+        or "CREATE MATERIALIZED VIEW" in privileges,
+    }

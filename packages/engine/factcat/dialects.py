@@ -251,6 +251,25 @@ def period_grid(n_periods: int, dialect: str) -> str:
 
 UNIX_KINDS = frozenset({"unix_s", "unix_ms", "unix_us"})
 TIME_KINDS = frozenset({"utc", "reporting", "instant"}) | UNIX_KINDS
+_TZ_NAME = re.compile(r"^[A-Za-z0-9_+\-/]+$")
+
+
+def _parse_time_kind(kind: str) -> str:
+    """utc / reporting / instant / unix_* , or an IANA wall-clock storage zone."""
+    raw = (kind or "utc").strip()
+    lowered = raw.lower()
+    if lowered in TIME_KINDS:
+        return lowered
+    if _TZ_NAME.fullmatch(raw) and "/" in raw:
+        return raw
+    raise ValueError(
+        "time_kind must be utc, reporting, instant, unix_s, unix_ms, unix_us, "
+        "or an IANA zone"
+    )
+
+
+def _is_iana_kind(kind: str) -> bool:
+    return kind not in TIME_KINDS and "/" in (kind or "")
 
 
 def from_unix(expr: str, dialect: str, kind: str) -> str:
@@ -299,11 +318,7 @@ def period_start_shifted(
     tz = (timezone or "UTC").strip() or "UTC"
     if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
         raise ValueError("timezone must be an IANA name")
-    kind = (time_kind or "utc").strip().lower()
-    if kind not in TIME_KINDS:
-        raise ValueError(
-            "time_kind must be utc, reporting, instant, unix_s, unix_ms, or unix_us"
-        )
+    kind = _parse_time_kind(time_kind)
     if unit not in {"day", "week", "month", "quarter", "year"}:
         raise ValueError("unit must be day, week, month, quarter, or year")
     if week_start not in {"monday", "sunday"}:
@@ -318,6 +333,8 @@ def period_start_shifted(
             date_expr = f"DATE({from_unix(expr, dialect, kind)}, '{tz}')"
         elif kind == "reporting":
             date_expr = f"CAST({expr} AS DATE)"
+        elif _is_iana_kind(kind):
+            date_expr = f"DATE(TIMESTAMP({expr}, '{kind}'), '{tz}')"
         else:
             # TIMESTAMP and DATETIME-stored-as-UTC both CAST to an instant.
             date_expr = f"DATE(CAST({expr} AS TIMESTAMP), '{tz}')"
@@ -362,6 +379,10 @@ def period_start_shifted(
         elif kind == "instant":
             # TIMESTAMP_TZ (offset on the value) / TIMESTAMP_LTZ (UTC storage).
             date_expr = f"CAST(CONVERT_TIMEZONE('{tz}', {expr}) AS DATE)"
+        elif _is_iana_kind(kind):
+            date_expr = (
+                f"CAST(CONVERT_TIMEZONE('{kind}', '{tz}', {expr}) AS DATE)"
+            )
         else:
             # TIMESTAMP_NTZ wall-clock stored as UTC numbers.
             date_expr = (
@@ -394,17 +415,25 @@ def period_start_shifted(
 
 _AS_INSTANT_RE = re.compile(
     r"factcat_as_instant\(\s*([A-Za-z_][A-Za-z0-9_.]*)"
-    r"(?:\s*,\s*'(unix_s|unix_ms|unix_us)')?\s*\)",
+    r"(?:\s*,\s*'([^']+)')?\s*\)",
     re.IGNORECASE,
 )
 
 
 def as_instant(expr: str, dialect: str, time_kind: str = "") -> str:
     """TIMESTAMP instant. DATETIME values are treated as UTC. Unix integers
-    become TIMESTAMP_SECONDS / TO_TIMESTAMP_TZ / …"""
-    kind = (time_kind or "").strip().lower()
+    become TIMESTAMP_SECONDS / TO_TIMESTAMP_TZ / … IANA kind is wall-clock
+    in that zone."""
+    raw = (time_kind or "").strip()
+    kind = raw.lower() if raw.lower() in TIME_KINDS else raw
     if kind in UNIX_KINDS:
         return from_unix(expr, dialect, kind)
+    if _is_iana_kind(kind):
+        if dialect == "bigquery":
+            return f"TIMESTAMP({expr}, '{kind}')"
+        if dialect == "snowflake":
+            return f"CONVERT_TIMEZONE('{kind}', 'UTC', {expr})"
+        return f"CAST({expr} AS TIMESTAMP)"
     _ = dialect
     return f"CAST({expr} AS TIMESTAMP)"
 
@@ -444,15 +473,18 @@ def timestamp_at_date(
     tz = (timezone or "UTC").strip() or "UTC"
     if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
         raise ValueError("timezone must be an IANA name")
-    kind = (time_kind or "utc").strip().lower()
-    if kind not in TIME_KINDS:
-        raise ValueError(
-            "time_kind must be utc, reporting, instant, unix_s, unix_ms, or unix_us"
-        )
+    kind = _parse_time_kind(time_kind)
     if kind == "reporting":
         if dialect == "snowflake":
             return f"CAST({date_sql} AS TIMESTAMP_NTZ)"
         return f"CAST({date_sql} AS DATETIME)"
+    if _is_iana_kind(kind):
+        if dialect == "snowflake":
+            return (
+                f"CONVERT_TIMEZONE('{tz}', '{kind}', "
+                f"CAST({date_sql} AS TIMESTAMP_NTZ))"
+            )
+        return f"DATETIME(TIMESTAMP({date_sql}, '{tz}'), '{kind}')"
     if kind == "utc":
         # Wall-clock UTC (DATETIME / TIMESTAMP_NTZ). Bound in that type so
         # WHERE can isolate the column. CAST on the column defeats BigQuery
@@ -502,7 +534,7 @@ def _civil_datetime(expr: str, dialect: str, timezone: str, time_kind: str) -> s
     tz = (timezone or "UTC").strip() or "UTC"
     if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
         raise ValueError("timezone must be an IANA name")
-    kind = (time_kind or "utc").strip().lower()
+    kind = _parse_time_kind(time_kind)
     if kind in UNIX_KINDS:
         inst = from_unix(expr, dialect, kind)
         if dialect == "bigquery":
@@ -513,12 +545,16 @@ def _civil_datetime(expr: str, dialect: str, timezone: str, time_kind: str) -> s
     if dialect == "bigquery":
         if kind == "reporting":
             return f"CAST({expr} AS DATETIME)"
+        if _is_iana_kind(kind):
+            return f"DATETIME(TIMESTAMP({expr}, '{kind}'), '{tz}')"
         return f"DATETIME(CAST({expr} AS TIMESTAMP), '{tz}')"
     if dialect == "snowflake":
         if kind == "reporting":
             return f"CAST({expr} AS TIMESTAMP_NTZ)"
         if kind == "instant":
             return f"CONVERT_TIMEZONE('{tz}', {expr})"
+        if _is_iana_kind(kind):
+            return f"CONVERT_TIMEZONE('{kind}', '{tz}', {expr})"
         return f"CONVERT_TIMEZONE('UTC', '{tz}', {expr})"
     return f"CAST({expr} AS TIMESTAMP)"
 
@@ -563,17 +599,26 @@ def hours_ago(
     tz = (timezone or "UTC").strip() or "UTC"
     if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
         raise ValueError("timezone must be an IANA name")
-    kind = (time_kind or "utc").strip().lower()
+    kind = _parse_time_kind(time_kind)
     if dialect == "bigquery":
         if kind == "reporting":
             return (
                 f"DATETIME_SUB(CURRENT_DATETIME('{tz}'), INTERVAL {n} HOUR)"
+            )
+        if _is_iana_kind(kind):
+            return (
+                f"DATETIME_SUB(CURRENT_DATETIME('{kind}'), INTERVAL {n} HOUR)"
             )
         return f"TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {n} HOUR)"
     if dialect == "snowflake":
         if kind == "reporting":
             return (
                 f"DATEADD('hour', -{n}, CAST(CONVERT_TIMEZONE('{tz}', "
+                f"CURRENT_TIMESTAMP()) AS TIMESTAMP_NTZ))"
+            )
+        if _is_iana_kind(kind):
+            return (
+                f"DATEADD('hour', -{n}, CAST(CONVERT_TIMEZONE('{kind}', "
                 f"CURRENT_TIMESTAMP()) AS TIMESTAMP_NTZ))"
             )
         if kind == "instant" or kind in UNIX_KINDS:
@@ -594,13 +639,20 @@ def current_hour_start(
     tz = (timezone or "UTC").strip() or "UTC"
     if not re.fullmatch(r"[A-Za-z0-9_+\-/]+", tz):
         raise ValueError("timezone must be an IANA name")
-    kind = (time_kind or "utc").strip().lower()
+    kind = _parse_time_kind(time_kind)
     if dialect == "bigquery":
+        if _is_iana_kind(kind):
+            return f"DATETIME_TRUNC(CURRENT_DATETIME('{kind}'), HOUR)"
         civil = f"DATETIME_TRUNC(CURRENT_DATETIME('{tz}'), HOUR)"
         if kind == "reporting":
             return civil
         return f"TIMESTAMP({civil}, '{tz}')"
     if dialect == "snowflake":
+        if _is_iana_kind(kind):
+            return (
+                f"CAST(DATE_TRUNC('HOUR', CONVERT_TIMEZONE('{kind}', "
+                f"CURRENT_TIMESTAMP())) AS TIMESTAMP_NTZ)"
+            )
         civil = (
             f"DATE_TRUNC('HOUR', CONVERT_TIMEZONE('{tz}', CURRENT_TIMESTAMP()))"
         )
@@ -623,7 +675,7 @@ _PERIOD_RE = re.compile(
     r"'(day|week|month|quarter|year)'\s*,\s*"
     r"'(monday|sunday)'\s*,\s*"
     r"(-?\d+)"
-    r"(?:\s*,\s*'([^']+)'(?:\s*,\s*'(utc|reporting|instant|unix_s|unix_ms|unix_us)')?)?"
+    r"(?:\s*,\s*'([^']+)'(?:\s*,\s*'([^']+)')?)?"
     r"\s*\)",
     re.IGNORECASE,
 )

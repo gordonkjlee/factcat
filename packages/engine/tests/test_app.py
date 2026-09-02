@@ -101,7 +101,10 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "CATALOG =" in res.text
     assert "bindCatalog" in res.text
     assert "This grain is called" not in res.text
-    assert "Entity name (singular)" in res.text
+    assert "Entity name (singular)" not in res.text
+    assert ">Entity name<" in res.text
+    assert "entity_label_other_wrap" in res.text
+    assert "layout-checking" in res.text
     assert "Plural" in res.text
     assert "Event name column" in res.text
     assert "Week starts on" in res.text
@@ -147,7 +150,34 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert 'id="catalog_lookback_days"' in res.text
     assert 'id="catalog-lookback-wrap"' in res.text
     assert "syncManagedChrome" in res.text
-    assert "Factcat-managed tables" in res.text
+    assert "Factcat-managed tables (recommended)" in res.text
+    assert "Factcat-managed tables (optional)" not in res.text
+    assert 'id="table-layout-hint"' in res.text
+    assert 'id="table-cluster-layout"' in res.text
+    assert 'id="event-column-checking" class="layout-checking" hidden>Checking whether event-name filters prune…' in res.text
+    assert 'id="entity-checking" class="layout-checking" hidden>Checking whether entity filters prune…' in res.text
+    assert "Checking clustering…" not in res.text
+    assert "Queries still run; entity filters won't prune." in res.text
+    assert 'id="event-time-checking" class="layout-checking" hidden>Checking whether date filters prune…' in res.text
+    assert "dateBusy && hasTime" in res.text
+    assert "clusterBusy && hasEvent" in res.text
+    assert "clusterBusy && hasEntity" in res.text
+    assert "Pruning is effective on event-name filters" in res.text
+    assert "applyLayoutCache" in res.text
+    assert "layout_cache" in res.text
+    assert "Checking clustering on the tables this view reads" not in res.text
+    assert "paintClusterPending" not in res.text
+    assert 'id="event-column-layout"' in res.text
+    assert 'id="entity-layout"' in res.text
+    assert "include_partition_avg" in res.text
+    assert 'id="event-time-check"' in res.text
+    assert 'id="event_time_storage_tz"' in res.text
+    assert "event_time_tz_choice" not in res.text
+    assert "Wall-clock UTC" not in res.text
+    assert "/api/layout" in res.text
+    assert "/api/infer_epoch" in res.text
+    assert "Unix epoch unit" not in res.text
+    assert "/api/write_access" in res.text
     assert 'id="write_project"' in res.text
     assert 'id="write_dataset"' in res.text
     assert 'id="write_database"' in res.text
@@ -1571,7 +1601,133 @@ def test_tables_return_location(monkeypatch, tmp_path):
     assert res.status_code == 200
     body = res.json()
     assert body["location"] == "EU"
-    assert "customer_events" in body["tables"]
+    assert body["tables"] == ["customer_events"] or any(
+        (t == "customer_events" or (isinstance(t, dict) and t.get("id") == "customer_events"))
+        for t in body["tables"]
+    )
+
+
+def test_layout_endpoint_returns_typed_facts(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr(
+        "factcat_app.layout._partition_avg", lambda *a, **k: 3 * 1024**3
+    )
+    monkeypatch.setattr(
+        "factcat_app.layout.columns_from_form",
+        lambda form: {
+            "columns": [{"name": "occurred_at", "type": "TIMESTAMP"}],
+            "relation": {
+                "name": "events",
+                "kind": "table",
+                "partition": {
+                    "field": "occurred_at",
+                    "type": "DAY",
+                    "ingestion": False,
+                },
+                "clustering": ["event_name", "user_id"],
+                "require_partition_filter": False,
+            },
+        },
+    )
+    client = TestClient(app)
+    res = client.post(
+        "/api/layout",
+        json={
+            "kind": "bigquery",
+            "project": "p",
+            "location": "EU",
+            "dataset": "analytics",
+            "table_name": "events",
+            "table": "p.analytics.events",
+            "event_time": "occurred_at",
+            "event_column": "event_name",
+            "entity": "user_id",
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ok"] is True
+    assert body["metadata_verdict"] == "match"
+    assert body["grain"] == "DAY"
+    assert body["cluster"]["status"] == "ok"
+    assert body["cluster"]["entity_pos"] == 2
+    assert body["partition_avg_bytes"] is None
+    res_avg = client.post(
+        "/api/layout",
+        json={
+            "kind": "bigquery",
+            "project": "p",
+            "location": "EU",
+            "dataset": "analytics",
+            "table_name": "events",
+            "table": "p.analytics.events",
+            "event_time": "occurred_at",
+            "event_column": "event_name",
+            "entity": "user_id",
+            "include_partition_avg": True,
+        },
+    )
+    assert res_avg.json()["partition_avg_bytes"] == 3 * 1024**3
+
+
+def test_layout_endpoint_reuses_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    calls = {"n": 0}
+
+    def columns(form):
+        calls["n"] += 1
+        return {
+            "columns": [{"name": "occurred_at", "type": "TIMESTAMP"}],
+            "relation": {
+                "name": "events",
+                "kind": "table",
+                "partition": {
+                    "field": "occurred_at",
+                    "type": "DAY",
+                    "ingestion": False,
+                },
+                "clustering": ["event_name"],
+                "require_partition_filter": False,
+            },
+        }
+
+    monkeypatch.setattr("factcat_app.layout.columns_from_form", columns)
+    monkeypatch.setattr("factcat_app.layout._partition_avg", lambda *a, **k: None)
+    client = TestClient(app)
+    body = {
+        "kind": "bigquery",
+        "project": "p",
+        "location": "EU",
+        "dataset": "analytics",
+        "table_name": "events",
+        "table": "p.analytics.events",
+        "event_time": "occurred_at",
+        "event_column": "event_name",
+        "entity": "user_id",
+    }
+    assert client.post("/api/layout", json=body).json()["ok"] is True
+    assert calls["n"] == 1
+    assert client.post("/api/layout", json=body).json()["ok"] is True
+    assert calls["n"] == 1
+    assert client.post("/api/layout", json={**body, "force": True}).json()["ok"] is True
+    assert calls["n"] == 2
+    assert client.post("/api/layout", json={**body, "entity": "other_id"}).json()["ok"] is True
+    assert calls["n"] == 2
+    assert client.post("/api/layout", json={**body, "event_time": "created_at"}).json()["ok"] is True
+    assert calls["n"] == 2
+    assert client.post(
+        "/api/layout",
+        json={**body, "table_name": "other", "table": "p.analytics.other"},
+    ).json()["ok"] is True
+    assert calls["n"] == 3
+
+
+def test_write_access_skipped_when_dest_blank(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    res = client.post("/api/write_access", json={"kind": "bigquery", "project": "p"})
+    assert res.status_code == 200
+    assert res.json()["status"] == "skipped"
 
 
 def test_columns_are_sorted_alphabetically(monkeypatch, tmp_path):
@@ -2249,8 +2405,12 @@ def test_blocking_endpoints_use_threadpool():
         main_mod.api_schemas,
         main_mod.api_tables,
         main_mod.api_columns,
+        main_mod.api_layout,
+        main_mod.api_write_access,
+        main_mod.api_infer_epoch,
         main_mod.api_event_values,
         main_mod.api_install_extra,
+        main_mod.api_sql,
         main_mod.api_estimate,
         main_mod.api_run,
     )
