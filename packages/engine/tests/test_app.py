@@ -2607,7 +2607,8 @@ def test_managed_list_and_actions(monkeypatch, tmp_path):
     wh = _ManagedWarehouse()
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
     gone = client.post("/api/managed/action", json={**_managed_body(), "action": "pin", "key": "plan", "value": True})
-    assert gone.status_code == 400 and "action must be drop" in gone.json()["error"]
+    assert gone.status_code == 400
+    assert gone.json()["error"] == "Drop did not run: action must be drop. The table is unchanged."
     drop = client.post("/api/managed/action", json={**_managed_body(), "action": "drop", "key": "plan"})
     assert drop.status_code == 200, drop.text
     assert "plan" not in drop.json()["registry"]["columns"]

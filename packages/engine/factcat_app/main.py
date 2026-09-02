@@ -780,7 +780,10 @@ async def api_managed_action(request: Request) -> JSONResponse:
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         if isinstance(exc, ImportError):
             return _catalog_error(exc, merged)
-        return JSONResponse({"ok": False, "error": f"Drop did not run: {exc}"}, status_code=400)
+        # Situation, then consequence (the #66 callout grammar): the reason,
+        # and the state of the world after it.
+        why = str(exc).rstrip(".")
+        return JSONResponse({"ok": False, "error": f"Drop did not run: {why}. The table is unchanged."}, status_code=400)
     save({"managed_tables": registry})
     return JSONResponse({"ok": True, "registry": registry})
 
