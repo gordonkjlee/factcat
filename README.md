@@ -346,14 +346,21 @@ calendar) or **extract** (hour of day, day of week, month of year, year as four
 digits, …). The mapped timestamp may be filtered on a series (intersects the
 chart date range). **Combine** nests another event
 into that series (OR); **Split** undoes it. Ungrouped series overlay as
-separate lines. **Break down by** is chart-wide unless **Break down each
+separate lines. The config column is two sections — **Event series** and
+**Break down** — with the **Exact** toggle between them (it spans both:
+approximate uniques and approximate top-N labels); **Refresh list** sits
+in the Break down header because the columns list serves every slot.
+**Break down by** is chart-wide unless **Break down each
 series** is on, in which case each series has its own split. Each breakdown
 carries a **Value at** control (each event · range start · range end ·
-first record · latest record) and an **If missing** choice (leave `(null)`,
+first ever · latest ever) and an **If missing** choice (leave `(null)`,
 or fill from the entity's history — for each event that is the last known
 earlier value; at range boundaries an entity with none takes its first
-recorded value). **Fill from** narrows which events may supply the value
-(one event, or a SQL predicate). The anchors are the chart's date range;
+recorded value). **Fill from** narrows which events may supply the value —
+`(any event)`, `(charted events)`, `(this series' events)` in per-series
+mode, one event name, or a SQL predicate; the mode entries carry
+parentheses so they never read as an event literally so named, and the
+event names sit in their own labelled group. The anchors are the chart's date range;
 the history search always reads the whole table, so a tier stamped only on
 `subscription_started` still labels logins, and the meaning of a legend
 label never changes per series. Watch the estimate when flipping these on
