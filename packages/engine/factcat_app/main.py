@@ -746,7 +746,10 @@ async def api_run(request: Request) -> JSONResponse:
         if probes and not fell_back:
             base = extra_save.get("managed_tables")
             if not isinstance(base, dict):
-                base = managed_mod.registry_from_form(form) or {}
+                # plan.registry, never the request's pre-run copy: a build
+                # already persisted mid-run would be overwritten by the older
+                # document and rebuilt - and re-appended - on the next run.
+                base = plan.registry if isinstance(plan.registry, dict) else {}
             extra_save["managed_tables"] = {
                 **base, "probes": {**(base.get("probes") or {}), **probes}
             }

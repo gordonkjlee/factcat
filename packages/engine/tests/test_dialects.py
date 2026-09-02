@@ -944,6 +944,26 @@ def test_missing_with_clause_is_loud_not_silent():
         transpile_with_grid("SELECT 1 AS x", "duckdb", 2)
 
 
+
+def _literal_body(stmt: str) -> str:
+    """The body of the first single-quoted literal, read the way a warehouse
+    reads it: the literal ends at the first quote that is not backslash
+    escaped. A bare quote inside the note therefore truncates the body, which
+    is exactly the bug this guards - measuring from the LAST quote in the
+    statement would hide it."""
+    start = stmt.index("'") + 1
+    i = start
+    while i < len(stmt):
+        c = stmt[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'":
+            return stmt[start:i]
+        i += 1
+    raise AssertionError("unterminated string literal: " + stmt[-60:])
+
+
 def _as_the_warehouse_stores_it(body: str) -> str:
     """A single-quoted literal as BigQuery and Snowflake hand it back: both
     process backslash escapes inside the quotes."""
@@ -968,15 +988,20 @@ def _as_the_warehouse_stores_it(body: str) -> str:
         json.dumps({"a": 'say "hi"'}),                       # JSON escapes an embedded quote
         json.dumps({"e": "REGEXP_EXTRACT(x, r'\\d+')"}),     # a backslash and a quote together
         json.dumps({"q": "it's"}),                           # a bare apostrophe
+        json.dumps({"p": "JSON_VALUE(props, '$.plan')"}),    # the ordinary breakdown expression
     ],
 )
 def test_a_relation_comment_survives_the_warehouses_own_unescaping(dialect, note):
-    """The registry travels as JSON inside a table comment. Escaping only the
-    quote loses every backslash the JSON needed: the document stops parsing,
-    the registry reads back empty, and every run rebuilds an index that is
-    already there. Mutation: escape only the quote in _comment_literal."""
+    """The registry travels as JSON inside a table comment. Two ways to get
+    this wrong, both shipped once: escape only the quote and the backslashes
+    JSON needs are eaten, so the document stops parsing and every run
+    rebuilds an index that already exists; escape only the backslash and a
+    bare quote closes the literal early, which is a syntax error.
+    Mutation: drop either half of the escaping in _comment_literal."""
     stmt = set_relation_comment('"d"."s"."t"', note, dialect)
-    body = stmt[stmt.index("'") + 1 : stmt.rindex("'")]
+    body = _literal_body(stmt)
+    # the literal must run to the end of the statement, not stop inside the note
+    assert stmt[stmt.index("'") + 1 + len(body) :].lstrip("'").strip() in ("", ")")
     stored = _as_the_warehouse_stores_it(body)
     assert stored == note
     assert json.loads(stored)

@@ -518,7 +518,8 @@ def _comment_literal(comment: str | None) -> str | None:
     note = (comment or "").strip()
     if not note:
         return None
-    return note.replace("\\", "\\\\").replace("'", "\'")
+    backslash = "\\"
+    return note.replace(backslash, backslash * 2).replace("'", backslash + "'")
 
 
 def create_or_replace_relation(

@@ -338,16 +338,19 @@ def test_plan_event_time_column_is_the_stored_column():
 # ---------------------------------------------------------------- apply
 
 
-def test_apply_build_runs_ensure_backfill_bookmarks_comment_in_order():
+def test_apply_build_runs_ensure_clear_backfill_bookmarks_comment_in_order():
+    """A build clears its column before backfilling: rows can outlive their
+    registry entry, and appending onto them doubles the table."""
     form = _form()
     run = _Run(bookmark=NOW - timedelta(hours=3))
     plan = build_plan(form, _Run(density=0.01), now=NOW, allow_probe=True)
     registry = apply_plan(plan, form, run, now=NOW)
     ups = [c.upper() for c in run.calls]
     assert ups[0].startswith("CREATE TABLE IF NOT EXISTS")
-    assert ups[1].startswith("INSERT INTO")
-    assert "MAX(FC_AT)" in ups[2]
-    assert ups[3].startswith("ALTER TABLE") or ups[3].startswith("COMMENT ON")
+    assert ups[1].startswith("DELETE FROM")
+    assert ups[2].startswith("INSERT INTO")
+    assert "MAX(FC_AT)" in ups[3]
+    assert ups[4].startswith("ALTER TABLE") or ups[4].startswith("COMMENT ON")
     entry = registry["columns"]["plan"]
     assert entry["bookmark"] and entry["built_at"] and entry["expr"] == "plan"
     assert plan.columns[0].action == "attach"
@@ -608,8 +611,10 @@ def test_a_mapping_change_drops_the_whole_index():
     assert ups.index(next(u for u in ups if u.startswith("DROP TABLE"))) < ups.index(
         next(u for u in ups if u.startswith("CREATE TABLE"))
     )
-    # the rebuild became a build: there is nothing left to delete per column
-    assert not any(u.startswith("DELETE FROM") for u in ups)
+    # the rebuild became a build; a build clears its column first either way
+    assert ups.index(next(u for u in ups if u.startswith("DROP TABLE"))) < ups.index(
+        next(u for u in ups if u.startswith("INSERT"))
+    )
     assert set(registry["columns"]) == {"plan"}
 
 

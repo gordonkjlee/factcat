@@ -135,8 +135,11 @@ def _dest_name(form: dict[str, Any]) -> str:
     else:
         parts = [form.get("write_project") or form.get("data_project") or form.get("project"),
                  form.get("write_dataset")]
-    names = [str(p).strip() for p in parts if str(p or "").strip()]
-    return ".".join(names + [INDEX_TABLE]) if len(names) == 2 else ""
+    # Keep every part, even when the destination is incomplete: collapsing
+    # them all to "" would let two differently half-configured destinations
+    # share a fingerprint, and old bookmarks would attach to a new table.
+    names = [str(p or "").strip() for p in parts]
+    return ".".join(names + [INDEX_TABLE])
 
 
 # ---------------------------------------------------------------- registry
@@ -867,8 +870,12 @@ def apply_plan(
                 run(ensure_table_sql(form, registry))
                 ensured = True
             if cp.action in ("build", "rebuild"):
-                if cp.action == "rebuild":
-                    run(delete_column_sql(form, key))
+                # A backfill always clears the column first, build included.
+                # Rows can outlive their registry entry - a Drop whose DELETE
+                # failed after the registry write, a second workstation that
+                # built the same column - and appending onto them doubles the
+                # table. Deleting nothing is cheap; the backfill is not.
+                run(delete_column_sql(form, key))
                 run(backfill_sql(form, key, cp.column.expr))
                 entry = {
                     "expr": cp.column.expr,
