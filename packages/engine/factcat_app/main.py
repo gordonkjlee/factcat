@@ -502,6 +502,11 @@ MANAGED_KEYS = (
     "managed_drop_days",
     "managed_refresh_days",
     "managed_lookback_days",
+    # The mapped column types. `is_text_column` and `_time_column_is_date`
+    # both read them, and both were inert on the Run path because the chart
+    # request carries no mapping - a non-text column was INSERTed into a
+    # text fc_value and failed on every run.
+    "columns",
     # The census gate. `_census` reads it to decide whether the event-name
     # cache is a v2 census, and the whole self-repair (a new name with
     # backfilled history filled whole; a name whose rows shrank rebuilt)
@@ -594,7 +599,18 @@ async def api_estimate(request: Request) -> JSONResponse:
         plan = managed_mod.build_plan(form, None)
         sql = events_sql_from_form(form, managed=plan)
         warehouse = await run_in_threadpool(connect, kind, **conn)
-        result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
+        try:
+            result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
+        except AdapterError as exc:
+            # The table went away since the mirror was written. The run path
+            # falls back to the live query; the estimate must price the same
+            # thing rather than showing a hard error for a chart that runs.
+            if not (plan.attachable() and is_missing_relation(exc)):
+                raise
+            for cp in plan.columns:
+                cp.action = "live"
+            sql = events_sql_from_form(form)
+            result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
         build_bytes = None
         if plan.builds():
             try:
@@ -674,6 +690,11 @@ async def api_run(request: Request) -> JSONResponse:
         if plan.builds():
             registry = await run_in_threadpool(managed_mod.apply_plan, plan, form, warehouse.run)
             extra_save["managed_tables"] = registry
+            # Persist now. The chart query below can fail (a cap rejection is
+            # the ordinary case), and batching this behind it would lose the
+            # record of an index that already exists - so the next run would
+            # build it again, appending a second copy of the whole history.
+            save({"managed_tables": registry})
             managed_failed = managed_mod.failure_note(plan)
         sql = events_sql_from_form(form, managed=plan)
         fell_back = False
@@ -715,6 +736,20 @@ async def api_run(request: Request) -> JSONResponse:
             registry = await run_in_threadpool(managed_mod.bump_usage, plan, form, warehouse.run)
             if plan.attachable():
                 extra_save["managed_tables"] = registry
+        # A density probe costs real bytes (PROBE_DAYS of one column) and is
+        # cached for PROBE_TTL_DAYS - but only if it is saved. A column the
+        # gate REFUSES produces no build and nothing attachable, so without
+        # this merge its probe was thrown away and re-run on every chart,
+        # forever. Merge rather than assign: the reconcile and the usage bump
+        # above own the rest of the document.
+        probes = plan.registry.get("probes") if isinstance(plan.registry, dict) else None
+        if probes and not fell_back:
+            base = extra_save.get("managed_tables")
+            if not isinstance(base, dict):
+                base = managed_mod.registry_from_form(form) or {}
+            extra_save["managed_tables"] = {
+                **base, "probes": {**(base.get("probes") or {}), **probes}
+            }
         if extra_save:
             save(extra_save)
     except BytesCapError as exc:

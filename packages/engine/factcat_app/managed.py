@@ -126,6 +126,19 @@ def index_table(form: dict[str, Any]) -> str | None:
     return write_relation(form, INDEX_TABLE)
 
 
+def _dest_name(form: dict[str, Any]) -> str:
+    """The write destination as a plain dotted name. The fingerprint travels
+    as JSON through a table comment, so it carries no quoting: a quoted ident
+    would need escaping on the way out and back."""
+    if form_kind(form) == "snowflake":
+        parts = [form.get("write_database"), form.get("write_schema")]
+    else:
+        parts = [form.get("write_project") or form.get("data_project") or form.get("project"),
+                 form.get("write_dataset")]
+    names = [str(p).strip() for p in parts if str(p or "").strip()]
+    return ".".join(names + [INDEX_TABLE]) if len(names) == 2 else ""
+
+
 # ---------------------------------------------------------------- registry
 
 
@@ -140,7 +153,9 @@ def config_fingerprint(form: dict[str, Any]) -> dict[str, Any]:
         "event_column": str(form.get("event_column") or "").strip(),
         # A new write destination is a new (empty) table: the mirror's
         # bookmarks must not attach to it.
-        "dest": index_table(form) or "",
+        # A plain dotted name, never the quoted ident: this document
+        # round-trips through a table comment.
+        "dest": _dest_name(form),
     }
 
 
@@ -254,7 +269,9 @@ def expensive_columns(form: dict[str, Any]) -> list[IndexColumn]:
             fill, names = _slot_fill_names(slot, form, unit if per_series else None)
             key = column_key(expr, label)
             if key not in out:
-                out[key] = IndexColumn(key, expr, label, fill, names)
+                # An expression slot has no label: without this the user
+                # is told "Indexed `None`".
+                out[key] = IndexColumn(key, expr, label or key, fill, names)
     return list(out.values())
 
 
@@ -500,10 +517,20 @@ def values_relation_sql(
     )
 
 
-def watermark_sql(form: dict[str, Any], bookmark: datetime) -> str:
-    """The day the bookmark falls on, in the stored column's type: the
-    live tail re-reads from that midnight. Overlap is duplicates only."""
-    return _date_bound(form, bookmark.date())
+def watermark_sql(form: dict[str, Any], bookmark: datetime, lookback_days: int = 0) -> str:
+    """The day the bookmark falls on LESS the late-arrival lookback, in the
+    stored column's type: the live tail re-reads from that midnight.
+
+    The refresh applies the same lookback to its floors (`refresh_sql`) and
+    the tail must apply it too. Without it, a row that lands after the scan
+    carrying an event time just before the bookmark sits in neither side -
+    not in the index (the scan had passed it) and not in the tail (`>`
+    bookmark) - so a value goes missing until some later refresh folds it
+    in. Subtracting the lookback also swamps the day floor's reporting-
+    timezone offset (at most 14 h, against a default of 3 days). The
+    overlap is duplicates only, and the engine is proven indifferent."""
+    day = (bookmark - timedelta(days=max(0, lookback_days))).date()
+    return _date_bound(form, day)
 
 
 # ---------------------------------------------------------------- plan
@@ -528,6 +555,11 @@ class Plan:
     settings: dict[str, Any]
     notes: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
+    # Failures of the registry write, kept apart from column failures: the
+    # index IS in place when one of these happens, so reporting it as
+    # "could not index `registry`; this run read the full history" would be
+    # false twice over.
+    registry_failures: list[str] = field(default_factory=list)
     built: list[str] = field(default_factory=list)
 
     def builds(self) -> list[ColumnPlan]:
@@ -549,7 +581,7 @@ class Plan:
             return None
         return (
             values_relation_sql(form, col.column.key, names),
-            watermark_sql(form, col.bookmark),
+            watermark_sql(form, col.bookmark, self.settings["lookback_days"]),
         )
 
 
@@ -697,7 +729,14 @@ def build_plan(
                 plan.columns.append(ColumnPlan(col, "live", NOT_CHECKED))
                 continue
         else:
-            density = _probe_density(form, run, col.expr, probes, col.key, now)
+            try:
+                density = _probe_density(form, run, col.expr, probes, col.key, now)
+            except AdapterError as exc:
+                # The probe is a billed query over the events table: a cap
+                # rejection or a permission error there must leave the chart
+                # alone, exactly as a failed build does.
+                plan.columns.append(ColumnPlan(col, "live", f"could not measure the column: {exc}"))
+                continue
         if density is not None and density > DENSITY_MAX:
             plan.columns.append(
                 ColumnPlan(col, "live", "the value is on most rows already")
@@ -799,6 +838,22 @@ def apply_plan(
         return registry
     fp = config_fingerprint(form)
     if registry.get("fp") != fp:
+        # The mapping moved. Every column in the table was built under the
+        # old one, and this plan rebuilds only the columns THIS chart uses:
+        # resetting the registry alone would leave the others' rows behind
+        # with no entry - invisible to the Setup list and to the sweep - and
+        # the next chart to use one would union two generations of fc_at
+        # under a single fc_column. The table is derived, so drop it whole
+        # and let each column come back on the chart that needs it.
+        if registry.get("columns"):
+            try:
+                run(drop_table_sql(form))
+            except AdapterError as exc:
+                if not is_missing_relation(exc):
+                    plan.registry_failures.append(str(exc))
+            for cp in plan.builds():
+                cp.action = "build"
+                cp.bookmark = None
         registry = {"v": REGISTRY_VERSION, "fp": fp, "columns": {}, "probes": registry.get("probes") or {}}
         plan.registry = registry
     cols: dict[str, Any] = registry.setdefault("columns", {})
@@ -862,7 +917,7 @@ def apply_plan(
     try:
         run(registry_comment_sql(form, registry))
     except AdapterError as exc:
-        plan.failures.append(f"registry: {exc}")
+        plan.registry_failures.append(str(exc))
     return registry
 
 
@@ -959,14 +1014,20 @@ def built_note(plan: Plan, *, bytes_after: int | None = None) -> str:
 
 
 def failure_note(plan: Plan) -> str:
-    if not plan.failures:
-        return ""
-    first = plan.failures[0]
-    label, _, why = first.partition(": ")
-    return (
-        f"Could not index `{label}`: {why} "
-        f"This run read the full history instead; the chart is correct."
-    )
+    if plan.failures:
+        label, _, why = plan.failures[0].partition(": ")
+        return (
+            f"Could not index `{label}`: {why} "
+            f"This run read the full history instead; the chart is correct."
+        )
+    if plan.registry_failures:
+        # The index is in place and this run used it; only its bookkeeping
+        # failed to save, so the next run may prepare the column again.
+        return (
+            f"Saved no record of the prepared columns: {plan.registry_failures[0]} "
+            f"The chart is correct; a later run may prepare them again."
+        )
+    return ""
 
 
 def _gb(n: int) -> str:
@@ -1129,14 +1190,18 @@ def apply_action(
     cols: dict[str, Any] = registry.setdefault("columns", {})
     if key not in cols:
         raise ValueError("no such indexed column")
-    try:
-        run(delete_column_sql(form, key))
-    except AdapterError as exc:
-        if not is_missing_relation(exc):
-            raise
     del cols[key]
     if cols:
+        # Registry first, rows second. The other order leaves the authority
+        # claiming a bookmark for rows that are already gone when the second
+        # statement fails; a later run then attaches to an empty column and
+        # reads only the live tail - silently wrong, with no error.
         run(registry_comment_sql(form, registry))
+        try:
+            run(delete_column_sql(form, key))
+        except AdapterError as exc:
+            if not is_missing_relation(exc):
+                raise
     else:
         run(drop_table_sql(form))
     return registry

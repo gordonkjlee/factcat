@@ -8,6 +8,7 @@ broken SQL was emitted silently. These tests turn that warning into a failure.
 
 from __future__ import annotations
 
+import json
 import logging
 
 import re
@@ -28,6 +29,7 @@ from factcat._emit import GRID_RELATION, transpile_with_grid
 from factcat.dialects import (
     as_instant,
     create_or_replace_relation,
+    set_relation_comment,
     hour_trunc,
     period_start_shifted,
     splice_placeholders,
@@ -940,3 +942,41 @@ def test_missing_with_clause_is_loud_not_silent():
     """A query the grid cannot attach to must raise, never emit broken SQL."""
     with pytest.raises(RuntimeError, match="WITH clause"):
         transpile_with_grid("SELECT 1 AS x", "duckdb", 2)
+
+
+def _as_the_warehouse_stores_it(body: str) -> str:
+    """A single-quoted literal as BigQuery and Snowflake hand it back: both
+    process backslash escapes inside the quotes."""
+    unescape = {"n": "\n", "t": "\t", "\\": "\\", "'": "'", '"': '"', "`": "`"}
+    out: list[str] = []
+    i = 0
+    while i < len(body):
+        c = body[i]
+        if c == "\\" and i + 1 < len(body):
+            out.append(unescape.get(body[i + 1], "\\" + body[i + 1]))
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+@pytest.mark.parametrize("dialect", sorted(SUPPORTED))
+@pytest.mark.parametrize(
+    "note",
+    [
+        json.dumps({"a": 'say "hi"'}),                       # JSON escapes an embedded quote
+        json.dumps({"e": "REGEXP_EXTRACT(x, r'\\d+')"}),     # a backslash and a quote together
+        json.dumps({"q": "it's"}),                           # a bare apostrophe
+    ],
+)
+def test_a_relation_comment_survives_the_warehouses_own_unescaping(dialect, note):
+    """The registry travels as JSON inside a table comment. Escaping only the
+    quote loses every backslash the JSON needed: the document stops parsing,
+    the registry reads back empty, and every run rebuilds an index that is
+    already there. Mutation: escape only the quote in _comment_literal."""
+    stmt = set_relation_comment('"d"."s"."t"', note, dialect)
+    body = stmt[stmt.index("'") + 1 : stmt.rindex("'")]
+    stored = _as_the_warehouse_stores_it(body)
+    assert stored == note
+    assert json.loads(stored)

@@ -503,10 +503,22 @@ def timestamp_at_date(
 
 
 def _comment_literal(comment: str | None) -> str | None:
+    """A note as the body of a single-quoted SQL literal, escaped so the
+    warehouse hands back exactly the bytes we wrote.
+
+    Both shipped kinds process backslash escapes inside a single-quoted
+    string, so escaping the quote alone is not enough. A registry document
+    is JSON; JSON writes an embedded quote as backslash-quote; the warehouse
+    then eats that backslash and stores a bare quote, the document stops
+    parsing, the registry reads back empty, and every run rebuilds an index
+    that is already there. Escape the backslash first, then the quote, both
+    in backslash form - documented on BigQuery and on Snowflake, where
+    doubling the quote is not a valid escape inside a GoogleSQL literal.
+    """
     note = (comment or "").strip()
     if not note:
         return None
-    return note.replace("'", "''")
+    return note.replace("\\", "\\\\").replace("'", "\'")
 
 
 def create_or_replace_relation(

@@ -571,3 +571,111 @@ def test_builds_are_automatic_without_a_dry_run_too():
     plan = build_plan(_form("snowflake"), _Run(density=0.01), now=NOW, allow_probe=True)
     assert plan.columns[0].action == "build"
     assert "auto_ok" not in build_plan.__code__.co_varnames
+
+
+def test_the_tail_starts_a_lookback_before_the_bookmark():
+    """The refresh floors subtract the late-arrival lookback; the tail must
+    subtract it too, or a row that lands after the scan with an event time
+    just before the bookmark is in neither side. Mutation: drop the
+    subtraction in watermark_sql."""
+    form = _form(managed_lookback_days=3)
+    bookmark = datetime(2026, 9, 10, 6, 0, tzinfo=timezone.utc)
+    assert "2026-09-07" in managed.watermark_sql(form, bookmark, 3)
+    assert "2026-09-10" in managed.watermark_sql(form, bookmark, 0)
+    # and the plan hands the setting through, not a zero
+    reg = _registry(form, bookmark=bookmark.isoformat())
+    plan = build_plan({**form, "managed_tables": reg}, None, now=NOW)
+    att = plan.attachment(form, "plan", "plan", "any", None)
+    assert att is not None and "2026-09-07" in att[1]
+
+
+def test_a_mapping_change_drops_the_whole_index():
+    """A chart rebuilds only the columns it uses. Resetting the registry
+    without dropping the table would leave every other column's rows behind
+    with no entry - unswept, unlistable, and unioned as a second generation
+    of fc_at the next time that column is charted. Mutation: reset the
+    registry without the drop."""
+    form = _form()
+    reg = _registry(form)
+    reg["columns"]["utm"] = {**reg["columns"]["plan"], "label": "utm", "expr": "utm"}
+    reg["fp"] = {"moved": True}
+    run = _Run(density=0.01)
+    plan = build_plan({**form, "managed_tables": reg}, run, now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "rebuild"
+    registry = apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
+    ups = [c.upper().strip() for c in run.calls]
+    assert any(u.startswith("DROP TABLE") for u in ups), "stale generations were left in the table"
+    assert ups.index(next(u for u in ups if u.startswith("DROP TABLE"))) < ups.index(
+        next(u for u in ups if u.startswith("CREATE TABLE"))
+    )
+    # the rebuild became a build: there is nothing left to delete per column
+    assert not any(u.startswith("DELETE FROM") for u in ups)
+    assert set(registry["columns"]) == {"plan"}
+
+
+def test_a_registry_write_failure_is_not_reported_as_a_column():
+    """The index is in place when only the description write fails: saying
+    "could not index `registry`; this run read the full history" is false
+    twice. Mutation: put registry failures back in plan.failures."""
+    form = _form()
+    plan = Plan([], None, None, {}, settings(form))
+    plan.registry_failures = ["Access Denied: table fc_column_index"]
+    note = failure_note(plan)
+    assert note.startswith("Saved no record of the prepared columns:")
+    assert "The chart is correct" in note
+    assert "index `registry`" not in note
+    assert "read the full history" not in note
+    plan.failures = ["plan: boom"]
+    assert failure_note(plan).startswith("Could not index `plan`: boom")
+
+
+def test_the_registry_round_trips_through_a_table_comment():
+    """End to end on the real fingerprint: the document we write is the
+    document we read back. Mutation: put the quoted ident back in the
+    fingerprint, or escape only the quote in _comment_literal."""
+    for kind in ("bigquery", "snowflake"):
+        form = _form(kind)
+        registry = {"v": 1, "fp": config_fingerprint(form),
+                    "columns": {"k": {"expr": "JSON_VALUE(props, '$.plan')", "label": "plan"}}}
+        note = registry_comment(registry)
+        stmt = managed.registry_comment_sql(form, registry)
+        body = stmt[stmt.index("'") + 1 : stmt.rindex("'")]
+        stored = []
+        i = 0
+        while i < len(body):
+            if body[i] == "\\" and i + 1 < len(body):
+                stored.append({"n": "\n", "t": "\t", "\\": "\\", "'": "'", '"': '"', "`": "`"}.get(body[i + 1], "\\" + body[i + 1]))
+                i += 2
+                continue
+            stored.append(body[i])
+            i += 1
+        text = "".join(stored)
+        assert text == note
+        assert parse_registry(text).get("columns", {}).get("k", {}).get("expr") == "JSON_VALUE(props, '$.plan')"
+    # and the fingerprint carries no quoting to escape in the first place
+    assert '"' not in config_fingerprint(_form())["dest"]
+
+
+def test_a_failed_probe_leaves_the_chart_alone():
+    """The density probe is a billed query over the events table. A cap
+    rejection there must turn the column live, not fail the run.
+    Mutation: drop the try/except around _probe_density."""
+    form = _form()
+    run = _Run(density=0.01, fail_on=("fc_present",))
+    plan = build_plan(form, run, now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "live"
+    assert "could not measure" in plan.columns[0].reason
+
+
+def test_an_expression_slot_is_never_labelled_none():
+    """A breakdown written as SQL has no label; the key is the only name a
+    person can be shown. Mutation: IndexColumn(..., label, ...)."""
+    form = _form(breakdowns=[{"breakdown_expr": "JSON_VALUE(props, '$.plan')",
+                              "value_at": "first_record", "if_missing": "fill",
+                              "fill_from_event": "subscription_started"}])
+    cols = expensive_columns(form)
+    assert cols and cols[0].label
+    assert cols[0].label == cols[0].key
+    plan = Plan([], None, None, {}, settings(form))
+    plan.built = [cols[0].label]
+    assert "None" not in built_note(plan)
