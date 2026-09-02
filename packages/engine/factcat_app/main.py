@@ -44,6 +44,7 @@ from .extras import extra_commands, install_command, run_install
 from .config import load, mapping_ready, save, warehouse_kind
 from .filters import filter_ui
 from .sql_display import apply_sql_keyword_case, sql_chrome, sql_plain
+from . import managed as managed_mod
 from . import prefs as prefs_mod
 from .query import (
     REPORTING_TIMEZONES,
@@ -554,9 +555,19 @@ async def api_estimate(request: Request) -> JSONResponse:
                 }
             )
         conn = connection_from_form(form)
-        sql = events_sql_from_form(form)
+        # An estimate is a free dry run: the plan reads only cached facts
+        # (no probe, no bookmark query) and nothing is written.
+        plan = managed_mod.build_plan(form, None)
+        sql = events_sql_from_form(form, managed=plan)
         warehouse = await run_in_threadpool(connect, kind, **conn)
         result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
+        build_bytes = None
+        if plan.builds():
+            build_bytes = 0
+            for cp in plan.builds():
+                stmt = managed_mod.backfill_sql(form, cp.column.key, cp.column.expr)
+                probe = await run_in_threadpool(warehouse.run, stmt, dry_run=True)
+                build_bytes += int(probe.bytes_processed or 0)
     except BytesCapError as exc:
         return JSONResponse(
             _estimate_payload(
@@ -567,24 +578,65 @@ async def api_estimate(request: Request) -> JSONResponse:
         )
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _fail(exc, sql)
-    return JSONResponse(
-        _estimate_payload(
-            result.bytes_processed, conn.get("maximum_bytes_billed"), over_cap=False
-        )
+    query_bytes = result.bytes_processed
+    total = query_bytes
+    if build_bytes is not None and query_bytes is not None:
+        total = query_bytes + build_bytes
+    payload = _estimate_payload(
+        total, conn.get("maximum_bytes_billed"), over_cap=False
     )
+    if plan.builds():
+        payload["managed_note"] = managed_mod.notes_for(
+            plan, bytes_build=build_bytes, bytes_after=query_bytes
+        )
+        payload["managed_build"] = [cp.column.label for cp in plan.builds()]
+    return JSONResponse(payload)
 
 
 @app.post("/api/run")
 async def api_run(request: Request) -> JSONResponse:
     form = await request.json()
     sql = None
+    managed_note = ""
+    managed_failed = ""
     try:
         form = await run_in_threadpool(ensure_epoch, form)
-        sql = events_sql_from_form(form)
         conn = connection_from_form(form)
-        save(form)
+        cfg = load()
+        # The config file owns the registry mirror and the sweep clock; the
+        # request carries the chart, not the bookkeeping.
+        form = {
+            **form,
+            "managed_tables": cfg.get("managed_tables") or {},
+            "managed_last_sweep": cfg.get("managed_last_sweep") or "",
+            "write_access_status": cfg.get("write_access_status") or "",
+        }
+        save({k: v for k, v in form.items() if k not in ("managed_tables", "managed_last_sweep")})
         warehouse = await run_in_threadpool(connect, form_kind(form), **conn)
+        extra_save: dict[str, Any] = {}
+        if managed_mod.index_table(form) is not None:
+            registry, _dropped, ran = await run_in_threadpool(
+                managed_mod.sweep, form, warehouse.run
+            )
+            if ran:
+                form = {**form, "managed_tables": registry}
+                extra_save["managed_tables"] = registry
+                extra_save["managed_last_sweep"] = managed_mod._now_iso(None)
+        plan = await run_in_threadpool(
+            managed_mod.build_plan, form, warehouse.run, allow_probe=True
+        )
+        if plan.builds():
+            registry = await run_in_threadpool(managed_mod.apply_plan, plan, form, warehouse.run)
+            extra_save["managed_tables"] = registry
+            managed_failed = managed_mod.failure_note(plan)
+            managed_note = managed_mod.built_note(plan)
+        sql = events_sql_from_form(form, managed=plan)
         result = await run_in_threadpool(warehouse.run, sql)
+        registry = await run_in_threadpool(managed_mod.bump_usage, plan, form, warehouse.run)
+        if plan.attachable():
+            extra_save["managed_tables"] = registry
+        if extra_save:
+            save(extra_save)
     except BytesCapError as exc:
         # Distinguishable from any other 400 so the report can offer the
         # override instead of showing a raw warehouse rejection.
@@ -607,13 +659,61 @@ async def api_run(request: Request) -> JSONResponse:
         raw_rows.append(item)
     rows = fill_cyclic_buckets(annotate_incomplete(raw_rows, form), form)
     limit = query_row_limit(form)
-    return JSONResponse({
+    body: dict[str, Any] = {
         "ok": True,
         "sql": sql,
         "rows": rows,
         "truncated": len(rows) >= limit,
         "limit": limit,
-    })
+    }
+    if managed_failed:
+        body["managed_failed"] = managed_failed
+    if managed_note:
+        body["managed_note"] = managed_note
+    return JSONResponse(body)
+
+
+@app.post("/api/managed")
+async def api_managed(request: Request) -> JSONResponse:
+    """The Managed tables section: settings, rows, sizes. Metadata calls
+    only; the registry mirror in the config file is refreshed from the
+    warehouse copy, which is the authority."""
+    form = await request.json()
+    cfg = load()
+    form = {**cfg, **form}
+    try:
+        payload = await run_in_threadpool(managed_mod.list_payload, form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc, form)
+    if payload.get("registry") is not None:
+        save({"managed_tables": payload["registry"]})
+    return JSONResponse({"ok": True, **payload})
+
+
+@app.post("/api/managed/action")
+async def api_managed_action(request: Request) -> JSONResponse:
+    """Refresh / rebuild / drop / index / pin / override one indexed column."""
+    form = await request.json()
+    cfg = load()
+    action = str(form.get("action") or "").strip().lower()
+    merged = {**cfg, **{k: v for k, v in form.items() if k not in ("action", "key", "expr", "label", "value")}}
+    try:
+        conn = connection_from_form(merged, apply_scan_cap=False)
+        warehouse = await run_in_threadpool(connect, form_kind(merged), **conn)
+        registry = await run_in_threadpool(
+            managed_mod.apply_action,
+            merged,
+            warehouse.run,
+            action=action,
+            key=str(form.get("key") or ""),
+            expr=str(form.get("expr") or ""),
+            label=str(form.get("label") or ""),
+            value=form.get("value"),
+        )
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc, merged)
+    save({"managed_tables": registry})
+    return JSONResponse({"ok": True, "registry": registry})
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

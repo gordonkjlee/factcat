@@ -114,4 +114,37 @@ source cannot back a view). Later Refresh reads the view, or rebuilds the
 table snapshot. The object stores a fingerprint of the mapped table and
 event-name column. Lookback does not apply (and is hidden here) while that
 dest is set. Catalog jobs do not use the scan cap. Events then filters
-`event_name = '…'`.
+`event_name = '…'`. The view is a census — names, rows per month, first
+and last seen — refreshed daily (`refresh_interval_minutes = 1440`), never
+BigQuery's 30-minute default: each refresh over a rebuilt source table is a
+full recompute of two columns' history.
+
+## Factcat-managed tables
+
+With a write project and dataset set, Factcat keeps `fc_column_index`
+there: for a few breakdown columns, every row where the column had a
+value (entity, instant, value, event name), day-partitioned on the
+instant and clustered by column and entity. The expensive Value-at modes
+read it plus the live rows after its bookmark, bounded on the bare
+timestamp column so partitions prune; results are exact regardless of how
+stale the index is.
+
+**Mode** Automatic prepares a sparse column the first time an expensive
+mode uses it (that run costs about one full-history scan of the column,
+shown on the estimate's second line; later runs read the index), refreshes
+it when older than **Refresh when older than**, and drops columns no
+chart has used for **Drop unused after** on a daily sweep. **Late-arrival
+lookback** is how late a row can land after its event time; a refresh
+re-reads that much before each event name's bookmark. Dense columns (the
+value on more than about a quarter of recent rows) are not indexed
+automatically — **Value at: each event** already has them; **Index a
+column now** overrides that. Off builds nothing new and drops nothing.
+
+The list shows size and age per table, with Refresh, Rebuild, Drop, Pin
+(never drop) and per-column overrides. Its bookkeeping (fingerprints,
+last use, census snapshot) lives in the table's own description; a
+mapping change rebuilds, a new event name with backfilled history is
+back-filled on the next refresh, a name whose row count shrank is rebuilt.
+Needs `bigquery.tables.create` on the dataset (the rights check above).
+A failed build never blocks a chart: it runs on the full history and the
+run row says why.

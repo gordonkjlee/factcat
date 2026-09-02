@@ -76,6 +76,16 @@ DEFAULTS: dict[str, Any] = {
     "write_dataset": "",
     "write_database": "",
     "write_schema": "",
+    # Factcat-managed tables (item 12): the column index and its knobs.
+    # ``managed_tables`` is a status MIRROR of the registry the index table
+    # carries in its own description; the warehouse copy is the authority.
+    "managed_mode": "auto",
+    "managed_drop_days": 60,
+    "managed_refresh_days": 7,
+    "managed_lookback_days": 3,
+    "managed_tables": {},
+    "managed_last_sweep": "",
+    "write_access_status": "",
     "bytes_cap_gb": 10,
     "query_row_limit": 1_000_000,
     "breakdown_by_series": False,

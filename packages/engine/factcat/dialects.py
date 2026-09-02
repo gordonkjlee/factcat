@@ -502,6 +502,13 @@ def timestamp_at_date(
     return f"TIMESTAMP({date_sql}, '{tz}')"
 
 
+def _comment_literal(comment: str | None) -> str | None:
+    note = (comment or "").strip()
+    if not note:
+        return None
+    return note.replace("'", "''")
+
+
 def create_or_replace_relation(
     dest: str,
     select_sql: str,
@@ -509,24 +516,79 @@ def create_or_replace_relation(
     *,
     materialized: bool,
     comment: str | None = None,
+    refresh_minutes: int | None = None,
 ) -> str:
     """CREATE OR REPLACE a cache relation whose body is ``select_sql``.
 
     BigQuery and Snowflake share the CREATE spelling. ``materialized`` is a
     materialized view the warehouse can refresh; otherwise a table.
     ``comment`` is the cache fingerprint (JSON), stored as a BigQuery
-    description or a Snowflake COMMENT.
+    description or a Snowflake COMMENT. ``refresh_minutes`` pins a
+    BigQuery materialized view's auto-refresh cadence: the warehouse
+    default is 30 minutes, and every refresh of a view over a
+    replace-daily base is a full recompute — a census read a few times a
+    day must not be recomputed 48 times a day. Snowflake materialized
+    views refresh on their own schedule; there is no cadence to pin.
     """
     kind = "MATERIALIZED VIEW" if materialized else "TABLE"
     head = f"CREATE OR REPLACE {kind} {dest}"
-    note = (comment or "").strip()
-    if note:
-        safe = note.replace("'", "''")
-        if dialect == "snowflake":
+    safe = _comment_literal(comment)
+    if dialect == "snowflake":
+        if safe:
             head += f" COMMENT = '{safe}'"
-        else:
-            head += f" OPTIONS(description='{safe}')"
+    else:
+        options: list[str] = []
+        if safe:
+            options.append(f"description='{safe}'")
+        if materialized and refresh_minutes is not None:
+            options.append("enable_refresh=true")
+            options.append(f"refresh_interval_minutes={int(refresh_minutes)}")
+        if options:
+            head += " OPTIONS(" + ", ".join(options) + ")"
     return f"{head} AS {select_sql}"
+
+
+def create_table_as(
+    dest: str,
+    select_sql: str,
+    dialect: str,
+    *,
+    partition: str | None = None,
+    cluster: tuple[str, ...] = (),
+    comment: str | None = None,
+) -> str:
+    """CREATE TABLE IF NOT EXISTS ``dest`` shaped by ``select_sql``.
+
+    Hand-written per dialect because layout clauses are not portable:
+    BigQuery ``PARTITION BY expr CLUSTER BY a, b``, Snowflake
+    ``CLUSTER BY (a, b)``; every other dialect gets the plain form.
+    sqlglot has no cross-dialect model for table partitioning options,
+    which is the bar this file sets for a hand-written construct.
+    """
+    head = f"CREATE TABLE IF NOT EXISTS {dest}"
+    safe = _comment_literal(comment)
+    if dialect == "bigquery":
+        if partition:
+            head += f" PARTITION BY {partition}"
+        if cluster:
+            head += " CLUSTER BY " + ", ".join(cluster)
+        if safe:
+            head += f" OPTIONS(description='{safe}')"
+    elif dialect == "snowflake":
+        if cluster:
+            head += " CLUSTER BY (" + ", ".join(cluster) + ")"
+        if safe:
+            head += f" COMMENT = '{safe}'"
+    return f"{head} AS {select_sql}"
+
+
+def set_relation_comment(dest: str, comment: str, dialect: str) -> str:
+    """Replace a table's description / comment. A metadata statement on
+    both shipped kinds: no rows scanned, no data touched."""
+    safe = _comment_literal(comment) or ""
+    if dialect == "bigquery":
+        return f"ALTER TABLE {dest} SET OPTIONS(description='{safe}')"
+    return f"COMMENT ON TABLE {dest} IS '{safe}'"
 
 
 def _civil_datetime(expr: str, dialect: str, timezone: str, time_kind: str) -> str:

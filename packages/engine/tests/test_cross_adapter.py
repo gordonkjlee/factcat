@@ -283,3 +283,47 @@ def test_setup_docs_cover_every_adapter():
         assert f"pip install factcat[{kind}]" not in text, (
             f"Setup guide must not duplicate the extra banner: {path}"
         )
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
+def test_values_table_compiles_through_the_form_on_every_adapter(kind, sqlglot_warnings):
+    """Item 12: an attached column index reaches the emitter through the
+    form path on both kinds — the case PR 1's review flagged as owed."""
+    from datetime import datetime, timezone
+
+    from factcat_app import managed
+
+    extra = {
+        "event_column": "event_name",
+        "breakdowns": [
+            {"breakdown_column": "plan", "value_at": "event", "if_missing": "fill",
+             "fill_from_event": "__charted__"}
+        ],
+        "event_values": ["login"],
+    }
+    if kind == "snowflake":
+        extra.update(write_database="ANALYTICS", write_schema="FC")
+    else:
+        extra.update(write_project="dest-proj", write_dataset="analytics_fc")
+    form = _form(kind, **extra)
+    now = datetime(2026, 9, 2, tzinfo=timezone.utc)
+    form["managed_tables"] = {
+        "v": 1, "fp": managed.config_fingerprint(form),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": now.isoformat(),
+                             "refreshed_at": now.isoformat(), "last_used_at": now.isoformat(),
+                             "bookmark": now.isoformat(), "use_count": 1, "pinned": False, "overrides": {}}},
+    }
+    plan = managed.build_plan(form, None, now=now)
+    assert [c.action for c in plan.columns] == ["attach"]
+    sql = events_sql_from_form(form, managed=plan)
+    assert "fc_column_index" in sql and "fc_values" in sql
+    assert "'login'" in sql  # the charted narrowing is baked into the relation
+    assert sqlglot_warnings.messages == [], sqlglot_warnings.messages
+    # the index's own statements compile on this kind too
+    for stmt in (
+        managed.ensure_table_sql(form, form["managed_tables"]),
+        managed.backfill_sql(form, "plan", "plan"),
+        managed.registry_comment_sql(form, form["managed_tables"]),
+    ):
+        assert "fc_column_index" in stmt
+    assert sqlglot_warnings.messages == []

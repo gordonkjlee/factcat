@@ -78,7 +78,11 @@ DEFAULT_QUERY_ROW_LIMIT = 1_000_000
 # job does not use the report scan cap; lookback is the cost control.
 CATALOG_LOOKBACK_DAYS = 90
 EVENT_NAME_CACHE_TABLE = "fc_event_names"
-EVENT_NAME_CACHE_VERSION = 1
+# Materialized-view auto-refresh cadence (BigQuery). Daily: a census is
+# read a few times a day, and each refresh over a replace-daily base is
+# a full recompute. Never the 30-minute warehouse default.
+EVENT_NAME_CACHE_REFRESH_MINUTES = 1440
+EVENT_NAME_CACHE_VERSION = 2
 
 
 def _ident_table(value: str, label: str) -> str:
@@ -872,23 +876,22 @@ def _charted_event_names(form: dict[str, Any]) -> list[str]:
     return names
 
 
-def _slot_fill_from(
+def _slot_fill_names(
     slot: dict[str, Any],
     form: dict[str, Any],
     series_unit: dict[str, Any] | None = None,
-) -> str | None:
-    """Which rows may stamp a value: an event pick, a sugar sentinel
-    (charted events / this series' events), or a SQL predicate.
-
-    Event names only — series property filters never narrow the stamp
-    stream, and the date range never applies to it.
-    """
+) -> tuple[str, list[str] | None]:
+    """Which rows may supply a value, as ``(kind, names)``: ``("any",
+    None)`` for no narrowing, ``("names", [...])`` for an event pick or a
+    sugar sentinel resolved to names, ``("expr", None)`` for a SQL
+    predicate. One definition: the WHERE clause and the column index
+    both narrow from this."""
     expr = _single_expr(str(slot.get("fill_from_expr") or ""), "fill from")
     if expr:
-        return expr
+        return "expr", None
     event = str(slot.get("fill_from_event") or "").strip()
     if not event:
-        return None
+        return "any", None
     event_column = (form.get("event_column") or "").strip()
     if not event_column:
         raise ValueError("Fill from an event requires an event column")
@@ -905,24 +908,33 @@ def _slot_fill_from(
             raise ValueError(
                 "Fill from charted events needs a charted event name"
             )
-        return _event_names_clause(event_column, names)
-    return _event_names_clause(event_column, [event])
+        return "names", names
+    return "names", [event]
 
 
-def _slot_breakdown(
-    expr: str,
+def _slot_fill_from(
     slot: dict[str, Any],
     form: dict[str, Any],
-    anchors: tuple[str, str | None],
     series_unit: dict[str, Any] | None = None,
-) -> str | Breakdown:
-    """Map (Value at × If missing × Fill from) onto the library config.
+) -> str | None:
+    """Which rows may supply a value: an event pick, a sugar sentinel
+    (charted events / this series' events), or a SQL predicate.
 
-    Chrome the UI hides for a combination (Fill from under each-event +
-    leave, If missing on the ever anchors) is ignored, not an error —
-    hidden fields keep whatever state they last had. The all-default slot
-    returns the plain string so untouched reports build the same spec.
+    Event names only — series property filters never narrow the value
+    stream, and the date range never applies to it.
     """
+    kind, names = _slot_fill_names(slot, form, series_unit)
+    if kind == "expr":
+        return _single_expr(str(slot.get("fill_from_expr") or ""), "fill from")
+    if kind == "any":
+        return None
+    event_column = _ident_column(str(form.get("event_column") or ""), "event_column")
+    return _event_names_clause(event_column, names or [])
+
+
+def _slot_semantics(slot: dict[str, Any], form: dict[str, Any]) -> tuple[str, str]:
+    """``(value_at, if_missing)`` for a slot, legacy spec-level
+    ``breakdown_at`` folded in. Validated; shared with the column index."""
     value_at = str(slot.get("value_at") or "").strip().lower()
     missing = str(slot.get("if_missing") or "").strip().lower()
     if not value_at:
@@ -937,12 +949,43 @@ def _slot_breakdown(
     missing = missing or "null"
     if missing not in ("null", "fill"):
         raise ValueError("if_missing must be null or fill")
+    return value_at, missing
+
+
+def _slot_breakdown(
+    expr: str,
+    slot: dict[str, Any],
+    form: dict[str, Any],
+    anchors: tuple[str, str | None],
+    series_unit: dict[str, Any] | None = None,
+    *,
+    label: str = "",
+    managed: Any = None,
+) -> str | Breakdown:
+    """Map (Value at × If missing × Fill from) onto the library config.
+
+    Chrome the UI hides for a combination (Fill from under each-event +
+    leave, If missing on the ever anchors) is ignored, not an error —
+    hidden fields keep whatever state they last had. The all-default slot
+    returns the plain string so untouched reports build the same spec.
+
+    ``managed`` is a ``managed.Plan``: when it holds an index for this
+    column, the Breakdown reads its recorded values from that relation
+    (``values_table``) plus the live rows after its bookmark.
+    """
+    value_at, missing = _slot_semantics(slot, form)
     if value_at == "event" and missing == "null":
         # The shipped default. Fill from is hidden chrome here, so it is
         # not even parsed — a stale fill_from_event must never fail a run
         # the code path is about to discard.
         return expr
     fill_from = _slot_fill_from(slot, form, series_unit)
+    attach: dict[str, Any] = {}
+    if managed is not None:
+        fill_kind, fill_names = _slot_fill_names(slot, form, series_unit)
+        found = managed.attachment(form, expr, label, fill_kind, fill_names)
+        if found is not None:
+            attach = {"values_table": found[0], "values_watermark": found[1]}
     if value_at == "event":
         # The app's contract is own-value-first: "Value at: each event"
         # stays literally true even when Fill from names an authoritative
@@ -954,11 +997,12 @@ def _slot_breakdown(
             at="carried",
             fill_from=fill_from,
             own_value_first=fill_from is not None,
+            **attach,
         )
     if value_at == "first_record":
-        return Breakdown(expr, at="first", fill_from=fill_from)
+        return Breakdown(expr, at="first", fill_from=fill_from, **attach)
     if value_at == "latest_record":
-        return Breakdown(expr, at="last", fill_from=fill_from)
+        return Breakdown(expr, at="last", fill_from=fill_from, **attach)
     start_anchor, end_anchor = anchors
     if value_at == "range_start":
         # The start boundary is inside the window: inclusive until.
@@ -968,20 +1012,22 @@ def _slot_breakdown(
             until=start_anchor,
             fill_from=fill_from,
             backfill=missing == "fill",
+            **attach,
         )
     if end_anchor is None:
         # The window runs to now: "at range end" is the latest record,
-        # and there is no later stamp for If-missing to fill from.
-        return Breakdown(expr, at="last", fill_from=fill_from)
+        # and there is no later value for If-missing to fill from.
+        return Breakdown(expr, at="last", fill_from=fill_from, **attach)
     # The end boundary is EXCLUSIVE (the window is `< end`): strict
-    # before, so a stamp at exactly that instant stays outside the
-    # window it closes and "never reads past the range" stays true.
+    # before, so a value recorded at exactly that instant stays outside
+    # the window it closes and "never reads past the range" stays true.
     return Breakdown(
         expr,
         at="last",
         before=end_anchor,
         fill_from=fill_from,
         backfill=missing == "fill",
+        **attach,
     )
 
 
@@ -999,7 +1045,10 @@ def _breakdown_slot_dicts(src: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _breakdown_from_form(
-    form: dict[str, Any], *, unit: dict[str, Any] | None = None
+    form: dict[str, Any],
+    *,
+    unit: dict[str, Any] | None = None,
+    managed: Any = None,
 ) -> tuple[tuple[str | Breakdown, ...], tuple[str, ...] | None]:
     """Fill ``breakdowns`` from slots (column, JSON key, or SQL). Expression wins.
 
@@ -1031,7 +1080,13 @@ def _breakdown_from_form(
         # arm-specific stamp stream (one legend label, one meaning).
         entries.append(
             _slot_breakdown(
-                expr, slot, form, anchors, unit if per_series else None
+                expr,
+                slot,
+                form,
+                anchors,
+                unit if per_series else None,
+                label=label,
+                managed=managed,
             )
         )
         labels.append(label)
@@ -1814,7 +1869,10 @@ def _measure_from_form(
 
 
 def spec_from_form(
-    form: dict[str, Any], *, unit: dict[str, Any] | None = None
+    form: dict[str, Any],
+    *,
+    unit: dict[str, Any] | None = None,
+    managed: Any = None,
 ) -> EventsSpec:
     table = _ident_table(str(form.get("table") or ""), "table")
     entity = (form.get("entity") or "").strip()
@@ -1853,7 +1911,17 @@ def spec_from_form(
     if on == "property" and not of:
         raise ValueError("of is required for property measures")
 
-    breakdowns, breakdown_labels = _breakdown_from_form(form, unit=unit)
+    breakdowns, breakdown_labels = _breakdown_from_form(
+        form, unit=unit, managed=managed
+    )
+    # The live-tail bound compares the stored column so partitions prune;
+    # only set when an index is attached, so every other spec is unchanged.
+    attached = any(
+        isinstance(b, Breakdown) and b.values_table is not None for b in breakdowns
+    )
+    event_time_column = (
+        _window_time_lhs(event_time_col, form) if attached else None
+    )
     # Legacy payloads still send a spec-level breakdown_at; slots without
     # a value_at already folded it in (_slot_breakdown). The spec must NOT
     # receive the legacy value: a plain-string entry means an explicit
@@ -1888,6 +1956,7 @@ def spec_from_form(
         breakdown_labels=breakdown_labels,
         top_n=_top_n(form),
         include_other=_bool(form, "include_other", True),
+        event_time_column=event_time_column,
     )
 
 
@@ -1938,12 +2007,16 @@ def _series_arm_sql(
     )
 
 
-def events_sql_from_form(form: dict[str, Any]) -> str:
-    """Events SQL with a result-row crash fuse (most recent rows)."""
+def events_sql_from_form(form: dict[str, Any], *, managed: Any = None) -> str:
+    """Events SQL with a result-row crash fuse (most recent rows).
+
+    ``managed`` is a ``managed.Plan`` (or None): columns it holds an index
+    for read their recorded values from ``fc_column_index``.
+    """
     dialect = form_kind(form)
     units = _series_units(form)
     if len(units) > 1:
-        specs = [spec_from_form(form, unit=unit) for unit in units]
+        specs = [spec_from_form(form, unit=unit, managed=managed) for unit in units]
         label_sets = [spec.bd_labels() for spec in specs]
         shared = (
             label_sets[0]
@@ -1963,9 +2036,11 @@ def events_sql_from_form(form: dict[str, Any]) -> str:
             )
         sql = "\nUNION ALL\n".join(arms)
     elif len(units) == 1:
-        sql = events_sql(spec_from_form(form, unit=units[0]), dialect=dialect)
+        sql = events_sql(
+            spec_from_form(form, unit=units[0], managed=managed), dialect=dialect
+        )
     else:
-        sql = events_sql(spec_from_form(form), dialect=dialect)
+        sql = events_sql(spec_from_form(form, managed=managed), dialect=dialect)
     n = query_row_limit(form)
     inner = _indent_sql(sql.rstrip(), 4)
     grain = str(form.get("grain") or "day").strip().lower()
@@ -2029,8 +2104,9 @@ def catalog_lookback_days(form: dict[str, Any]) -> int | None:
     return n
 
 
-def write_cache_table(form: dict[str, Any]) -> str | None:
-    """Qualified ``fc_event_names`` ident, or None when write-back is off.
+def write_relation(form: dict[str, Any], name: str) -> str | None:
+    """Qualified ident of a Factcat-managed relation ``name`` in the write
+    destination, or None when write-back is off.
 
     Destination is caller-supplied (project + dataset, or database + schema).
     Do not fall back to the billing project or the events table's dataset.
@@ -2041,18 +2117,34 @@ def write_cache_table(form: dict[str, Any]) -> str | None:
         schema = (form.get("write_schema") or "").strip()
         if not database or not schema:
             return None
-        return _ident_table(
-            f"{database}.{schema}.{EVENT_NAME_CACHE_TABLE}", "write_schema"
-        )
+        return _ident_table(f"{database}.{schema}.{name}", "write_schema")
     project = (form.get("write_project") or "").strip()
     dataset = (form.get("write_dataset") or "").strip()
     if not project or not dataset:
         return None
     if "." in dataset:
         raise ValueError("write dataset must be a dataset id, not project.dataset")
-    return _ident_table(
-        f"{project}.{dataset}.{EVENT_NAME_CACHE_TABLE}", "write_dataset"
-    )
+    return _ident_table(f"{project}.{dataset}.{name}", "write_dataset")
+
+
+def write_cache_table(form: dict[str, Any]) -> str | None:
+    """Qualified ``fc_event_names`` ident, or None when write-back is off."""
+    return write_relation(form, EVENT_NAME_CACHE_TABLE)
+
+
+def qualified_table(form: dict[str, Any]) -> str:
+    """The mapped events table, validated; on BigQuery a bare
+    ``dataset.table`` gains the data project, because a materialized view
+    in the write project must name the source project explicitly (a bare
+    name resolves against the job project only for plain queries)."""
+    raw = str(form.get("table") or "").strip()
+    table = _ident_table(raw, "table")
+    if form_kind(form) != "bigquery" or len(raw.split(".")) != 2:
+        return table
+    project = str(form.get("data_project") or form.get("project") or "").strip()
+    if not project:
+        return table
+    return _ident_table(f"{project}.{raw}", "table")
 
 
 def _emit_relation(ident: str, dialect: str) -> str:
@@ -2068,13 +2160,22 @@ def event_name_cache_rebuild_sql(form: dict[str, Any], *, materialized: bool) ->
     dest = write_cache_table(form)
     if dest is None:
         raise ValueError("write destination is required")
-    table = _ident_table(str(form.get("table") or ""), "table")
+    table = qualified_table(form)
     event_column = _ident_column(str(form.get("event_column") or ""), "event_column")
     dialect = form_kind(form)
+    # v2 is a census, not a name list: rows, first and last seen per name
+    # and month. The picker still reads DISTINCT names; the month grain is
+    # what lets a freshness check localise a backfill. Aggregates stay in
+    # BigQuery's incremental materialized-view set; if a kind refuses the
+    # shape, create_then_read degrades to a table as before.
+    time_col = _ident_column(str(form.get("event_time") or ""), "event_time")
+    instant = _event_time_lhs(time_col, form)
     select = splice_placeholders(
         transpile(
-            f"SELECT {event_column} AS fc_value FROM {table} "
-            f"WHERE {event_column} IS NOT NULL GROUP BY 1",
+            f"SELECT {event_column} AS fc_value, "
+            f"CAST(DATE_TRUNC('month', CAST({instant} AS DATE)) AS DATE) AS fc_month, "
+            f"COUNT(*) AS fc_rows, MIN({instant}) AS fc_first, MAX({instant}) AS fc_last "
+            f"FROM {table} WHERE {event_column} IS NOT NULL GROUP BY 1, 2",
             dialect,
         ),
         dialect,
@@ -2085,7 +2186,21 @@ def event_name_cache_rebuild_sql(form: dict[str, Any], *, materialized: bool) ->
         dialect,
         materialized=materialized,
         comment=event_name_cache_comment(form),
+        refresh_minutes=EVENT_NAME_CACHE_REFRESH_MINUTES,
     )
+
+
+def event_name_cache_census_sql(form: dict[str, Any]) -> str:
+    """Name-grain rollup of the census: rows, first and last seen."""
+    dest = write_cache_table(form)
+    if dest is None:
+        raise ValueError("write destination is required")
+    dialect = form_kind(form)
+    sql = (
+        f"SELECT fc_value, SUM(fc_rows) AS fc_rows, MIN(fc_first) AS fc_first, "
+        f"MAX(fc_last) AS fc_last FROM {dest} WHERE fc_value IS NOT NULL GROUP BY 1"
+    )
+    return splice_placeholders(transpile(sql, dialect), dialect)
 
 
 def event_name_cache_read_sql(form: dict[str, Any]) -> str:
@@ -2094,7 +2209,7 @@ def event_name_cache_read_sql(form: dict[str, Any]) -> str:
         raise ValueError("write destination is required")
     dialect = form_kind(form)
     sql = (
-        f"SELECT fc_value FROM {dest} "
+        f"SELECT DISTINCT fc_value FROM {dest} "
         f"WHERE fc_value IS NOT NULL "
         f"ORDER BY 1 "
         f"LIMIT {EVENT_VALUE_LIMIT}"
@@ -2107,6 +2222,7 @@ def event_name_cache_fingerprint(form: dict[str, Any]) -> dict[str, Any]:
         "v": EVENT_NAME_CACHE_VERSION,
         "table": str(form.get("table") or "").strip(),
         "event_column": str(form.get("event_column") or "").strip(),
+        "event_time": str(form.get("event_time") or "").strip(),
     }
 
 
@@ -2141,6 +2257,7 @@ def event_name_cache_matches(
         version == int(wanted["v"])
         and str(stored.get("table") or "") == wanted["table"]
         and str(stored.get("event_column") or "") == wanted["event_column"]
+        and str(stored.get("event_time") or "") == wanted["event_time"]
     )
 
 

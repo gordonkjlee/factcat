@@ -104,6 +104,37 @@
       font-weight: 400;
       color: var(--fc-ochre-deep);
     }
+    /* Managed tables (item 12). #managed-wrap owns the section; .mt owns
+       the list geometry; .mt td.acts owns action spacing. */
+    #managed-wrap[hidden] { display: none !important; }
+    #managed-knobs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.5rem; }
+    #managed-knobs > div { min-width: 0; }
+    #managed-knobs input[type=number] { width: 5rem; display: inline-block; }
+    .mt-unit { font-size: 0.8rem; color: var(--fc-slate); margin-left: 0.35rem; }
+    .mt { width: 100%; border-collapse: collapse; margin-top: 0.75rem; font-size: 0.82rem; }
+    .mt th { text-align: left; font-weight: 600; color: var(--fc-slate); font-size: 0.72rem; letter-spacing: 0.03em; text-transform: uppercase; padding: 0.35rem 0.5rem 0.35rem 0; border-bottom: 1px solid var(--fc-line); }
+    .mt td { padding: 0.5rem 0.5rem 0.5rem 0; border-bottom: 1px solid var(--fc-line); vertical-align: top; }
+    .mt td.acts { white-space: nowrap; }
+    .mt td.acts .linkish { margin: 0 0.6rem 0 0; padding: 0; }
+    .mt td.acts .layout-checking { margin: 0 0.6rem 0 0.25rem; }
+    .mt .sub { color: var(--fc-slate); font-size: 0.75rem; display: block; }
+    .mt .pin { font-size: 0.75rem; color: var(--fc-slate); display: inline; font-weight: 400; margin: 0; }
+    .mt .pin input { width: auto; display: inline; margin: 0 0.25rem 0 0; }
+    .mt details { margin-top: 0.3rem; }
+    .mt details > summary { cursor: pointer; font-size: 0.75rem; color: var(--fc-ochre-deep); list-style: none; }
+    .mt details > summary::-webkit-details-marker { display: none; }
+    .mt details > summary::before { content: "\25B8 "; }
+    .mt details[open] > summary::before { content: "\25BE "; }
+    .mt .ovr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; padding: 0.4rem 0 0.2rem; white-space: normal; }
+    .mt .ovr label { margin-top: 0.3rem; font-size: 0.75rem; }
+    .mt .ovr input, .mt .ovr select { width: 100%; font-size: 0.78rem; }
+    .mt .ovr input[type=number] { width: 4.5rem; }
+    .mt .callout { margin: 0.2rem 0; }
+    #managed-add { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.6rem; font-size: 0.82rem; flex-wrap: wrap; }
+    #managed-add select { width: auto; min-width: 12rem; margin: 0; }
+    #managed-add .hint { margin: 0; }
+    #managed-status { font-size: 0.75rem; color: var(--fc-slate); margin: 0.4rem 0 0; }
+    #managed-status.fail { color: var(--fc-alert); }
     @media (max-width: 56rem) {
       .setup-page { overflow-y: auto; }
       .setup-cols {
@@ -305,6 +336,46 @@
     </select>
   </div>
 
+  <div id="managed-wrap" hidden>
+    <div id="managed-knobs">
+      <div>
+        <label for="managed_mode">Mode</label>
+        <select id="managed_mode" name="managed_mode">
+          <option value="auto"{% if (config.managed_mode or 'auto') == 'auto' %} selected{% endif %}>Automatic</option>
+          <option value="off"{% if config.managed_mode == 'off' %} selected{% endif %}>Off</option>
+        </select>
+        <span class="hint">Automatic prepares a sparse column the first time an expensive breakdown mode uses it, refreshes it when stale, and drops it when unused. Off keeps existing tables and builds nothing new.</span>
+      </div>
+      <div>
+        <label for="managed_drop_days">Drop unused after</label>
+        <input id="managed_drop_days" name="managed_drop_days" type="number" min="1" step="1" value="{{ config.managed_drop_days if config.managed_drop_days is not none else 60 }}"><span class="mt-unit">days</span>
+        <span class="hint">A column no chart has used for this long is dropped on the next daily sweep. Pinned columns stay.</span>
+      </div>
+      <div>
+        <label for="managed_refresh_days">Refresh when older than</label>
+        <input id="managed_refresh_days" name="managed_refresh_days" type="number" min="0" step="1" value="{{ config.managed_refresh_days if config.managed_refresh_days is not none else 7 }}"><span class="mt-unit">days</span>
+        <span class="hint">Runs always read the table plus everything newer, so results stay exact; this only decides when the newer rows get folded in.</span>
+      </div>
+      <div>
+        <label for="managed_lookback_days">Late-arrival lookback</label>
+        <input id="managed_lookback_days" name="managed_lookback_days" type="number" min="0" step="1" value="{{ config.managed_lookback_days if config.managed_lookback_days is not none else 3 }}"><span class="mt-unit">days</span>
+        <span class="hint">How late a row can arrive after its event time. A refresh re-reads this much before each bookmark.</span>
+      </div>
+    </div>
+    <label>Tables Factcat keeps here <button type="button" class="linkish" id="managed-refresh-list">Refresh list</button></label>
+    <table class="mt" id="managed-list" aria-label="Factcat-managed tables">
+      <thead><tr><th>Table</th><th>Serves</th><th>Size</th><th>As of</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="managed-add">
+      <span>Index a column now</span>
+      <select id="managed-add-column" aria-label="Column to index"></select>
+      <button type="button" class="linkish" id="managed-add-go" style="margin:0">Index</button>
+      <span class="hint">Skips the sparsity check. One full scan of that column, once.</span>
+    </div>
+    <p id="managed-status"></p>
+  </div>
+
   <p id="error"></p>
   <div id="status" class="save-toast" role="status" aria-live="polite" hidden></div>
 
@@ -333,6 +404,8 @@ const saved = {
   role: {{ config.role|tojson }},
   warehouse: {{ config.warehouse|tojson }},
   write_project: {{ config.write_project|tojson }},
+  managed_tables: {{ (config.managed_tables or {})|tojson }},
+  managed_columns: {{ (config.columns or [])|tojson }},
   write_dataset: {{ config.write_dataset|tojson }},
   write_database: {{ config.write_database|tojson }},
   write_schema: {{ config.write_schema|tojson }},
@@ -1592,6 +1665,195 @@ function seedEntityName() {
 labelChoiceEl.addEventListener("change", () => { syncEntityName(); scheduleSave(); });
 labelOtherEl.addEventListener("input", () => { syncEntityName(); scheduleSave(); });
 seedEntityName();
+
+// ---- Managed tables (item 12) ----------------------------------------
+// Render from the config mirror first; fetch (metadata calls only) when the
+// mirror is empty for a set destination, or on Refresh list. Row actions
+// POST /api/managed/action and re-render from the registry that returns.
+const managedWrap = document.getElementById("managed-wrap");
+const managedBody = document.querySelector("#managed-list tbody");
+const managedStatus = document.getElementById("managed-status");
+let managedPayload = null;
+let managedBusy = {};
+function managedDestSet() {
+  if (currentKind() === "snowflake") {
+    return !!(document.getElementById("write_database").value.trim()
+      && document.getElementById("write_schema").value.trim());
+  }
+  return !!(document.getElementById("write_project").value.trim()
+    && document.getElementById("write_dataset").value.trim());
+}
+function managedBodyFor() {
+  const body = Object.fromEntries(new FormData(form).entries());
+  body.kind = currentKind();
+  return body;
+}
+function fmtBytesShort(n) {
+  if (n == null) return "";
+  const gb = n / (1024 ** 3);
+  if (gb >= 10) return Math.round(gb) + " GB";
+  if (gb >= 1) return gb.toFixed(1) + " GB";
+  const mb = n / (1024 ** 2);
+  if (mb >= 1) return Math.round(mb) + " MB";
+  return Math.max(1, Math.round(n / 1024)) + " KB";
+}
+function fmtAgo(iso) {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (mins < 60) return mins + " min ago";
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return hours + " h ago";
+  return Math.round(hours / 24) + " d ago";
+}
+function managedSetStatus(text, fail) {
+  managedStatus.textContent = text || "";
+  managedStatus.classList.toggle("fail", !!fail);
+}
+function managedRegistryColumns(payload) {
+  if (payload && Array.isArray(payload.columns)) return payload.columns;
+  const reg = (payload && payload.registry) || saved.managed_tables || {};
+  const cols = reg.columns || {};
+  return Object.keys(cols).map((key) => ({key, label: cols[key].label || key, ...cols[key], stale: false}));
+}
+function renderManaged() {
+  managedWrap.hidden = !managedDestSet();
+  if (managedWrap.hidden) return;
+  const payload = managedPayload;
+  const tables = (payload && payload.tables) || [];
+  const byName = {};
+  tables.forEach((t) => { byName[t.name] = t; });
+  managedBody.innerHTML = "";
+  const names = byName.fc_event_names;
+  if (names) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td><code>fc_event_names</code></td>"
+      + "<td>Event picker" + (names.census ? " and the freshness census" : "") + "<span class=\"sub\">"
+      + (names.census ? "names, rows per month, first and last seen" : "names only; Refresh event names on Events upgrades it") + "</span></td>"
+      + "<td>" + fmtBytesShort(names.bytes) + "</td><td></td><td class=\"acts\"></td>";
+    managedBody.appendChild(tr);
+  }
+  const cols = managedRegistryColumns(payload);
+  const idx = byName.fc_column_index;
+  cols.forEach((c) => {
+    const tr = document.createElement("tr");
+    tr.dataset.key = c.key;
+    const busy = managedBusy[c.key];
+    const label = c.label || c.key;
+    let serves = "Carried and as-of breakdowns<span class=\"sub\">";
+    if (c.last_used_at) serves += "last used " + fmtAgo(c.last_used_at);
+    if (c.bookmark) serves += (c.last_used_at ? " \u00b7 " : "") + "bookmark " + String(c.bookmark).slice(0, 16).replace("T", " ");
+    serves += "</span>";
+    let acts = "";
+    if (busy) {
+      acts += "<span class=\"loading\" aria-label=\"" + busy + "\"></span><span class=\"layout-checking\">" + busy + "\u2026</span>";
+    } else {
+      acts += "<button type=\"button\" class=\"linkish\" data-act=\"refresh\">Refresh</button>";
+    }
+    acts += "<button type=\"button\" class=\"linkish\" data-act=\"rebuild\">Rebuild</button>";
+    acts += "<button type=\"button\" class=\"linkish\" data-act=\"drop\">Drop</button>";
+    acts += "<label class=\"pin\"><input type=\"checkbox\" data-act=\"pin\"" + (c.pinned ? " checked" : "") + "> Pin</label>";
+    const ov = c.overrides || {};
+    acts += "<details><summary>Overrides</summary><div class=\"ovr\">"
+      + "<div><label>Refresh when older than</label><input type=\"number\" min=\"0\" data-ovr=\"refresh_days\" placeholder=\"" + document.getElementById("managed_refresh_days").value + "\" value=\"" + (ov.refresh_days ?? "") + "\"><span class=\"mt-unit\">days</span></div>"
+      + "<div><label>Late-arrival lookback</label><input type=\"number\" min=\"0\" data-ovr=\"lookback_days\" placeholder=\"" + document.getElementById("managed_lookback_days").value + "\" value=\"" + (ov.lookback_days ?? "") + "\"><span class=\"mt-unit\">days</span></div>"
+      + "</div></details>";
+    if (c.stale) {
+      tr.innerHTML = "<td><code>fc_column_index</code> \u203a <code>" + label + "</code></td>"
+        + "<td colspan=\"3\"><div class=\"callout\"><p>The mapping changed since this was built. Charts read the full history until it is rebuilt. "
+        + "<button type=\"button\" class=\"linkish\" data-act=\"rebuild\" style=\"margin:0\">Rebuild</button></p></div></td>"
+        + "<td class=\"acts\"><button type=\"button\" class=\"linkish\" data-act=\"drop\">Drop</button></td>";
+    } else {
+      tr.innerHTML = "<td><code>fc_column_index</code> \u203a <code>" + label + "</code></td>"
+        + "<td>" + serves + "</td>"
+        + "<td>" + (idx && cols.length === 1 ? fmtBytesShort(idx.bytes) : "") + "</td>"
+        + "<td>" + fmtAgo(c.refreshed_at || c.built_at) + "</td>"
+        + "<td class=\"acts\">" + acts + "</td>";
+    }
+    managedBody.appendChild(tr);
+  });
+  if (!names && !cols.length) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td colspan=\"5\"><span class=\"hint\" style=\"margin:0\">Nothing here yet. Factcat creates tables when a chart needs one.</span></td>";
+    managedBody.appendChild(tr);
+  }
+  const pick = document.getElementById("managed-add-column");
+  const have = new Set(cols.map((c) => c.key));
+  const skip = new Set([saved.entity, saved.event_time, saved.event_column].filter(Boolean));
+  pick.innerHTML = "";
+  (saved.managed_columns || []).forEach((col) => {
+    const name = typeof col === "string" ? col : (col && col.name);
+    if (!name || have.has(name) || skip.has(name)) return;
+    const opt = document.createElement("option");
+    opt.value = name; opt.textContent = name;
+    pick.appendChild(opt);
+  });
+}
+async function loadManaged(force) {
+  if (!managedDestSet()) { renderManaged(); return; }
+  if (!force && managedPayload) { renderManaged(); return; }
+  if (!force && saved.managed_tables && Object.keys(saved.managed_tables.columns || {}).length) {
+    managedPayload = {registry: saved.managed_tables, tables: []};
+    renderManaged();
+    return;
+  }
+  managedSetStatus("Reading table sizes\u2026");
+  try {
+    const data = await post("/api/managed", managedBodyFor());
+    managedPayload = data;
+    if (data.registry) saved.managed_tables = data.registry;
+    managedSetStatus("");
+  } catch (err) {
+    managedSetStatus((err && err.message) || "Could not read the managed tables.", true);
+  }
+  renderManaged();
+}
+async function managedAction(key, act, extra) {
+  managedBusy[key] = {refresh: "Refreshing", rebuild: "Rebuilding", drop: "Dropping", index: "Building"}[act] || "Working";
+  renderManaged();
+  managedSetStatus("");
+  try {
+    const data = await post("/api/managed/action", {...managedBodyFor(), action: act, key: key, ...(extra || {})});
+    saved.managed_tables = data.registry || {};
+    delete managedBusy[key];
+    await loadManaged(true);
+  } catch (err) {
+    delete managedBusy[key];
+    managedSetStatus((err && err.message) || "The action failed.", true);
+    renderManaged();
+  }
+}
+managedBody.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const tr = btn.closest("tr");
+  if (!tr || !tr.dataset.key) return;
+  managedAction(tr.dataset.key, btn.dataset.act);
+});
+managedBody.addEventListener("change", (e) => {
+  const el = e.target;
+  const tr = el.closest("tr");
+  if (!tr || !tr.dataset.key) return;
+  if (el.dataset.act === "pin") {
+    managedAction(tr.dataset.key, "pin", {value: el.checked});
+    return;
+  }
+  if (el.dataset.ovr) {
+    const box = tr.querySelector(".ovr");
+    const value = {};
+    box.querySelectorAll("input[data-ovr]").forEach((inp) => { if (inp.value !== "") value[inp.dataset.ovr] = inp.value; });
+    managedAction(tr.dataset.key, "override", {value});
+  }
+});
+document.getElementById("managed-refresh-list").addEventListener("click", () => loadManaged(true));
+document.getElementById("managed-add-go").addEventListener("click", () => {
+  const name = document.getElementById("managed-add-column").value;
+  if (!name) return;
+  managedAction(name, "index", {expr: name, label: name});
+});
+form.addEventListener("change", () => { const was = managedWrap.hidden; renderManaged(); if (was && !managedWrap.hidden) loadManaged(false); });
+loadManaged(false);
 
 const autosave = fcAutosave({
   save: async () => {

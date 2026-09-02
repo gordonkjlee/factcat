@@ -569,6 +569,38 @@ def get_table_relation(
         ) from exc
 
 
+def table_stats(
+    *,
+    project: str,
+    dataset: str,
+    table: str,
+    credentials: object | None = None,
+) -> dict[str, Any]:
+    """Size, row count and description of one table. Metadata API — no
+    query job, no bytes billed. A missing table raises through
+    ``_wrap_google_error`` so ``is_missing_relation`` recognises it."""
+    dataset = (dataset or "").strip()
+    table = (table or "").strip()
+    if not dataset or not table:
+        raise ValueError("dataset and table are required")
+    try:
+        client = _make_client(project, credentials)
+        tbl = client.get_table(f"{project}.{dataset}.{table}")
+    except (ValueError, AdapterError, ImportError):
+        raise
+    except Exception as exc:
+        raise _wrap_google_error(
+            exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
+        ) from exc
+    return {
+        "name": table,
+        "kind": _object_kind(getattr(tbl, "table_type", None)),
+        "bytes": _optional_int(getattr(tbl, "num_bytes", None)),
+        "rows": _optional_int(getattr(tbl, "num_rows", None)),
+        "description": getattr(tbl, "description", None) or "",
+    }
+
+
 def _optional_int(value: Any) -> int | None:
     if value is None:
         return None

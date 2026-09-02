@@ -357,6 +357,31 @@ a fingerprint of the mapped table and event-name column (JSON comment
 on the relation, plus `.factcat.json`) so a remapping rebuilds it. A table
 fallback is a snapshot — Refresh rebuilds it. Lookback and the Refresh chevron are
 hidden while that dest is set. Catalog jobs do not use the scan cap.
+`fc_event_names` is a census (names, rows per month, first and last seen),
+refreshed daily where the warehouse keeps it as a materialized view.
+
+With a destination set, Factcat also keeps **`fc_column_index`**: for a
+few breakdown columns, every row where that column had a value — entity,
+instant, value, event name. The expensive Value-at modes (fill from
+earlier values, range start / end, first / latest ever) read that small
+table plus the live rows newer than its bookmark instead of the events
+table's full history, so results are exact and later runs cost about
+what a plain chart costs (measured on a month-partitioned hub: 10 GB →
+0.26 GB for one carried breakdown). It fills itself: the first Run that
+uses an expensive mode on a sparse column builds the index first, then
+queries through it — that first run costs about one full-history scan,
+and the estimate chip prices both parts and says so on a second line.
+Dense columns (the value is on most rows) are left alone; **Value at:
+each event** already reads them for free. A column no chart has used for
+**Drop unused after** (60 days) is dropped on a daily sweep and rebuilt
+on next use; **Refresh when older than** (7 days) decides when newer rows
+are folded in; **Late-arrival lookback** (3 days) is how late a row can
+land after its event time. Setup's **Factcat-managed tables** section
+lists every table with size and age and offers Refresh, Rebuild, Drop,
+Pin (never drop) and per-column overrides; **Mode: Off** builds nothing
+new and drops nothing. If a build fails (rights, cap), the chart runs on
+the full history and the run row says so. Every managed table is derived
+and safe to drop; nothing lives only there.
 On Events, each **event series** is a card: event name, **measure** (and Of
 when the measure is a property), and filters. Filter operators follow the
 column type (boolean, number, date, time, timestamp, string). String rows
@@ -405,7 +430,9 @@ grain) or relative (from 12 to 3 weeks ago; 0 = this period). Sugar on
 `event_time`, not a period enum. If a write destination is set, **Refresh event names**
 reads `fc_event_names` (created on first miss as a materialized
 view, or a table if the source cannot back a view). Lookback does not apply
-while that cache is in use. Week start and reporting
+while that cache is in use. When a run will first prepare a column for
+faster breakdowns, the estimate's second line says so and what later runs
+cost; the running copy names the extra step. Week start and reporting
 timezone stay on Setup (they change SQL). Thousand/decimal separators, wording
 (business user / SQL analyst, with uppercase or lowercase SQL and `<>` or `!=`
 for the analyst), weekday/month display, day-of-month pad, hour

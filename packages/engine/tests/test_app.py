@@ -1852,9 +1852,10 @@ def _catalog_write_body():
 def test_event_values_write_cache_reads_existing(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     meta = {
-        "v": 1,
+        "v": 2,
         "table": "analytics.events",
         "event_column": "event_name",
+        "event_time": "occurred_at",
         "kind": "materialized_view",
     }
     (tmp_path / "cfg.json").write_text(
@@ -1934,9 +1935,10 @@ def test_event_values_write_cache_falls_back_to_table(monkeypatch, tmp_path):
 def test_event_values_write_cache_permission_does_not_create(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     meta = {
-        "v": 1,
+        "v": 2,
         "table": "analytics.events",
         "event_column": "event_name",
+        "event_time": "occurred_at",
         "kind": "materialized_view",
     }
     (tmp_path / "cfg.json").write_text(
@@ -1987,9 +1989,10 @@ def test_event_values_lookback_fallback_keeps_stored_meta(monkeypatch, tmp_path)
     """
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     meta = {
-        "v": 1,
+        "v": 2,
         "table": "analytics.events",
         "event_column": "event_name",
+        "event_time": "occurred_at",
         "kind": "table",
     }
     (tmp_path / "cfg.json").write_text(
@@ -2025,9 +2028,10 @@ def test_event_values_empty_client_meta_uses_stored(monkeypatch, tmp_path):
     must still count as a match - no rebuild, one cheap read."""
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     meta = {
-        "v": 1,
+        "v": 2,
         "table": "analytics.events",
         "event_column": "event_name",
+        "event_time": "occurred_at",
         "kind": "materialized_view",
     }
     (tmp_path / "cfg.json").write_text(
@@ -2415,7 +2419,202 @@ def test_blocking_endpoints_use_threadpool():
         main_mod.api_install_extra,
         main_mod.api_sql,
         main_mod.api_estimate,
+        main_mod.api_managed,
+        main_mod.api_managed_action,
         main_mod.api_run,
     )
     for fn in blocking:
         assert "run_in_threadpool" in inspect.getsource(fn), fn.__name__
+
+
+# ---------------------------------------------------------------------------
+# Factcat-managed tables (item 12): build on Run, estimate stays a dry run,
+# the Setup list and actions, and the chrome both pages carry.
+
+
+def _managed_body(**extra):
+    body = {
+        "project": "p",
+        "location": "EU",
+        "table": "analytics.events",
+        "entity": "account_id",
+        "event_time": "occurred_at",
+        "event_column": "event_name",
+        "event_values": ["login"],
+        "measure": "total",
+        "grain": "day",
+        "lookback_days": 30,
+        "write_project": "dest-proj",
+        "write_dataset": "analytics_fc",
+        "breakdowns": [
+            {
+                "breakdown_column": "plan",
+                "value_at": "event",
+                "if_missing": "fill",
+                "fill_from_event": "subscription_started",
+            }
+        ],
+        "top_n": 8,
+        "include_other": True,
+    }
+    body.update(extra)
+    return body
+
+
+class _ManagedWarehouse:
+    """Answers the probe (sparse), bookmarks, and every other statement."""
+
+    def __init__(self, *, fail_on=()):
+        self.calls: list[tuple[str, bool]] = []
+        self.fail_on = fail_on
+
+    def run(self, sql: str, *, dry_run: bool = False) -> QueryResult:
+        self.calls.append((sql, dry_run))
+        up = sql.upper()
+        for needle in self.fail_on:
+            if needle.upper() in up and not dry_run:
+                raise AdapterError(f"boom: {needle}")
+        if dry_run:
+            return QueryResult(rows=[], bytes_processed=1024 ** 3)
+        if "FC_PRESENT" in up:
+            return QueryResult(rows=[{"fc_rows": 1000, "fc_present": 10}])
+        if "FC_BOOKMARK" in up:
+            from datetime import datetime, timezone
+            return QueryResult(rows=[{"fc_event_name": "subscription_started", "fc_bookmark": datetime(2026, 9, 1, tzinfo=timezone.utc), "fc_rows": 5}])
+        if up.startswith("SELECT") and "FC_COLUMN_INDEX" not in up:
+            return QueryResult(rows=[{"bucket": "2026-01-05", "plan": "pro", "value": 2}])
+        return QueryResult(rows=[])
+
+
+def test_run_builds_the_index_first_then_queries_through_it(monkeypatch, tmp_path):
+    """First Run on a sparse column: probe, CREATE, INSERT, bookmarks,
+    comment, then the chart query reads fc_column_index. Sequential, one
+    warehouse. Mutation: query before build → the chart SQL comes first."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    ups = [c[0].upper() for c in wh.calls if not c[1]]
+    order = [
+        next(i for i, u in enumerate(ups) if "FC_PRESENT" in u),
+        next(i for i, u in enumerate(ups) if u.startswith("CREATE TABLE IF NOT EXISTS")),
+        next(i for i, u in enumerate(ups) if u.startswith("INSERT INTO")),
+        next(i for i, u in enumerate(ups) if "MAX(FC_AT)" in u),
+        next(i for i, u in enumerate(ups) if "FC_VALUES" in u and "FC_COLUMN_INDEX" in u),
+    ]
+    assert order == sorted(order), ups
+    assert "fc_column_index" in body["sql"]
+    assert body.get("managed_note", "").startswith("Prepared `plan` for faster breakdowns")
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert "plan" in saved["managed_tables"]["columns"]
+    assert saved["managed_last_sweep"]
+
+
+def test_run_falls_back_live_when_the_build_fails(monkeypatch, tmp_path):
+    """A failed INSERT turns the column live for this run: the chart still
+    answers from the full history and the run row says why."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    wh = _ManagedWarehouse(fail_on=("INSERT INTO",))
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "fc_column_index" not in body["sql"]
+    assert body["managed_failed"].startswith("Could not prepare `plan`")
+    assert "chart is correct" in body["managed_failed"]
+
+
+def test_run_respects_mode_off_and_no_destination(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=_managed_body(managed_mode="off"))
+    assert res.status_code == 200
+    assert not any(c[0].upper().startswith("CREATE TABLE") for c in wh.calls)
+    wh2 = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh2)
+    res2 = client.post("/api/run", json=_managed_body(write_project="", write_dataset=""))
+    assert res2.status_code == 200
+    assert not any("FC_PRESENT" in c[0].upper() for c in wh2.calls)
+
+
+def test_estimate_never_probes_or_writes(monkeypatch, tmp_path):
+    """The estimate is a free dry run: no probe, no CREATE, no INSERT; with
+    no cached probe the column simply estimates live."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/estimate", json=_managed_body())
+    assert res.status_code == 200, res.text
+    assert all(c[1] for c in wh.calls)  # every call was a dry run
+    assert not any("FC_PRESENT" in c[0].upper() for c in wh.calls)
+    assert "managed_note" not in res.json()
+
+
+def test_estimate_prices_the_build_once_the_probe_is_cached(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    mirror = {"v": 1, "columns": {}, "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}}}
+    res = client.post("/api/estimate", json=_managed_body(managed_tables=mirror))
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["managed_build"] == ["plan"]
+    assert body["managed_note"].startswith("Also prepares `plan` for faster breakdowns (one-time")
+    assert body["bytes"] == 2 * 1024 ** 3  # query + build, both dry-run
+    assert all(c[1] for c in wh.calls)
+
+
+def test_managed_list_and_actions(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    registry = {
+        "v": 1, "fp": managed_mod.config_fingerprint(_managed_body()),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 2, "pinned": False, "overrides": {}}},
+    }
+    monkeypatch.setattr(
+        managed_mod, "_stats",
+        lambda form, table: {"name": table, "kind": "table", "bytes": 84 * 1024 ** 2, "rows": 1000,
+                             "description": json.dumps(registry) if table == "fc_column_index" else ""},
+    )
+    client = TestClient(app)
+    res = client.post("/api/managed", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert [c["key"] for c in body["columns"]] == ["plan"]
+    assert body["columns"][0]["stale"] is False
+    assert any(t["name"] == "fc_column_index" and t["bytes"] == 84 * 1024 ** 2 for t in body["tables"])
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    pin = client.post("/api/managed/action", json={**_managed_body(), "action": "pin", "key": "plan", "value": True})
+    assert pin.status_code == 200, pin.text
+    assert pin.json()["registry"]["columns"]["plan"]["pinned"] is True
+    drop = client.post("/api/managed/action", json={**_managed_body(), "action": "drop", "key": "plan"})
+    assert drop.status_code == 200, drop.text
+    assert "plan" not in drop.json()["registry"]["columns"]
+    assert any(c[0].upper().startswith("DELETE FROM") for c in wh.calls)
+    bad = client.post("/api/managed/action", json={**_managed_body(), "action": "explode", "key": "plan"})
+    assert bad.status_code == 400
+
+
+def test_setup_and_events_carry_the_managed_chrome(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    setup = client.get("/setup").text
+    for needle in ("id=\"managed-wrap\"", "name=\"managed_mode\"", "managed_drop_days", "managed_refresh_days", "managed_lookback_days", "id=\"managed-list\"", "Index a column now"):
+        assert needle in setup, needle
+    assert "physical" not in setup.lower()  # withdrawn field stays out
+    events = client.get("/events").text
+    assert "id=\"run-note\"" in events
+    assert "for faster breakdowns" in events
+    assert "index" not in events.split("runningPrefix")[1][:400].lower()  # business register
