@@ -430,3 +430,53 @@ def test_events_notes_never_say_index():
     assert note == "Also prepares `plan` for faster breakdowns (one-time ≈ 12 GB). Later runs ≈ 1.9 GB."
     assert "index" not in note.lower()
     assert notes_for(Plan([], None, None, {}, settings(form))) == ""
+
+
+# ---------------------------------------------------------------- review fixes
+
+
+def test_fingerprint_includes_the_write_destination():
+    """A new destination is a new, empty table: the mirror's bookmarks must
+    not attach to it. Mutation: drop 'dest' from config_fingerprint."""
+    form = _form()
+    moved = _form(write_dataset="analytics_fc_v2")
+    assert config_fingerprint(form) != config_fingerprint(moved)
+    reg = _registry(form)
+    plan = build_plan({**moved, "managed_tables": reg}, _Run(), now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "rebuild"
+
+
+def test_refresh_folds_in_rows_with_no_event_name():
+    """Rows whose event name is NULL have no name bookmark; they must still
+    fold in (on the NULL bookmark, else the overall floor)."""
+    sql = refresh_sql(
+        _form(), "plan", "plan",
+        bookmarks={"login": NOW.date()}, lookback_days=3,
+    )
+    assert "event_name IS NULL" in sql
+    with_null = refresh_sql(
+        _form(), "plan", "plan",
+        bookmarks={"login": NOW.date(), None: (NOW - timedelta(days=10)).date()}, lookback_days=0,
+    )
+    assert "event_name IS NULL" in with_null and "2026-08-23" in with_null
+
+
+def test_backfill_select_is_the_insert_without_the_insert():
+    sel = managed.backfill_select_sql(_form(), "plan", "plan")
+    ins = backfill_sql(_form(), "plan", "plan")
+    assert not sel.upper().startswith("INSERT")
+    assert sel.strip() in ins
+
+
+def test_reconcile_prefers_the_table_description_and_forgets_a_dropped_table(monkeypatch):
+    form = _form()
+    mirror = _registry(form)
+    # table gone: only the probe cache survives
+    monkeypatch.setattr(managed, "authoritative_registry", lambda f: ({}, None))
+    out = managed.reconcile_registry({**form, "managed_tables": {**mirror, "probes": {"plan": {"density": 0.01, "at": NOW.isoformat()}}}})
+    assert "columns" not in out and out["probes"]["plan"]["density"] == 0.01
+    # table present with its own registry: the authority wins over the mirror
+    authority = _registry(form, bookmark=(NOW - timedelta(days=3)).isoformat())
+    monkeypatch.setattr(managed, "authoritative_registry", lambda f: (authority, {"bytes": 1}))
+    out2 = managed.reconcile_registry({**form, "managed_tables": mirror})
+    assert out2["columns"]["plan"]["bookmark"] == (NOW - timedelta(days=3)).isoformat()

@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 
 from factcat.dialects import supports_json_value
 from factcat.warehouses import (
+    is_missing_relation,
     ADAPTERS,
     CAP_DRY_RUN,
     AdapterError,
@@ -563,11 +564,17 @@ async def api_estimate(request: Request) -> JSONResponse:
         result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
         build_bytes = None
         if plan.builds():
-            build_bytes = 0
-            for cp in plan.builds():
-                stmt = managed_mod.backfill_sql(form, cp.column.key, cp.column.expr)
-                probe = await run_in_threadpool(warehouse.run, stmt, dry_run=True)
-                build_bytes += int(probe.bytes_processed or 0)
+            try:
+                build_bytes = 0
+                for cp in plan.builds():
+                    stmt = managed_mod.backfill_select_sql(
+                        form, cp.column.key, cp.column.expr
+                    )
+                    probe = await run_in_threadpool(warehouse.run, stmt, dry_run=True)
+                    build_bytes += int(probe.bytes_processed or 0)
+            except AdapterError:
+                # The chart is still estimable; the build just goes unpriced.
+                build_bytes = None
     except BytesCapError as exc:
         return JSONResponse(
             _estimate_payload(
@@ -622,6 +629,12 @@ async def api_run(request: Request) -> JSONResponse:
                 form = {**form, "managed_tables": registry}
                 extra_save["managed_tables"] = registry
                 extra_save["managed_last_sweep"] = managed_mod._now_iso(None)
+        if managed_mod.index_table(form) is not None and managed_mod.registry_from_form(form).get("columns"):
+            # The table's own description is the authority: a dropped table
+            # or a new destination must not inherit the mirror's bookmarks.
+            reconciled = await run_in_threadpool(managed_mod.reconcile_registry, form)
+            form = {**form, "managed_tables": reconciled}
+            extra_save["managed_tables"] = reconciled
         plan = await run_in_threadpool(
             managed_mod.build_plan, form, warehouse.run, allow_probe=True
         )
@@ -631,7 +644,22 @@ async def api_run(request: Request) -> JSONResponse:
             managed_failed = managed_mod.failure_note(plan)
             managed_note = managed_mod.built_note(plan)
         sql = events_sql_from_form(form, managed=plan)
-        result = await run_in_threadpool(warehouse.run, sql)
+        try:
+            result = await run_in_threadpool(warehouse.run, sql)
+        except AdapterError as exc:
+            if not (plan.attachable() and is_missing_relation(exc)):
+                raise
+            # The prepared table vanished between the plan and the query:
+            # answer from the full history and forget the stale bookmarks.
+            for cp in plan.columns:
+                cp.action = "live"
+            sql = events_sql_from_form(form)
+            result = await run_in_threadpool(warehouse.run, sql)
+            managed_failed = (
+                "The prepared table was not found, so this run read the full "
+                "history; the chart is correct. It is rebuilt on the next run."
+            )
+            extra_save["managed_tables"] = {"probes": plan.registry.get("probes") or {}}
         registry = await run_in_threadpool(managed_mod.bump_usage, plan, form, warehouse.run)
         if plan.attachable():
             extra_save["managed_tables"] = registry

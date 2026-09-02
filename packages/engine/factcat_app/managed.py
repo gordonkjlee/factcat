@@ -51,9 +51,9 @@ from factcat_app.query import (
     _breakdown_slot_dicts,
     _event_names_clause,
     _event_time_kind,
+    _emit_relation,
     _event_time_lhs,
     _ident_column,
-    _ident_table,
     _series_units,
     _slot_fill_names,
     _slot_semantics,
@@ -137,6 +137,9 @@ def config_fingerprint(form: dict[str, Any]) -> dict[str, Any]:
         "event_time": str(form.get("event_time") or "").strip(),
         "time_kind": _event_time_kind(form),
         "event_column": str(form.get("event_column") or "").strip(),
+        # A new write destination is a new (empty) table: the mirror's
+        # bookmarks must not attach to it.
+        "dest": index_table(form) or "",
     }
 
 
@@ -253,14 +256,6 @@ def _emit(sql: str, dialect: str) -> str:
     return splice_placeholders(transpile(sql, dialect), dialect)
 
 
-def _emit_relation(ident: str, dialect: str) -> str:
-    sql = _emit(f"SELECT 1 FROM {ident}", dialect)
-    match = re.search(r"(?i)\bFROM\s+", sql)
-    if not match:
-        raise RuntimeError("could not emit relation name")
-    return sql[match.end():].strip()
-
-
 def _mapping(form: dict[str, Any]) -> tuple[str, str, str, str, str | None]:
     """(table, entity, event_time_expr, raw_time_col, event_column|None)."""
     table = qualified_table(form)
@@ -331,10 +326,25 @@ def ensure_table_sql(form: dict[str, Any], registry: dict[str, Any]) -> str:
     )
 
 
+def backfill_select_sql(
+    form: dict[str, Any], key: str, expr: str, *, names: list[str] | None = None
+) -> str:
+    """The SELECT a backfill inserts: every recorded value of ``expr``
+    (optionally only from ``names``). Priced by the estimate on its own —
+    the INSERT form needs a table that may not exist yet."""
+    where: list[str] = []
+    if names:
+        _t, _e, _ts, _raw, event_col = _mapping(form)
+        if event_col is None:
+            raise ValueError("event names need an event column")
+        where.append(_event_names_clause(event_col, names))
+    return _emit(_select_values(form, key, expr, where), form_kind(form))
+
+
 def backfill_sql(
     form: dict[str, Any], key: str, expr: str, *, names: list[str] | None = None
 ) -> str:
-    """Every recorded value of ``expr`` (optionally only from ``names``)."""
+    """INSERT every recorded value of ``expr`` (optionally only from ``names``)."""
     dest = index_table(form)
     if dest is None:
         raise ValueError("write destination is required")
@@ -398,6 +408,13 @@ def refresh_sql(
                 f"({event_col} = {_sql_string(name)} AND ({raw}) >= "
                 f"{_date_bound(form, floors[name])})"
             )
+        # Rows with no event name have no name bookmark; they ride the
+        # NULL bookmark when there is one, else the overall floor. Without
+        # this branch they would never fold in after the first build.
+        null_floor = floors.get(None, floor_all)
+        parts.append(
+            f"({event_col} IS NULL AND ({raw}) >= {_date_bound(form, null_floor)})"
+        )
         # Names the index has never seen are NOT folded in here: they are
         # backfilled whole (backfill_sql with names=...), because a new
         # name's history sits behind every bookmark.
@@ -961,6 +978,27 @@ def authoritative_registry(form: dict[str, Any]) -> tuple[dict[str, Any], dict[s
             return {}, None
         raise
     return parse_registry(stats.get("description")), stats
+
+
+def reconcile_registry(form: dict[str, Any]) -> dict[str, Any]:
+    """The registry to plan from on the Run path: the index table's own
+    description when the table exists (the authority), an empty registry
+    when it does not — never the mirror alone, which can outlive a table
+    dropped out of band or point at a new, empty destination. The mirror's
+    probe cache is kept either way (it is about the events table)."""
+    mirror = registry_from_form(form)
+    probes = mirror.get("probes") if isinstance(mirror.get("probes"), dict) else {}
+    try:
+        authority, stats = authoritative_registry(form)
+    except AdapterError:
+        # Metadata unavailable: plan from the mirror rather than fail the run.
+        return mirror
+    if stats is None:
+        return {"probes": probes}
+    if not authority:
+        return {"probes": probes}
+    authority.setdefault("probes", {}).update(probes)
+    return authority
 
 
 def list_payload(form: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:

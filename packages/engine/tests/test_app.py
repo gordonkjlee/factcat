@@ -2618,3 +2618,53 @@ def test_setup_and_events_carry_the_managed_chrome(monkeypatch, tmp_path):
     assert "id=\"run-note\"" in events
     assert "for faster breakdowns" in events
     assert "index" not in events.split("runningPrefix")[1][:400].lower()  # business register
+
+
+def test_estimate_prices_the_build_as_a_select_and_survives_a_missing_table(monkeypatch, tmp_path):
+    """The build price is a dry run of the SELECT, never an INSERT into a
+    table that may not exist; and if pricing fails the chart is still
+    estimated."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+
+    class _W(_ManagedWarehouse):
+        def run(self, sql, *, dry_run=False):
+            if dry_run and sql.upper().startswith("INSERT"):
+                raise AdapterError("Not found: Table fc_column_index")
+            return super().run(sql, dry_run=dry_run)
+
+    wh = _W()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    mirror = {"v": 1, "columns": {}, "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}}}
+    res = client.post("/api/estimate", json=_managed_body(managed_tables=mirror))
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["managed_build"] == ["plan"]
+    assert not any(c[0].upper().startswith("INSERT") for c in wh.calls)
+    assert body["bytes"] == 2 * 1024 ** 3
+
+
+def test_run_reconciles_the_mirror_with_the_table(monkeypatch, tmp_path):
+    """A mirror that says 'attach' while the table is gone must not attach:
+    the run plans from the table's own registry (absent here), probes, and
+    builds instead of reading an empty relation."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    stale_mirror = {
+        "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1, "pinned": False, "overrides": {}}},
+    }
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": stale_mirror}), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: ({}, None))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    ups = [c[0].upper() for c in wh.calls if not c[1]]
+    assert any(u.startswith("CREATE TABLE IF NOT EXISTS") for u in ups)  # rebuilt, not attached blind
+    assert "fc_column_index" in res.json()["sql"]
