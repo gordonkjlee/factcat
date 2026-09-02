@@ -335,7 +335,11 @@
     #run-estimate-wrap.warn #run-estimate-fill { background: var(--fc-ochre); }
     #run-estimate-wrap.hot #run-estimate-fill, #run-estimate-wrap.over-cap #run-estimate-fill { background: var(--fc-alert); }
     #run-estimate-wrap.over-cap #run-estimate { color: var(--fc-alert); font-weight: 600; }
-    /* Managed tables (item 12): cost, reason, next-run cost — in plain words. */
+    /* Managed tables (item 12): cost, reason, next-run cost — in plain words.
+       A child of the (wrapping) toolbar, NOT of #run-row: inside the run row
+       its text width inflated the row's intrinsic size and wrapped the whole
+       row under the date controls, moving Run. As the toolbar's last child
+       with a 100% basis it takes its own line and moves nothing. */
     #run-note { flex: 1 1 100%; font-size: 0.75rem; color: var(--fc-slate); margin: 0; }
     #run-note.ochre { color: var(--fc-ochre-deep); }
     #run-note[hidden] { display: none !important; }
@@ -1036,8 +1040,8 @@
           <label for="override_cap" style="margin:0">Override cap</label>
         </div>
         <button type="submit" id="run"{% if not mapping_ready %} disabled{% endif %}>Run</button>
-        <p id="run-note" hidden></p>
       </div>
+      <p id="run-note" hidden></p>
     </div>
     <section class="pane pane-chart{% if not config.pane_chart_open %} closed{% endif %}">
       <div class="pane-head">
