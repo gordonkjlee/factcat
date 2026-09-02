@@ -3912,8 +3912,9 @@ async function runEstimate() {
     lastEstimateKey = key;
     lastEstimate = {key: key, bytes: data.bytes};
     paintEstimate(data.bytes, data.cap, !!data.over_cap);
-    // Nothing is said before the run: the chip already includes a build.
-    // The labels only feed the running copy ("Indexing x… then running").
+    // One short line before the run, in the same right-aligned slot the
+    // post-run line uses; the labels feed the running copy as well.
+    setRunNote(data.managed_note || "", false);
     managedBuildLabels = Array.isArray(data.managed_build) ? data.managed_build : [];
     // The server's verdict wins where it has one: only it saw the warehouse.
     // An uncapped estimate carries no verdict about the capped query, so it

@@ -2559,8 +2559,9 @@ def test_estimate_never_probes_or_writes(monkeypatch, tmp_path):
     assert all(c[1] for c in wh.calls)  # every call was a dry run
     assert not any("FC_PRESENT" in c[0].upper() for c in wh.calls)
     # unprobed: the chip already covers a possible build; the line says "may"
-    # nothing is said before the run: the chip already includes a build
-    assert "managed_note" not in res.json()
+    # unmeasured, so the estimate cannot promise a build - but it must not be
+    # silent either: one short line saying the Run may also index the column
+    assert res.json()["managed_note"] == "May also index `plan`, which makes later runs cheaper"
     assert "managed_build" not in res.json()
 
 
@@ -2576,8 +2577,10 @@ def test_estimate_prices_the_build_once_the_probe_is_cached(monkeypatch, tmp_pat
     res = client.post("/api/estimate", json=_managed_body())
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["managed_build"] == ["plan"]  # feeds the running copy only
-    assert "managed_note" not in body
+    assert body["managed_build"] == ["plan"]  # also feeds the running copy
+    # the probe is cached, so the build is priced and the line carries figures
+    assert body["managed_note"].startswith("Also indexes `plan` · one-time ~ ")
+    assert "later runs ~ " in body["managed_note"]
     assert body["bytes"] == 2 * 1024 ** 3  # query + build, both dry-run
     assert all(c[1] for c in wh.calls)
 

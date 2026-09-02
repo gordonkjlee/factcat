@@ -642,9 +642,12 @@ async def api_estimate(request: Request) -> JSONResponse:
         total, conn.get("maximum_bytes_billed"), over_cap=False
     )
     if plan.builds():
-        # Only the running copy needs this ("Indexing x… then running"); the
-        # chip already includes the build, so there is no line before the run.
         payload["managed_build"] = [cp.column.label for cp in plan.builds()]
+    # One short line before the run: the chip carries the bytes, this carries
+    # what the Run is about to DO. Silence was the trim going one step too far.
+    note = managed_mod.pending_note(plan, bytes_build=build_bytes, bytes_after=query_bytes)
+    if note:
+        payload["managed_note"] = note
     return JSONResponse(payload)
 
 

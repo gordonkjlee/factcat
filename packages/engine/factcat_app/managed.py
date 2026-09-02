@@ -571,6 +571,12 @@ class Plan:
     registry_failures: list[str] = field(default_factory=list)
     built: list[str] = field(default_factory=list)
 
+    def maybe(self) -> list[ColumnPlan]:
+        """Columns that would be indexed but have not been measured yet: the
+        estimate never probes, so before the first run of a column the answer
+        is honestly "may". Says so rather than staying silent."""
+        return [cp for cp in self.columns if cp.action == "live" and cp.reason == NOT_CHECKED]
+
     def builds(self) -> list[ColumnPlan]:
         return [c for c in self.columns if c.action in ("build", "rebuild", "refresh")]
 
@@ -1013,6 +1019,36 @@ def sweep(
 
 
 # ---------------------------------------------------------------- setup list
+
+
+def pending_note(
+    plan: Plan, *, bytes_build: int | None = None, bytes_after: int | None = None
+) -> str:
+    """Before the run: one short line in the same right-aligned slot as the
+    line after it, saying that this Run may also index a column and that
+    later runs get cheaper for it.
+
+    The owner asked for terse and right-aligned, not for silence: removing
+    this outright in the trim lost the only warning that a Run was about to
+    do more than chart. Figures ride it only when the estimate already has
+    them (the probe is cached, so the build is priced) — the estimate never
+    probes, so an unmeasured column is honestly a "may" with no number.
+    """
+    building = [cp.column.label for cp in plan.builds()]
+    if building:
+        what = ", ".join(f"`{l}`" for l in building)
+        bits = []
+        if bytes_build is not None:
+            bits.append(f"one-time ~ {_gb(bytes_build)}")
+        if bytes_after is not None:
+            bits.append(f"later runs ~ {_gb(bytes_after)}")
+        tail = " \u00b7 " + ", ".join(bits) if bits else ""
+        return f"Also indexes {what}{tail}"
+    unsure = [cp.column.label for cp in plan.maybe()]
+    if unsure:
+        what = ", ".join(f"`{l}`" for l in unsure)
+        return f"May also index {what}, which makes later runs cheaper"
+    return ""
 
 
 def built_note(plan: Plan, *, bytes_after: int | None = None) -> str:
