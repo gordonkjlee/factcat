@@ -689,3 +689,17 @@ def test_an_expression_slot_is_never_labelled_none():
     plan = Plan([], None, None, {}, settings(form))
     plan.built = [cols[0].label]
     assert "None" not in built_note(plan)
+
+
+def test_half_configured_destinations_do_not_share_a_fingerprint():
+    """Two destinations that are each missing a part must still differ: if
+    they collapse to one value, old bookmarks attach to a new table.
+    Mutation: drop the incomplete parts from _dest_name."""
+    a = config_fingerprint(_form(write_project="proj-a", write_dataset=""))
+    b = config_fingerprint(_form(write_project="proj-b", write_dataset=""))
+    assert a["dest"] != b["dest"]
+    c = config_fingerprint(_form("snowflake", write_database="DB1", write_schema=""))
+    d = config_fingerprint(_form("snowflake", write_database="DB2", write_schema=""))
+    assert c["dest"] != d["dest"]
+    # and a complete destination still reads as a plain dotted name
+    assert config_fingerprint(_form())["dest"] == "dest-proj.analytics_fc.fc_column_index"
