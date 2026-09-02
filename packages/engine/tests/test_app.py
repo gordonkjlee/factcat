@@ -307,13 +307,13 @@ def test_events_renders_when_mapped(monkeypatch, tmp_path):
     assert '"bd_fill_any": "(any event)"' in res.text
     # tojson escapes the apostrophe ('); pin up to it.
     assert '"bd_fill_series": "(this series' in res.text
-    assert '"bd_fill_group": "Event names"' in res.text
     # Section panels: static heads, one surface; Break down head folds.
     assert 'class="cfg-section" id="events-band"' in res.text
     assert 'class="cfg-section" id="breakdown-band"' in res.text
     assert '"bd_section": "Break down"' in res.text
-    # The sql optgroup label reads the live mapped column, not a constant.
-    assert '|| "event_name"' in res.text
+    # The optgroup label key exists for both vocabs (the sql painter reads
+    # the live mapped column and falls back to this key when unmapped).
+    assert '"bd_fill_group": "Event names"' in res.text
     assert "__charted__" in res.text
     assert "__series__" in res.text
     assert "IGNORE NULLS" not in res.text
@@ -2057,6 +2057,7 @@ def test_events_sql_vocab(monkeypatch, tmp_path):
     assert '"bd_fill_series": "(this series)"' in html
     assert '"bd_fill_any": "(any row)"' in html
     assert '"bd_section": "`GROUP BY`"' in html
+    assert '"bd_fill_group": "Event names"' in html
     assert "IGNORE NULLS" not in html
     assert "COUNT(*)" in html
     assert "COUNT(DISTINCT id)" in html
