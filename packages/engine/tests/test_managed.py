@@ -226,8 +226,10 @@ def test_values_relation_bakes_the_narrowing_and_watermark_is_a_day_floor():
     assert rel.startswith("(SELECT fc_entity, fc_at AS fc_t, fc_value FROM")
     assert "fc_column = 'plan'" in rel and "'subscription_started'" in rel
     assert rel.rstrip().endswith("AS fc_idx_plan")
+    # the default call carries no lookback, and the tail still keeps its
+    # one-day cushion (see test_the_tail_starts_a_lookback_before_the_bookmark)
     wm = watermark_sql(_form(), datetime(2026, 9, 1, 14, 0, tzinfo=timezone.utc))
-    assert "'2026-09-01'" in wm and "factcat_ts_at_date" in wm
+    assert "'2026-08-31'" in wm and "factcat_ts_at_date" in wm
 
 
 # ---------------------------------------------------------------- registry
@@ -584,12 +586,15 @@ def test_the_tail_starts_a_lookback_before_the_bookmark():
     form = _form(managed_lookback_days=3)
     bookmark = datetime(2026, 9, 10, 6, 0, tzinfo=timezone.utc)
     assert "2026-09-07" in managed.watermark_sql(form, bookmark, 3)
-    assert "2026-09-10" in managed.watermark_sql(form, bookmark, 0)
+    # never zero cushion: the day floor is computed in the reporting timezone,
+    # which can sit hours after the bookmark, so a caller who sets the
+    # lookback to 0 still gets a day of overlap rather than a gap
+    assert "2026-09-09" in managed.watermark_sql(form, bookmark, 0)
     # and the plan hands the setting through, not a zero
     reg = _registry(form, bookmark=bookmark.isoformat())
     plan = build_plan({**form, "managed_tables": reg}, None, now=NOW)
     att = plan.attachment(form, "plan", "plan", "any", None)
-    assert att is not None and "2026-09-07" in att[1]
+    assert att is not None and "2026-09-07" in att[1]  # the setting, not a zero
 
 
 def test_a_mapping_change_drops_the_whole_index():

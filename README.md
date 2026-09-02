@@ -374,9 +374,9 @@ every event name, which can be **several times** what the chart alone
 would have scanned (on one measured hub, 74 GB against 10 GB), and it pays
 back after a handful of runs. While it runs the copy says "Indexing `x`…
 then running", and afterwards one line under the chip says what later runs
-cost. Once the index exists the chip prices the cheap query, and where the
-warehouse can price a job before running it the chip covers the build
-too. Dense columns (the value is on most rows)
+cost. Once the index exists the chip prices the cheap query; where the warehouse
+can price a job before running it **and** the column has already been
+measured, the chip covers a pending build too. Dense columns (the value is on most rows)
 are left alone; **Value at: each event** already reads them for free. Columns that are not text are left alone too (the
 index stores text); write `CAST(x AS STRING)` as the breakdown expression to
 index one.

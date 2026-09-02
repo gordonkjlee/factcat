@@ -130,11 +130,13 @@ def _dest_name(form: dict[str, Any]) -> str:
     """The write destination as a plain dotted name. The fingerprint travels
     as JSON through a table comment, so it carries no quoting: a quoted ident
     would need escaping on the way out and back."""
+    # The same parts write_relation uses, and no billing-project fallback:
+    # query.py refuses that deliberately, and two definitions of "the write
+    # destination" would drift.
     if form_kind(form) == "snowflake":
         parts = [form.get("write_database"), form.get("write_schema")]
     else:
-        parts = [form.get("write_project") or form.get("data_project") or form.get("project"),
-                 form.get("write_dataset")]
+        parts = [form.get("write_project"), form.get("write_dataset")]
     # Keep every part, even when the destination is incomplete: collapsing
     # them all to "" would let two differently half-configured destinations
     # share a fingerprint, and old bookmarks would attach to a new table.
@@ -532,7 +534,11 @@ def watermark_sql(form: dict[str, Any], bookmark: datetime, lookback_days: int =
     in. Subtracting the lookback also swamps the day floor's reporting-
     timezone offset (at most 14 h, against a default of 3 days). The
     overlap is duplicates only, and the engine is proven indifferent."""
-    day = (bookmark - timedelta(days=max(0, lookback_days))).date()
+    # At least one day, even when the caller sets the lookback to 0: the day
+    # floor is computed in the reporting timezone, which can sit up to 14 h
+    # after the bookmark, and a tail that starts after it would miss rows
+    # that are in neither side. A day of overlap is duplicates only.
+    day = (bookmark - timedelta(days=max(1, lookback_days))).date()
     return _date_bound(form, day)
 
 
@@ -1193,7 +1199,17 @@ def apply_action(
         registry = registry_from_form(form) or {}
     fp = config_fingerprint(form)
     if registry.get("fp") != fp:
-        registry = {"v": REGISTRY_VERSION, "fp": fp, "columns": {}, "probes": registry.get("probes") or {}}
+        # The mapping moved, so every column in the table is a stale
+        # generation. Setup still lists them and the guides promise Drop as
+        # the immediate erasure remedy, so honour it by dropping the table
+        # whole rather than refusing with "no such indexed column".
+        if registry.get("columns"):
+            try:
+                run(drop_table_sql(form))
+            except AdapterError as exc:
+                if not is_missing_relation(exc):
+                    raise
+        return {"v": REGISTRY_VERSION, "fp": fp, "columns": {}, "probes": registry.get("probes") or {}}
     cols: dict[str, Any] = registry.setdefault("columns", {})
     if key not in cols:
         raise ValueError("no such indexed column")

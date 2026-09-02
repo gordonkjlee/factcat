@@ -163,7 +163,10 @@ so check who can read the write dataset before indexing a column that
 carries personal data. Rows deleted from the events table leave the index
 at the next refresh of that column (the census notices the row count fall);
 with Mode: Off, or for a column no chart uses, they stay until the sweep
-drops it. Drop the column for an immediate removal. The index is
+drops it. Drop the column for an immediate removal. One gap to know about: if an event name
+that already existed starts carrying a column it never carried before, the
+index does not pick that up on its own — Drop the column and let the next
+chart rebuild it. The index is
 day-partitioned, and BigQuery refuses a single statement that touches more
 than 4,000 partitions, so a column with more than about eleven years of
 history cannot be built in one pass — the build fails cleanly and the chart

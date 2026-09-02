@@ -827,7 +827,16 @@ async def api_managed_action(request: Request) -> JSONResponse:
         # Situation, then consequence (the #66 callout grammar): the reason,
         # and the state of the world after it.
         why = str(exc).rstrip(".")
-        return JSONResponse({"ok": False, "error": f"Drop did not run: {why}. The table is unchanged."}, status_code=400)
+        # A ValueError is raised before any statement, so the table really is
+        # untouched. An AdapterError means the DELETE failed - and the
+        # registry is written first, so the column is already out of the
+        # record and only its rows remain. Saying "unchanged" there is false.
+        after = (
+            "The table is unchanged."
+            if isinstance(exc, (ValueError, LookupError))
+            else "The column is no longer listed; its rows go on the next build."
+        )
+        return JSONResponse({"ok": False, "error": f"Drop did not run: {why}. {after}"}, status_code=400)
     save({"managed_tables": registry})
     return JSONResponse({"ok": True, "registry": registry})
 
