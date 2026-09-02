@@ -130,12 +130,14 @@ timestamp column so partitions prune; results are exact regardless of how
 stale the index is.
 
 **Mode** Automatic indexes a sparse column the first time an expensive
-mode uses it. That run costs about one full-history scan of the column —
-what the chart would have scanned anyway, so the estimate already includes
-it; the running copy says "Indexing `x`… then running", and afterwards one
-line under the chip says what later runs cost. Once the index exists the
-chip prices the cheap query. The build runs under the same scan cap as a
-chart; over the cap it fails cleanly and the chart reads the full history. Automatic refreshes
+mode uses it. That run reads the column's whole history for every event
+name, which can be several times what the chart alone would scan (74 GB
+against 10 GB on one measured hub) and pays back after a handful of runs;
+where the probe is already cached the estimate chip includes it. The
+running copy says "Indexing `x`… then running", and afterwards one line
+under the chip says what later runs cost. Once the index exists the chip
+prices the cheap query. The build runs under the same scan cap as a chart;
+over the cap it fails cleanly and the chart reads the full history. Automatic refreshes
 it when older than **Refresh when older than**, and drops columns no
 chart has used for **Drop unused after** on a daily sweep. **Late-arrival
 lookback** is how late a row can land after its event time; a refresh
@@ -155,3 +157,14 @@ back-filled on the next refresh, a name whose row count shrank is rebuilt.
 Needs `bigquery.tables.create` on the dataset (the rights check above).
 A failed build never blocks a chart: it runs on the full history and the
 run row says why.
+
+The table holds entity ids and column values copied from your events table,
+so check who can read the write dataset before indexing a column that
+carries personal data. Rows deleted from the events table leave the index
+at the next refresh of that column (the census notices the row count fall);
+with Mode: Off, or for a column no chart uses, they stay until the sweep
+drops it. Drop the column for an immediate removal. The index is
+day-partitioned, and BigQuery refuses a single statement that touches more
+than 4,000 partitions, so a column with more than about eleven years of
+history cannot be built in one pass — the build fails cleanly and the chart
+reads the full history.

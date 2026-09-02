@@ -132,18 +132,32 @@ bookmark, bounded on the bare timestamp column; results are exact
 regardless of how stale the index is.
 
 **Mode** Automatic indexes a sparse column the first time an expensive
-mode uses it, on Snowflake as on BigQuery. Snowflake has no cost preview,
-but neither does the chart Run executes, and a first build reads about
-what that chart would have scanned — the column's full history, once; the
-running copy says "Indexing `x`… then running" and one line under the Run
-button afterwards says the index is in place. **Refresh when older than**
+mode uses it, on Snowflake as on BigQuery. Be deliberate about it here:
+Snowflake has no cost preview and no byte ceiling, so unlike BigQuery
+there is no scan cap standing behind the build, and that first run reads
+the column's whole history for every event name — several times what the
+chart alone would read. Snowflake also bills warehouse time rather than
+bytes, so the saving shows up as a shorter query, not a smaller bill, and a
+warm warehouse may show little. Set Mode to Off if that is not a trade you
+want. Because there is no cost preview there is no estimate chip, and so no
+"Indexing…" copy while it runs; one line under the Run button afterwards
+says the index is in place. **Refresh when older than**
 decides when newer rows are folded in, **Drop unused after** drops columns
 no chart has used (daily sweep), **Late-arrival lookback** is how late a
 row can land after its event time. Off changes nothing: no build, refresh,
 rebuild or drop; an existing index is still read.
 
 Columns that are not text are left alone (the index stores text); write
-`CAST(x AS STRING)` as the breakdown expression to index one. The build
+`CAST(x AS STRING)` as the breakdown expression to index one.
+
+The table holds entity ids and column values copied from your events table,
+so check who can read the write schema before indexing a column that
+carries personal data. Rows deleted from the events table leave the index
+at the next refresh of that column, which depends on the event-name census
+noticing the row count fall — and without Enterprise materialized views
+that census is a table snapshot that only refreshes when someone clicks
+**Refresh event names**, so on standard edition the check is as fresh as
+your last refresh. Drop the column for an immediate removal. The build
 statements for Snowflake are verified by compiling them against Snowflake's
 grammar in the test suite; no live Snowflake account ran them for this
 release. If a build fails, the chart reads the full history and the Setup

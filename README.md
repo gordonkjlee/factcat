@@ -369,12 +369,14 @@ table's full history, so results are exact and later runs cost about
 what a plain chart costs (measured on a month-partitioned hub: 10 GB →
 0.26 GB for one carried breakdown). It fills itself: the first Run that
 uses an expensive mode on a sparse column builds the index first, then
-queries through it. That first run costs about one full-history scan of
-the column — which is what the chart would have scanned anyway, so the
-estimate chip already includes it; while it runs the copy says
-"Indexing `x`… then running", and afterwards one line under the chip says
-what later runs cost. Once the index exists the chip prices the cheap
-query. Dense columns (the value is on most rows)
+queries through it. That first run reads the column's whole history for
+every event name, which can be **several times** what the chart alone
+would have scanned (on one measured hub, 74 GB against 10 GB), and it pays
+back after a handful of runs. While it runs the copy says "Indexing `x`…
+then running", and afterwards one line under the chip says what later runs
+cost. Once the index exists the chip prices the cheap query, and where the
+warehouse can price a job before running it the chip covers the build
+too. Dense columns (the value is on most rows)
 are left alone; **Value at: each event** already reads them for free. Columns that are not text are left alone too (the
 index stores text); write `CAST(x AS STRING)` as the breakdown expression to
 index one.
@@ -390,6 +392,19 @@ Off** changes nothing: no build, refresh, rebuild or drop; an existing
 index is still read. If a build fails (rights, cap), the chart runs on
 the full history and the run row says so. Every managed table is derived
 and safe to drop; nothing lives only there.
+
+`fc_column_index` holds entity ids and column values copied out of your
+events table, so check the grants on your write destination before indexing
+a column that carries personal data — it is a second home for it. Rows
+deleted from the events table leave the index at the next refresh of that
+column (**Refresh when older than**, 7 days by default), detected through
+the event-name census; with **Mode: Off**, or for a column no chart uses,
+they stay until the daily sweep drops it (**Drop unused after**, 60 days).
+If an erasure has to be immediate, Drop the column on Setup or drop the
+table. Two changes the index cannot see are a value rewritten in place with
+no change in row count, and an identity remap; Drop is the remedy for both.
+The table is charged as ordinary storage in your own warehouse, and it is
+only swept while someone is using Factcat.
 On Events, each **event series** is a card: event name, **measure** (and Of
 when the measure is a property), and filters. Filter operators follow the
 column type (boolean, number, date, time, timestamp, string). String rows
