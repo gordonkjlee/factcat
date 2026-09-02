@@ -708,3 +708,20 @@ def test_half_configured_destinations_do_not_share_a_fingerprint():
     assert c["dest"] != d["dest"]
     # and a complete destination still reads as a plain dotted name
     assert config_fingerprint(_form())["dest"] == "dest-proj.analytics_fc.fc_column_index"
+
+
+def test_drop_on_a_stale_column_drops_the_table():
+    """After a mapping change every column in the table is a stale
+    generation, and Setup still lists them. The guides promise Drop as the
+    immediate erasure remedy, so it must not refuse with "no such indexed
+    column". Mutation: reset the registry without dropping the table."""
+    form = _form()
+    reg = _registry(form)
+    reg["columns"]["utm"] = {**reg["columns"]["plan"], "label": "utm", "expr": "utm"}
+    reg["fp"] = {"moved": True}
+    run = _Run()
+    out = managed.apply_action({**form, "managed_tables": reg}, run, action="drop", key="plan")
+    ups = [c.upper().strip() for c in run.calls]
+    assert any(u.startswith("DROP TABLE") for u in ups), "the stale rows were left behind"
+    assert out["columns"] == {}
+    assert out["fp"] == config_fingerprint(form)
