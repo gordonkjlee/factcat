@@ -885,9 +885,15 @@ def test_values_table_is_read_not_scanned_around(subs):
     subs.execute(
         "INSERT INTO fake_values VALUES ('S1', TIMESTAMP '2025-12-01 00:00:00', 'mystery')"
     )
+    # A NULL-instant decoy must never win: BigQuery sorts NULL first under
+    # DESC, so at="last" would pick it without the fc_t guard. DuckDB sorts
+    # NULLS LAST by default, so the shape assertion below is the proof.
+    subs.execute("INSERT INTO fake_values VALUES ('S1', NULL, 'decoy')")
     for at in ("carried", "last", "first"):
         spec = _subs_spec(Breakdown("plan_tier", at=at, values_table="fake_values"))
+        assert "fc_t IS NOT NULL" in events_sql(spec), at
         got = {(d, t): v for d, t, v in _rows(subs, spec)}
+        assert ("2026-01-02", "decoy") not in got, at
         assert got[("2026-01-02", "mystery")] == 1.0, at
         assert got[("2026-01-06", "mystery")] == 1.0, at
         assert got[("2026-01-02", None)] == 2.0, at  # S4, S5: nothing recorded

@@ -215,7 +215,9 @@ def _attr_cte(
     # exact; no watermark means the relation is complete and the table is
     # not read for this column. Bounds land on fc_t there and on the
     # event_time expression on the live side.
-    vals_conds = ["fc_entity IS NOT NULL", "fc_value IS NOT NULL"]
+    # fc_t guarded here as in the carried branch: a NULL instant would sort
+    # first under DESC on BigQuery and win at="last" for that entity.
+    vals_conds = ["fc_entity IS NOT NULL", "fc_t IS NOT NULL", "fc_value IS NOT NULL"]
     if bounded and bd.since:
         vals_conds.append(f"fc_t >= ({bd.since})")
     if bounded and bd.until:

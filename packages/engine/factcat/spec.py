@@ -76,8 +76,9 @@ class Breakdown:
         values_table: caller SQL naming a relation that already holds this
                    column's recorded values: three columns, ``fc_entity``,
                    ``fc_t`` (same type as ``event_time``) and ``fc_value``
-                   (same type as ``expr``), one row per recorded value, no
-                   NULL values. Any mode except ``rows``. When set, the
+                   (same type as ``expr``), one row per recorded value; rows
+                   with a NULL entity, instant or value are ignored. Any mode
+                   except ``rows``. When set, the
                    unfiltered-table scan for this column reads this relation
                    instead — a small derived index, or your own model — so a
                    full-history scan is not paid on every run. Narrow it

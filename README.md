@@ -123,7 +123,9 @@ recorded values — three columns, ``fc_entity``, ``fc_t`` (the type of
 ``event_time``) and ``fc_value`` (the type of the expression), one row per
 recorded value — so the full-history scan is not paid on every run. It
 can be your own model or a small derived index; narrow it yourself, since
-``fill_from`` applies only to live rows. ``values_watermark`` says the
+``fill_from`` applies only to live rows — an un-narrowed relation paired
+with ``fill_from`` returns values ``fill_from`` would have excluded.
+``values_watermark`` says the
 relation is complete through that instant; rows after it are read live
 from the table, so a relation that lags still yields exact results (leave
 it unset to declare the relation complete). When ``event_time`` is an
