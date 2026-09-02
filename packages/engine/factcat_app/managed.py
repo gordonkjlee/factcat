@@ -44,7 +44,7 @@ from factcat.dialects import (
     splice_placeholders,
 )
 from factcat._emit import transpile
-from factcat.warehouses import AdapterError, BytesCapError, QueryResult, is_missing_relation
+from factcat.warehouses import AdapterError, QueryResult, is_missing_relation
 
 from factcat_app.query import (
     _as_event_time,

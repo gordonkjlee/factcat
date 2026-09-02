@@ -2625,6 +2625,10 @@ def test_setup_and_events_carry_the_managed_chrome(monkeypatch, tmp_path):
     # withdrawn at the owner's review: manual index, pins, overrides, per-row refresh/rebuild
     for gone in ("Index a column now", "managed-add", "data-act=\"pin\"", "data-ovr", "data-act=\"rebuild\"", "data-act=\"refresh\""):
         assert gone not in setup, gone
+    # the stale row's consequence is Mode-dependent: both sentences exist and the
+    # Off one names what to do
+    assert "until the next run that uses it rebuilds it." in setup
+    assert "set Mode to Automatic and the next run that uses it rebuilds it." in setup
     assert "physical" not in setup.lower()  # withdrawn field stays out
     events = client.get("/events").text
     assert "id=\"run-note\"" in events
@@ -2828,3 +2832,28 @@ def test_write_access_verdict_is_saved_for_the_run_gate(monkeypatch, tmp_path):
     assert json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))["write_access_status"] == "ok"
 
 
+def test_managed_drop_runs_under_the_scan_cap(monkeypatch, tmp_path):
+    """Drop is a billed DELETE on BigQuery: the action connection keeps the
+    scan cap. Mutation: connection_from_form(merged, apply_scan_cap=False)."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body(bytes_cap_gb=2)
+    reg = {
+        "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1}},
+    }
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    seen = {}
+
+    def fake_connect(kind, **kw):
+        seen.update(kw)
+        return _ManagedWarehouse()
+
+    monkeypatch.setattr("factcat_app.main.connect", fake_connect)
+    client = TestClient(app)
+    res = client.post("/api/managed/action", json={**body, "action": "drop", "key": "plan"})
+    assert res.status_code == 200, res.text
+    assert seen.get("maximum_bytes_billed") == 2 * 1024 ** 3

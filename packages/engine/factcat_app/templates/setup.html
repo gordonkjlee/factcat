@@ -1752,8 +1752,14 @@ function renderManaged() {
     const head = "<div class=\"mt-head\"><span><code>fc_column_index</code> \u203a <code>" + label + "</code></span>"
       + "<span class=\"mt-meta\">" + metaText([idx && cols.length === 1 ? fmtBytesShort(idx.bytes) : "", c.stale ? "" : fmtAgo(c.refreshed_at || c.built_at)]) + "</span></div>";
     if (c.stale) {
+      // Under Automatic the next run that uses it rebuilds it; under Off a
+      // moved mapping stays live until Mode changes - say the true one.
+      const auto = (document.getElementById("managed_mode").value || "auto") === "auto";
+      const consequence = auto
+        ? "Charts read the full history until the next run that uses it rebuilds it."
+        : "Charts read the full history; set Mode to Automatic and the next run that uses it rebuilds it.";
       row.innerHTML = head
-        + "<div class=\"callout\"><p>The mapping changed since this was built. Charts read the full history until the next run that uses it rebuilds it.</p></div>"
+        + "<div class=\"callout\"><p>The mapping changed since this was built. " + consequence + "</p></div>"
         + "<div class=\"mt-acts\"><button type=\"button\" class=\"linkish\" data-act=\"drop\">Drop</button></div>";
       managedBody.appendChild(row);
       return;
