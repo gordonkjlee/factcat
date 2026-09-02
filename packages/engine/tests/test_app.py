@@ -2627,6 +2627,11 @@ def test_setup_and_events_carry_the_managed_chrome(monkeypatch, tmp_path):
     assert "id=\"run-note\"" in events
     assert "for faster breakdowns" in events
     assert "index" not in events.split("runningPrefix")[1][:400].lower()  # business register
+    # One convention for backticked labels: the note and both running-copy
+    # branches render through the same helper (never literal backticks).
+    assert events.count("appendMarked(") >= 3
+    assert "appendMarked(el, text" in events.split("function setRunNote")[1][:200]
+    assert events.split("function setRunningCopy")[1][:700].count("appendMarked(copy") == 2
 
 
 def test_estimate_prices_the_build_as_a_select_and_survives_a_missing_table(monkeypatch, tmp_path):
