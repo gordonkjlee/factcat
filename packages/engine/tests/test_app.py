@@ -2858,3 +2858,94 @@ def test_managed_drop_runs_under_the_scan_cap(monkeypatch, tmp_path):
     res = client.post("/api/managed/action", json={**body, "action": "drop", "key": "plan"})
     assert res.status_code == 200, res.text
     assert seen.get("maximum_bytes_billed") == 2 * 1024 ** 3
+
+
+class _CensusWarehouse(_ManagedWarehouse):
+    """Answers the name-grain census with `rows` per event name."""
+
+    def __init__(self, rows, **kw):
+        super().__init__(**kw)
+        self.census_rows = rows
+
+    def run(self, sql, *, dry_run: bool = False):
+        if "SUM(fc_rows)" in sql or "SUM(FC_ROWS)" in sql.upper():
+            self.calls.append((sql, dry_run))
+            return QueryResult(rows=[
+                {"fc_value": name, "fc_rows": n, "fc_first": "2026-01-01T00:00:00+00:00",
+                 "fc_last": "2026-09-01T00:00:00+00:00"}
+                for name, n in self.census_rows.items()
+            ])
+        return super().run(sql, dry_run=dry_run)
+
+
+def _census_registry(body, *, refreshed_days_ago, snapshot_rows):
+    from datetime import datetime, timedelta, timezone
+    from factcat_app import managed as managed_mod
+
+    now = datetime.now(timezone.utc)
+    then = (now - timedelta(days=refreshed_days_ago)).isoformat()
+    return {
+        "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+        "columns": {"plan": {
+            "expr": "plan", "label": "plan", "built_at": then, "refreshed_at": then,
+            "last_used_at": (now - timedelta(hours=1)).isoformat(), "bookmark": then,
+            "use_count": 5,
+            "names": {"subscription_started": {"rows": snapshot_rows,
+                                               "first": "2026-01-01T00:00:00+00:00",
+                                               "last": "2026-09-01T00:00:00+00:00"}},
+        }},
+        "probes": {"plan": {"density": 0.01, "at": now.isoformat()}},
+    }
+
+
+def test_run_reads_the_census_and_repairs_a_name_whose_rows_shrank(monkeypatch, tmp_path):
+    """The self-repair answers "what if history changed": a name whose row
+    count fell is deleted from the index and backfilled whole. It is gated on
+    the event-name census, whose fingerprint lives in the config file — the
+    Events request never carries it, so the run path must merge it.
+    Mutation: drop "event_name_cache" from MANAGED_KEYS and no census is read
+    and no repair fires (the state this test was written to catch)."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    reg = _census_registry(body, refreshed_days_ago=8, snapshot_rows=1000)
+    (tmp_path / "cfg.json").write_text(json.dumps({
+        "managed_tables": reg,
+        "event_name_cache": {"v": 2, "kind": "view", "fp": "x"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    wh = _CensusWarehouse({"subscription_started": 400})
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    ups = [c[0] for c in wh.calls if not c[1]]
+    assert any("SUM(fc_rows)" in s or "SUM(FC_ROWS)" in s.upper() for s in ups), "census never read"
+    deletes = [s for s in ups if s.upper().strip().startswith("DELETE FROM")]
+    assert deletes, "a shrunk name was not repaired"
+    assert "subscription_started" in deletes[0]
+    assert any(s.upper().startswith("INSERT") for s in ups)
+
+
+def test_run_leaves_the_index_alone_when_the_census_matches(monkeypatch, tmp_path):
+    """Control for the repair: same age, same wiring, unchanged row count —
+    the refresh appends and never deletes."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    reg = _census_registry(body, refreshed_days_ago=8, snapshot_rows=1000)
+    (tmp_path / "cfg.json").write_text(json.dumps({
+        "managed_tables": reg,
+        "event_name_cache": {"v": 2, "kind": "view", "fp": "x"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    wh = _CensusWarehouse({"subscription_started": 1000})
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    ups = [c[0] for c in wh.calls if not c[1]]
+    assert any("SUM(fc_rows)" in s or "SUM(FC_ROWS)" in s.upper() for s in ups)
+    assert not [s for s in ups if s.upper().strip().startswith("DELETE FROM")]

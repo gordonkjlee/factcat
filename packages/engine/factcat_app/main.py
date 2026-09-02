@@ -502,6 +502,12 @@ MANAGED_KEYS = (
     "managed_drop_days",
     "managed_refresh_days",
     "managed_lookback_days",
+    # The census gate. `_census` reads it to decide whether the event-name
+    # cache is a v2 census, and the whole self-repair (a new name with
+    # backfilled history filled whole; a name whose rows shrank rebuilt)
+    # is skipped when it is absent. Only the catalog request carried it, so
+    # on the Run path the repair never fired at all.
+    "event_name_cache",
 )
 
 
