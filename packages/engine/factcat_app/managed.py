@@ -528,17 +528,10 @@ class Plan:
     settings: dict[str, Any]
     notes: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
-    # The exceptions behind `failures`, in order: a scan-cap rejection keeps
-    # its figures so Setup can show them (a string would flatten it).
-    errors: list[BaseException] = field(default_factory=list)
     built: list[str] = field(default_factory=list)
 
     def builds(self) -> list[ColumnPlan]:
         return [c for c in self.columns if c.action in ("build", "rebuild", "refresh")]
-
-    def maybe(self) -> list[ColumnPlan]:
-        """Eligible but unprobed: the Run will check density and may build."""
-        return [c for c in self.columns if c.action == "live" and c.reason == NOT_CHECKED]
 
     def attachable(self) -> dict[str, ColumnPlan]:
         return {c.column.key: c for c in self.columns if c.action != "live"}
@@ -866,12 +859,10 @@ def apply_plan(
             cp.action = "live"
             cp.reason = str(exc)
             plan.failures.append(f"{label}: {exc}")
-            plan.errors.append(exc)
     try:
         run(registry_comment_sql(form, registry))
     except AdapterError as exc:
         plan.failures.append(f"registry: {exc}")
-        plan.errors.append(exc)
     return registry
 
 
@@ -930,6 +921,8 @@ def sweep(
         entry = cols[key]
         if not isinstance(entry, dict):
             continue
+        # `pinned` / `overrides` keys from a pre-trim registry (never shipped)
+        # are ignored: use is the only thing that keeps a column.
         used = _parse_iso(entry.get("last_used_at")) or _parse_iso(entry.get("built_at"))
         if used is None or now - used < ttl:
             continue

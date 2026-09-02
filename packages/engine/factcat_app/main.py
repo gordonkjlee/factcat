@@ -701,6 +701,9 @@ async def api_run(request: Request) -> JSONResponse:
                         priced = await run_in_threadpool(warehouse.run, sql, dry_run=True)
                         after = priced.bytes_processed
                     except AdapterError:
+                        # BytesCapError is an AdapterError: a cap rejection here
+                        # (the cap moved between run and price) only costs the
+                        # figure, never the rows already fetched.
                         after = None
                 managed_note = managed_mod.built_note(plan, bytes_after=after)
             registry = await run_in_threadpool(managed_mod.bump_usage, plan, form, warehouse.run)
