@@ -480,15 +480,8 @@
       background: var(--fc-line);
     }
     #add-breakdown-row[hidden], #add-event-row[hidden], .fc-plus-row[hidden] { display: none !important; }
-    .breakdown-slot-head {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 0.5rem;
-      margin: 0.65rem 0 0.2rem;
-    }
+    .breakdown-slot-head { margin: 0.65rem 0 0.2rem; }
     .breakdown-slot-head label { margin: 0; }
-    .breakdown-slot-head .linkish { margin-left: 0; }
     .breakdown-slot-row,
     .series-bd-slot:not(:first-child) .series-bd-row {
       display: flex;
@@ -555,24 +548,41 @@
     #bd-null-nudge .linkish { margin-left: 0; }
     .series-bd .remove-breakdown { margin-left: 0.4rem; }
     #of-wrap[hidden] { display: none !important; }
-    #events-band { margin: 0 0 1rem; }
-    .band-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.75rem;
-      font-size: 0.75rem;
-      font-weight: 600;
-      margin: 0 0 0.35rem;
+    /* Section panels (non-collapsing; heads are static — no pane classes,
+       whose head click listener and margins must not reach this column). */
+    .cfg-section {
+      border: 1px solid var(--fc-line); background: var(--fc-snow);
+      margin: 0 0 .75rem;
     }
-    .band-head-title { min-width: 0; }
-    .band-head-actions {
+    .cfg-section-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: .75rem; padding: .4rem .55rem;
+      border-bottom: 1px solid var(--fc-line);
+      font-size: .7rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: .04em; color: var(--fc-ink-soft);
+    }
+    .cfg-section-head .linkish { text-transform: none; letter-spacing: 0; }
+    /* The head must not re-case folded SQL against the user's sql_case
+       preference. */
+    .cfg-section-head code.fc-sql { text-transform: none; letter-spacing: 0; }
+    .cfg-section-body { padding: .5rem .55rem .45rem; min-width: 0; }
+    .cfg-section-body > .row:first-child { margin-top: 0; }
+    /* Seams: adjacent vertical margins COLLAPSE (the larger wins, they do
+       not add). Exact hidden (the first-run default): section bottom
+       .75rem meets the next section = 12px. Exact shown: .75rem meets
+       #exact-wrap's .75rem on both sides = 12px above and below. The
+       inner .row's global margin-top is zeroed so it cannot collapse
+       through and silently become the seam's owner. */
+    #exact-wrap { margin: .75rem 0; }
+    #exact-wrap .row { margin-top: 0; }
+    .cfg-section-title { min-width: 0; }
+    .cfg-section-actions {
       display: flex;
       align-items: center;
       gap: 0.75rem;
       flex: 0 0 auto;
     }
-    .band-head-actions .linkish { margin-left: 0; font-size: 0.75rem; }
+    .cfg-section-actions .linkish { margin-left: 0; }
     .refresh-split {
       display: inline-flex;
       align-items: center;
@@ -803,12 +813,12 @@
     <input type="hidden" name="write_schema" id="write_schema" value="{{ config.write_schema or '' }}">
     <input type="hidden" name="write_database" id="write_database" value="{{ config.write_database or '' }}">
 
-    <div id="events-band">
-      <div class="band-head">
-        <span class="band-head-title">Event series <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span></span>
+    <section class="cfg-section" id="events-band">
+      <div class="cfg-section-head">
+        <span class="cfg-section-title">Event series <span id="event_value-loading" class="loading" hidden aria-label="Loading"></span></span>
         <span id="event_value" hidden></span>
         <input type="hidden" name="catalog_lookback_days" id="catalog_lookback_days" value="{{ config.catalog_lookback_days if config.catalog_lookback_days is not none else 90 }}">
-        <span class="band-head-actions">
+        <span class="cfg-section-actions">
         <span class="refresh-split">
           <button type="button" id="refresh-events" class="linkish">Refresh event names</button>
           <button type="button" class="linkish refresh-more" id="find-event" hidden aria-haspopup="true" aria-expanded="false" aria-label="Look further back for event names">
@@ -817,6 +827,7 @@
         </span>
         </span>
       </div>
+      <div class="cfg-section-body">
       <p id="event-names-status" class="catalog-status" hidden></p>
       <p id="event-names-snapshot" class="hint" hidden>This list is a snapshot. Refresh rebuilds it.</p>
       <p id="event-names-fallback" class="hint" hidden>Could not use the event-name snapshot in the write destination — ran a lookback scan instead. Check permissions on fc_event_names.</p>
@@ -832,7 +843,8 @@
           Add series
         </button>
       </div>
-    </div>
+      </div>
+    </section>
 
     <div id="chart-measure-template" hidden>
     <label for="measure">Measure</label>
@@ -876,7 +888,14 @@
       <span class="hint" id="exact-hint">Same bytes scanned; more CPU. Off is HyperLogLog (faster).</span>
     </div>
 
-    <div id="breakdown-band">
+    <section class="cfg-section" id="breakdown-band">
+    <div class="cfg-section-head">
+      <span class="cfg-section-title">{{ filter_ui.chrome.bd_section | sql_chrome }} <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span></span>
+      <span class="cfg-section-actions">
+        <button type="button" id="refresh-columns" class="linkish">Refresh list</button>
+      </span>
+    </div>
+    <div class="cfg-section-body">
     <div class="row">
       <input name="breakdown_by_series" type="checkbox" id="breakdown_by_series" {% if config.breakdown_by_series %}checked{% endif %} style="width:auto">
       <label for="breakdown_by_series" style="margin:0">{{ filter_ui.chrome.breakdown_each | sql_chrome }}</label>
@@ -884,8 +903,7 @@
     <div id="breakdown-chart">
     <div class="breakdown-slot" data-slot="0">
     <div class="breakdown-slot-head">
-      <label for="breakdown_column">{{ filter_ui.chrome.breakdown | sql_chrome }} <span id="breakdown_column-loading" class="loading" hidden aria-label="Loading"></span></label>
-      <button type="button" id="refresh-columns" class="linkish">Refresh list</button>
+      <label for="breakdown_column">{{ filter_ui.chrome.breakdown | sql_chrome }}</label>
     </div>
     <select name="breakdown_column" id="breakdown_column"></select>
     <div id="breakdown-json-wrap" hidden>
@@ -920,6 +938,7 @@
       </div>
     </div>
     </div>
+    </section>
     <p id="error"></p>
   </div>
   <div id="col-divider" class="col-divider" role="separator" aria-orientation="vertical" aria-label="Resize the query panel">
@@ -1620,7 +1639,7 @@ function normalizeBreakdownSlot(s) {
   };
 }
 const VALUE_ATS = ["event", "range_start", "range_end", "first_record", "latest_record"];
-const FILL_FROM_TITLE = "Which events count as the value's source. Any event: any row where it is set. The event's own value still wins when it has one.";
+const FILL_FROM_TITLE = "Which events may supply the value. (any event): every event in the table where the value is set — including events not charted here. The event's own value still wins when it has one.";
 function entityWord() {
   const el = document.getElementById("entity_label");
   return ((el && el.value) || "").trim().toLowerCase() || "entity";
@@ -1709,29 +1728,53 @@ const FILL_SERIES_TITLE = "Rows with this series' event name(s) may supply the v
 function paintFillEventSelect(sel, current) {
   const cur = current !== undefined ? current : sel.value;
   sel.innerHTML = "";
-  const add = (value, label, title) => {
+  const add = (parent, value, label, title) => {
     const o = document.createElement("option");
     o.value = value;
     o.textContent = label;
     if (title) o.title = title;
-    sel.appendChild(o);
+    parent.appendChild(o);
   };
-  add("", t("bd_fill_any"), FILL_FROM_TITLE);
+  add(sel, "", t("bd_fill_any"), FILL_FROM_TITLE);
   // Sentinels the backend interprets: series → that card's event names,
   // charted → every charted name (a chart-wide "__series__" falls back
   // to charted server-side).
-  if (sel.closest(".series-bd")) add(FILL_SERIES, t("bd_fill_series"), FILL_SERIES_TITLE);
-  add(FILL_CHARTED, t("bd_fill_charted"), FILL_CHARTED_TITLE);
+  if (sel.closest(".series-bd")) add(sel, FILL_SERIES, t("bd_fill_series"), FILL_SERIES_TITLE);
+  add(sel, FILL_CHARTED, t("bd_fill_charted"), FILL_CHARTED_TITLE);
+  // Literal names sit in a group so meta options read as meta; the sql
+  // vocab labels the group with the LIVE mapped column — a generic guess
+  // would lie when the column is e.g. `type`, so a blank mapping falls
+  // back to the plain-vocab group label instead. The group is only
+  // created when it will hold at least one option — an empty header
+  // must not render.
+  let group = null;
+  const named = (parent, name) => {
+    if (!group) {
+      group = document.createElement("optgroup");
+      const mapped = (eventColumnEl.value || "").trim();
+      group.label = FILTER_UI.vocab === "sql" && mapped ? mapped : t("bd_fill_group");
+      parent.appendChild(group);
+    }
+    add(group, name, name);
+  };
   [...eventNameCache].sort((a, b) => String(a).localeCompare(String(b))).forEach((name) => {
-    add(name, name);
+    named(sel, name);
   });
-  add(CUSTOM_BREAKDOWN, t("sql_expr_ellipsis"));
   // A stale series sentinel restored onto a chart-wide slot would render
-  // its raw value via ensureOption; coerce it to charted, matching the
-  // backend's degradation.
+  // its raw value; coerce it to charted, matching the backend's
+  // degradation. A stale saved NAME joins the group, never the tail —
+  // BEFORE the SQL sentinel, so the group cannot land after it when the
+  // cache is empty.
   const fixed =
     cur === FILL_SERIES && !sel.closest(".series-bd") ? FILL_CHARTED : cur;
-  if (fixed && fixed !== CUSTOM_BREAKDOWN) ensureOption(sel, fixed);
+  if (
+    fixed && fixed !== CUSTOM_BREAKDOWN && fixed !== FILL_CHARTED
+    && fixed !== FILL_SERIES
+    && ![...sel.options].some((o) => o.value === fixed)
+  ) {
+    named(sel, fixed);
+  }
+  add(sel, CUSTOM_BREAKDOWN, t("sql_expr_ellipsis"));
   sel.value = fixed || "";
 }
 function slotColumnValue(slotEl) {

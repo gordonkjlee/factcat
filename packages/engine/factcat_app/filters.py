@@ -321,9 +321,11 @@ CHROME = {
         "bd_missing_null": "leave (null)",
         "bd_missing_fill": "fill from history",
         "bd_fill_from": "Fill from",
-        "bd_fill_any": "Any event",
-        "bd_fill_charted": "Charted events",
-        "bd_fill_series": "This series' events",
+        "bd_fill_any": "(any event)",
+        "bd_fill_charted": "(charted events)",
+        "bd_fill_series": "(this series' events)",
+        "bd_fill_group": "Event names",
+        "bd_section": "Break down",
         "of": "Of",
         "volume": "Volume",
         "unique": "Unique {plural}",
@@ -358,9 +360,15 @@ CHROME = {
         "bd_missing_null": "keep `NULL`",
         "bd_missing_fill": "fill from history",
         "bd_fill_from": "fill from",
-        "bd_fill_any": "any row",
-        "bd_fill_charted": "charted events",
-        "bd_fill_series": "this series",
+        # Same in both vocabs: this select's register is events (its
+        # neighbours are "(charted events)" and literal event names), and
+        # "any row" hid the load-bearing fact that the search spans
+        # events NOT charted here.
+        "bd_fill_any": "(any event)",
+        "bd_fill_charted": "(charted events)",
+        "bd_fill_series": "(this series)",
+        "bd_fill_group": "Event names",
+        "bd_section": "`GROUP BY`",
         "of": "of",
         "volume": "`COUNT(*)`",
         "unique": "`COUNT(DISTINCT id)`",
