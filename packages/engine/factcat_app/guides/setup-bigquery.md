@@ -129,26 +129,26 @@ read it plus the live rows after its bookmark, bounded on the bare
 timestamp column so partitions prune; results are exact regardless of how
 stale the index is.
 
-**Mode** Automatic prepares a sparse column the first time an expensive
+**Mode** Automatic indexes a sparse column the first time an expensive
 mode uses it. That run costs about one full-history scan of the column —
-what the chart would have scanned anyway, so the estimate already covers
-it; its second line says the run may prepare the column and what later
-runs cost, and once the index exists the chip prices the cheap query. The
-build runs under the same scan cap as a chart; over the cap it fails
-cleanly and the chart reads the full history. Automatic refreshes
+what the chart would have scanned anyway, so the estimate already includes
+it; the running copy says "Indexing `x`… then running", and afterwards one
+line under the chip says what later runs cost. Once the index exists the
+chip prices the cheap query. The build runs under the same scan cap as a
+chart; over the cap it fails cleanly and the chart reads the full history. Automatic refreshes
 it when older than **Refresh when older than**, and drops columns no
 chart has used for **Drop unused after** on a daily sweep. **Late-arrival
 lookback** is how late a row can land after its event time; a refresh
 re-reads that much before each event name's bookmark. Dense columns (the
-value on more than about a quarter of recent rows) are not indexed
-automatically — **Value at: each event** already has them; **Index a
-column now** overrides that. Columns that are not text are left alone too (the
+value on more than about a quarter of recent rows) are not indexed —
+**Value at: each event** already has them. Columns that are not text are left alone too (the
 index stores text); write `CAST(x AS STRING)` as the breakdown expression to
-index one. Off builds nothing new and drops nothing.
+index one. Off changes nothing: no build, refresh, rebuild or drop; an
+existing index is still read.
 
-The list shows size and age per table, with Refresh, Rebuild, Drop, Pin
-(never drop) and per-column overrides; Rebuild and Index a column now run
-under the scan cap too. Its bookkeeping (fingerprints,
+The list shows size and age per table; Drop is the only per-table action
+(building, refreshing and rebuilding are Automatic mode's job). Its
+bookkeeping (fingerprints,
 last use, census snapshot) lives in the table's own description; a
 mapping change rebuilds, a new event name with backfilled history is
 back-filled on the next refresh, a name whose row count shrank is rebuilt.

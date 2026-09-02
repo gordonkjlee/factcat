@@ -589,16 +589,6 @@ def is_text_column(form: dict[str, Any], expr: str) -> bool:
     return not (kind and kind.startswith(_TEXTLESS))
 
 
-def text_columns(form: dict[str, Any]) -> list[dict[str, Any]]:
-    """The mapped columns Setup may offer to Index a column now: the text
-    ones (the same gate the planner applies), in mapping order."""
-    out = []
-    for col in form.get("columns") or []:
-        if isinstance(col, dict) and col.get("name") and is_text_column(form, str(col["name"])):
-            out.append({"name": str(col["name"]), "type": str(col.get("type") or "")})
-    return out
-
-
 def _probe_density(
     form: dict[str, Any], run: RunFn, expr: str, probes: dict[str, Any], key: str, now: datetime
 ) -> float | None:
@@ -626,10 +616,6 @@ _TEXTLESS = (
     "BOOL", "DATE", "TIME", "TIMESTAMP", "DATETIME", "ARRAY", "STRUCT", "JSON", "VARIANT", "OBJECT",
     "GEOGRAPHY", "BYTES", "BINARY",
 )
-NO_PREVIEW = (
-    "automatic preparation needs a cost preview, which this warehouse cannot "
-    "give; use Index a column now on Setup"
-)
 
 
 def build_plan(
@@ -638,17 +624,16 @@ def build_plan(
     *,
     now: datetime | None = None,
     allow_probe: bool = False,
-    auto_ok: bool = True,
 ) -> Plan:
     """Decide per expensive column: attach the index, build it first,
     refresh it first, rebuild it, or run live.
 
     ``run`` may be None (estimate path): only cached facts are used and
     nothing is billed. ``allow_probe`` lets the run path measure density
-    for a column the mirror has not seen. ``auto_ok`` is whether this
-    warehouse can price a job before running it (dry run): without a
-    preview there is no consent moment, so nothing builds automatically —
-    an admin's explicit Index-a-column-now still can.
+    for a column the mirror has not seen. Builds are automatic on every
+    warehouse: Mode: Automatic is the consent (a build costs about what the
+    chart would have scanned, and the chart runs without a preview on
+    warehouses that have none).
     """
     now = now or datetime.now(timezone.utc)
     cfg = settings(form)
@@ -686,9 +671,6 @@ def build_plan(
             bookmark = _parse_iso(entry.get("bookmark"))
             refreshed = _parse_iso(entry.get("refreshed_at")) or _parse_iso(entry.get("built_at"))
             days = cfg["refresh_days"]
-            override = (entry.get("overrides") or {}).get("refresh_days")
-            if override not in (None, ""):
-                days = int(override)
             if bookmark is None:
                 if mode_open:
                     plan.columns.append(ColumnPlan(col, "rebuild", "index has no bookmark", None))
@@ -711,9 +693,6 @@ def build_plan(
             continue
         if not is_text_column(form, col.expr):
             plan.columns.append(ColumnPlan(col, "live", NON_TEXT))
-            continue
-        if not auto_ok:
-            plan.columns.append(ColumnPlan(col, "live", NO_PREVIEW))
             continue
         if not _write_ok(form):
             plan.columns.append(ColumnPlan(col, "live", "no create rights on the write destination"))
@@ -949,7 +928,7 @@ def sweep(
     ttl = timedelta(days=cfg["drop_days"])
     for key in list(cols):
         entry = cols[key]
-        if not isinstance(entry, dict) or entry.get("pinned"):
+        if not isinstance(entry, dict):
             continue
         used = _parse_iso(entry.get("last_used_at")) or _parse_iso(entry.get("built_at"))
         if used is None or now - used < ttl:
@@ -975,71 +954,15 @@ def sweep(
 # ---------------------------------------------------------------- setup list
 
 
-def notes_for(plan: Plan, *, bytes_build: int | None = None, bytes_after: int | None = None) -> str:
-    """The Events second line, in the business register: cost, reason,
-    next-run cost. Never 'index'."""
-    labels = [cp.column.label for cp in plan.builds()]
-    if not labels:
-        return ""
-    what = ", ".join(f"`{l}`" for l in labels)
-    verb = "prepares" if len(labels) == 1 else "prepare"
-    text = f"Also {verb} {what} for faster breakdowns"
-    if bytes_build is not None:
-        text += f" (one-time ~ {_gb(bytes_build)})"
-    text += "."
-    if bytes_after is not None:
-        text += f" Later runs ~ {_gb(bytes_after)}."
-    return text
-
-
-def rows_mode_form(form: dict[str, Any]) -> dict[str, Any]:
-    """The same chart with every expensive Value-at slot downgraded to
-    each-event + keep NULL: its dry-run bytes are the honest "later runs"
-    price before an index exists. Deliberately approximate ("~" in the
-    copy): a real post-index run also reads the index and its live tail,
-    and the first Run pays a density probe (~PROBE_DAYS of one column,
-    cached PROBE_TTL_DAYS). Do not "fix" this by pricing the spliced query:
-    the index does not exist yet, so that dry run cannot be made."""
-
-    out = copy.deepcopy(form)
-
-    def downgrade(slots: Any) -> None:
-        if not isinstance(slots, list):
-            return
-        for slot in slots:
-            if isinstance(slot, dict):
-                slot["value_at"] = "event"
-                slot["if_missing"] = "null"
-
-    downgrade(out.get("breakdowns"))
-    for unit in out.get("series") or []:
-        if isinstance(unit, dict):
-            downgrade(unit.get("breakdowns"))
-    out["breakdown_at"] = "rows"
-    return out
-
-
-def maybe_note(plan: Plan, *, bytes_after: int | None = None) -> str:
-    """Before the first build: preparing a column costs about what reading
-    its history once costs, which this run pays anyway — so the chip already
-    covers it; say what later runs cost."""
-    labels = [cp.column.label for cp in plan.maybe()]
-    if not labels:
-        return ""
-    what = ", ".join(f"`{l}`" for l in labels)
-    text = f"May also prepare {what} for faster breakdowns (one-time, included above)."
-    if bytes_after is not None:
-        text += f" Later runs ~ {_gb(bytes_after)}."
-    return text
-
-
-def built_note(plan: Plan) -> str:
-    """After a run that prepared columns: what happened, in the business
-    register, past tense."""
+def built_note(plan: Plan, *, bytes_after: int | None = None) -> str:
+    """After a run that indexed columns: one short line, past tense, shown
+    on the right of the results toolbar until the next run. Before the run
+    nothing is said — the chip already includes the build."""
     if not plan.built:
         return ""
     what = ", ".join(f"`{l}`" for l in plan.built)
-    return f"Prepared {what} for faster breakdowns. Later runs cost less."
+    tail = f"later runs ~ {_gb(bytes_after)}" if bytes_after is not None else "later runs read less"
+    return f"Indexed {what} \u00b7 {tail}"
 
 
 def failure_note(plan: Plan) -> str:
@@ -1048,7 +971,7 @@ def failure_note(plan: Plan) -> str:
     first = plan.failures[0]
     label, _, why = first.partition(": ")
     return (
-        f"Could not prepare `{label}` for faster breakdowns: {why} "
+        f"Could not index `{label}`: {why} "
         f"This run read the full history instead; the chart is correct."
     )
 
@@ -1185,39 +1108,25 @@ def list_payload(form: dict[str, Any], *, now: datetime | None = None) -> dict[s
     return payload
 
 
-def _raise_first_failure(plan: Plan) -> None:
-    """Setup actions surface the first failure. A cap rejection is re-raised
-    as itself so the handler can report bytes and cap; anything else as the
-    labelled message."""
-    if not plan.failures:
-        return
-    first = plan.errors[0] if plan.errors else None
-    if isinstance(first, BytesCapError):
-        raise first
-    raise AdapterError(plan.failures[0])
-
-
 def apply_action(
     form: dict[str, Any],
     run: RunFn,
     *,
     action: str,
     key: str = "",
-    expr: str = "",
-    label: str = "",
-    value: Any = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """One Setup action on the index. Returns the registry mirror to persist.
-
-    refresh / rebuild / drop act on an indexed column; ``index`` adds a
-    column now (bypasses the density gate — the admin chose); ``pin`` and
-    ``override`` edit bookkeeping only.
-    """
+    """The one Setup action on the index: ``drop`` a column (and the table
+    when it was the last one). Returns the registry mirror to persist.
+    Building, refreshing and rebuilding are Automatic mode's job on every
+    warehouse; the owner withdrew the manual paths (Index a column now,
+    Refresh, Rebuild, Pin, Overrides) as noise for the people who use Setup."""
     now = now or datetime.now(timezone.utc)
     dest = index_table(form)
     if dest is None:
         raise ValueError("Set a write destination on Setup first")
+    if action != "drop":
+        raise ValueError("action must be drop")
     registry, _stats_ = authoritative_registry(form)
     if not registry:
         registry = registry_from_form(form) or {}
@@ -1225,71 +1134,16 @@ def apply_action(
     if registry.get("fp") != fp:
         registry = {"v": REGISTRY_VERSION, "fp": fp, "columns": {}, "probes": registry.get("probes") or {}}
     cols: dict[str, Any] = registry.setdefault("columns", {})
-    if action == "pin":
-        entry = cols.get(key)
-        if not isinstance(entry, dict):
-            raise ValueError("no such indexed column")
-        entry["pinned"] = bool(value)
-        run(registry_comment_sql(form, registry))
-        return registry
-    if action == "override":
-        entry = cols.get(key)
-        if not isinstance(entry, dict):
-            raise ValueError("no such indexed column")
-        clean: dict[str, Any] = {}
-        for name in ("refresh_days", "lookback_days", "loaded_at_column"):
-            raw = (value or {}).get(name) if isinstance(value, dict) else None
-            if raw in (None, ""):
-                continue
-            if name == "loaded_at_column":
-                clean[name] = _ident_column(str(raw), "loaded_at_column")
-            else:
-                n = int(raw)
-                if n < 0:
-                    raise ValueError(f"{name} must be at least 0")
-                clean[name] = n
-        entry["overrides"] = clean
-        run(registry_comment_sql(form, registry))
-        return registry
-    if action == "drop":
-        if key not in cols:
-            raise ValueError("no such indexed column")
-        try:
-            run(delete_column_sql(form, key))
-        except AdapterError as exc:
-            if not is_missing_relation(exc):
-                raise
-        del cols[key]
-        if cols:
-            run(registry_comment_sql(form, registry))
-        else:
-            run(drop_table_sql(form))
-        return registry
-    if action == "index":
-        if not expr:
-            raise ValueError("a column or expression is required")
-        if not is_text_column(form, expr):
-            raise ValueError(f"{label or expr} is {NON_TEXT}")
-        column = IndexColumn(column_key(expr, label or expr), expr, label or expr, "any", None)
-        plan = Plan([ColumnPlan(column, "build", "admin")], dest, None, registry, settings(form))
-        registry = apply_plan(plan, form, run, now=now)
-        _raise_first_failure(plan)
-        return registry
-    entry = cols.get(key)
-    if not isinstance(entry, dict):
+    if key not in cols:
         raise ValueError("no such indexed column")
-    column = IndexColumn(key, str(entry.get("expr") or ""), str(entry.get("label") or key), "any", None)
-    if action == "rebuild":
-        plan = Plan([ColumnPlan(column, "rebuild", "admin")], dest, None, registry, settings(form))
-    elif action == "refresh":
-        bookmark = _parse_iso(entry.get("bookmark"))
-        plan = Plan(
-            [ColumnPlan(column, "refresh" if bookmark else "rebuild", "admin", bookmark)],
-            dest, None, registry, settings(form),
-        )
+    try:
+        run(delete_column_sql(form, key))
+    except AdapterError as exc:
+        if not is_missing_relation(exc):
+            raise
+    del cols[key]
+    if cols:
+        run(registry_comment_sql(form, registry))
     else:
-        raise ValueError("action must be refresh, rebuild, drop, index, pin, or override")
-    registry = apply_plan(plan, form, run, now=now)
-    _raise_first_failure(plan)
+        run(drop_table_sql(form))
     return registry
-

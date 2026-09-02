@@ -340,8 +340,12 @@
        its text width inflated the row's intrinsic size and wrapped the whole
        row under the date controls, moving Run. As the toolbar's last child
        with a 100% basis it takes its own line and moves nothing. */
-    #run-note { flex: 1 1 100%; font-size: 0.75rem; color: var(--fc-slate); margin: 0; }
-    #run-note.ochre { color: var(--fc-ochre-deep); }
+    /* One short line after a run that indexed (or failed to): its own
+       toolbar line, right-aligned under the chip and Run, capped so long
+       text wraps from the right and never spans the toolbar. */
+    #run-note { flex: 1 1 100%; display: flex; justify-content: flex-end; margin: 0; }
+    #run-note > span { max-width: 32rem; text-align: right; font-size: 0.75rem; color: var(--fc-slate); }
+    #run-note.ochre > span { color: var(--fc-ochre-deep); }
     #run-note[hidden] { display: none !important; }
     .format-pop { position: relative; font-size: 0.7rem; }
     .format-pop > summary {
@@ -1041,7 +1045,7 @@
         </div>
         <button type="submit" id="run"{% if not mapping_ready %} disabled{% endif %}>Run</button>
       </div>
-      <p id="run-note" hidden></p>
+      <p id="run-note" hidden><span></span></p>
     </div>
     <section class="pane pane-chart{% if not config.pane_chart_open %} closed{% endif %}">
       <div class="pane-head">
@@ -3908,7 +3912,8 @@ async function runEstimate() {
     lastEstimateKey = key;
     lastEstimate = {key: key, bytes: data.bytes};
     paintEstimate(data.bytes, data.cap, !!data.over_cap);
-    setRunNote(data.managed_note || "", false);
+    // Nothing is said before the run: the chip already includes a build.
+    // The labels only feed the running copy ("Indexing x… then running").
     managedBuildLabels = Array.isArray(data.managed_build) ? data.managed_build : [];
     // The server's verdict wins where it has one: only it saw the warehouse.
     // An uncapped estimate carries no verdict about the capped query, so it
@@ -4641,8 +4646,9 @@ function appendMarked(el, text) {
 function setRunNote(text, ochre) {
   const el = document.getElementById("run-note");
   if (!el) return;
-  el.textContent = "";
-  appendMarked(el, text || "");
+  const box = el.firstElementChild;
+  box.textContent = "";
+  appendMarked(box, text || "");
   el.classList.toggle("ochre", !!ochre && !!text);
   el.hidden = !text;
 }
@@ -4650,7 +4656,7 @@ function runningPrefix() {
   // Same backtick convention as the note; setRunningCopy renders it.
   if (!managedBuildLabels.length) return "";
   const names = managedBuildLabels.map((l) => "`" + l + "`").join(", ");
-  return "Preparing " + names + " for faster breakdowns\u2026 then r";
+  return "Indexing " + names + "\u2026 then r";
 }
 function setRunningCopy(copy) {
   const prefix = runningPrefix();

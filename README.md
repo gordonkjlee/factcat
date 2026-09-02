@@ -371,22 +371,23 @@ what a plain chart costs (measured on a month-partitioned hub: 10 GB →
 uses an expensive mode on a sparse column builds the index first, then
 queries through it. That first run costs about one full-history scan of
 the column — which is what the chart would have scanned anyway, so the
-estimate chip already covers it; its second line says the run may also
-prepare the column and what later runs cost. Once the index exists the
-chip prices the cheap query. Dense columns (the value is on most rows)
+estimate chip already includes it; while it runs the copy says
+"Indexing `x`… then running", and afterwards one line under the chip says
+what later runs cost. Once the index exists the chip prices the cheap
+query. Dense columns (the value is on most rows)
 are left alone; **Value at: each event** already reads them for free. Columns that are not text are left alone too (the
 index stores text); write `CAST(x AS STRING)` as the breakdown expression to
 index one.
-Automatic preparation needs a cost preview, so it happens only on
-warehouses with a dry run (BigQuery); elsewhere use **Index a column
-now** on Setup. A column no chart has used for
+Builds are automatic on every warehouse; **Mode** is the consent. A
+column no chart has used for
 **Drop unused after** (60 days) is dropped on a daily sweep and rebuilt
 on next use; **Refresh when older than** (7 days) decides when newer rows
 are folded in; **Late-arrival lookback** (3 days) is how late a row can
 land after its event time. Setup's **Factcat-managed tables** section
-lists every table with size and age and offers Refresh, Rebuild, Drop,
-Pin (never drop) and per-column overrides; **Mode: Off** builds nothing
-new and drops nothing. If a build fails (rights, cap), the chart runs on
+lists every table with size and age; Drop is the only per-table action —
+building, refreshing and rebuilding are Automatic mode's job. **Mode:
+Off** changes nothing: no build, refresh, rebuild or drop; an existing
+index is still read. If a build fails (rights, cap), the chart runs on
 the full history and the run row says so. Every managed table is derived
 and safe to drop; nothing lives only there.
 On Events, each **event series** is a card: event name, **measure** (and Of
@@ -437,9 +438,9 @@ grain) or relative (from 12 to 3 weeks ago; 0 = this period). Sugar on
 `event_time`, not a period enum. If a write destination is set, **Refresh event names**
 reads `fc_event_names` (created on first miss as a materialized
 view, or a table if the source cannot back a view). Lookback does not apply
-while that cache is in use. When a run may prepare a column for faster
-breakdowns, the estimate's second line says so and what later runs cost;
-the running copy names the extra step. Week start and reporting
+while that cache is in use. When a run indexes a column for faster breakdowns, the running copy says
+so ("Indexing `x`… then running") and one line under the chip afterwards
+says what later runs cost. Week start and reporting
 timezone stay on Setup (they change SQL). Thousand/decimal separators, wording
 (business user / SQL analyst, with uppercase or lowercase SQL and `<>` or `!=`
 for the analyst), weekday/month display, day-of-month pad, hour

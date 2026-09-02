@@ -157,7 +157,6 @@ def setup(request: Request) -> HTMLResponse:
         "setup.html",
         {
             "config": cfg,
-            "managed_text_columns": managed_mod.text_columns(cfg),
             "prefs": prefs_mod.load(),
             "screen": "setup",
             "entity_types": sorted(types["entity"]),
@@ -586,12 +585,11 @@ async def api_estimate(request: Request) -> JSONResponse:
         form = _with_managed(form, load())
         # An estimate is a free dry run: the plan reads only cached facts
         # (no probe, no bookmark query) and nothing is written.
-        plan = managed_mod.build_plan(form, None, auto_ok=CAP_DRY_RUN in caps)
+        plan = managed_mod.build_plan(form, None)
         sql = events_sql_from_form(form, managed=plan)
         warehouse = await run_in_threadpool(connect, kind, **conn)
         result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
         build_bytes = None
-        after_bytes = None
         if plan.builds():
             try:
                 build_bytes = 0
@@ -604,16 +602,6 @@ async def api_estimate(request: Request) -> JSONResponse:
             except AdapterError:
                 # The chart is still estimable; the build just goes unpriced.
                 build_bytes = None
-        elif plan.maybe():
-            # Before the first build the chip already covers it (a build costs
-            # about one history scan, which this run pays anyway); price what
-            # later runs cost as the same chart without history.
-            try:
-                later = events_sql_from_form(managed_mod.rows_mode_form(form))
-                probe = await run_in_threadpool(warehouse.run, later, dry_run=True)
-                after_bytes = probe.bytes_processed
-            except (AdapterError, ValueError):
-                after_bytes = None
     except BytesCapError as exc:
         return JSONResponse(
             _estimate_payload(
@@ -632,12 +620,9 @@ async def api_estimate(request: Request) -> JSONResponse:
         total, conn.get("maximum_bytes_billed"), over_cap=False
     )
     if plan.builds():
-        payload["managed_note"] = managed_mod.notes_for(
-            plan, bytes_build=build_bytes, bytes_after=query_bytes
-        )
+        # Only the running copy needs this ("Indexing x… then running"); the
+        # chip already includes the build, so there is no line before the run.
         payload["managed_build"] = [cp.column.label for cp in plan.builds()]
-    elif plan.maybe():
-        payload["managed_note"] = managed_mod.maybe_note(plan, bytes_after=after_bytes)
     return JSONResponse(payload)
 
 
@@ -679,13 +664,11 @@ async def api_run(request: Request) -> JSONResponse:
             form,
             warehouse.run,
             allow_probe=True,
-            auto_ok=CAP_DRY_RUN in capabilities(form_kind(form)),
         )
         if plan.builds():
             registry = await run_in_threadpool(managed_mod.apply_plan, plan, form, warehouse.run)
             extra_save["managed_tables"] = registry
             managed_failed = managed_mod.failure_note(plan)
-            managed_note = managed_mod.built_note(plan)
         sql = events_sql_from_form(form, managed=plan)
         fell_back = False
         try:
@@ -703,11 +686,23 @@ async def api_run(request: Request) -> JSONResponse:
             result = await run_in_threadpool(warehouse.run, sql)
             managed_note = ""
             managed_failed = (
-                "The prepared table was not found, so this run read the full "
+                "The indexed table was not found, so this run read the full "
                 "history; the chart is correct. It is rebuilt on the next run."
             )
             extra_save["managed_tables"] = {"probes": plan.registry.get("probes") or {}}
         if not fell_back:
+            if plan.built:
+                # The one line after a run that indexed: what later runs cost,
+                # from a free dry run of the query that just ran (the index
+                # now exists, so this is the real figure), where there is one.
+                after = None
+                if CAP_DRY_RUN in capabilities(form_kind(form)):
+                    try:
+                        priced = await run_in_threadpool(warehouse.run, sql, dry_run=True)
+                        after = priced.bytes_processed
+                    except AdapterError:
+                        after = None
+                managed_note = managed_mod.built_note(plan, bytes_after=after)
             registry = await run_in_threadpool(managed_mod.bump_usage, plan, form, warehouse.run)
             if plan.attachable():
                 extra_save["managed_tables"] = registry
@@ -768,56 +763,23 @@ async def api_managed(request: Request) -> JSONResponse:
 
 @app.post("/api/managed/action")
 async def api_managed_action(request: Request) -> JSONResponse:
-    """Refresh / rebuild / drop / index / pin / override one indexed column."""
+    """Drop one indexed column (and the table when it was the last one)."""
     form = await request.json()
     cfg = load()
     action = str(form.get("action") or "").strip().lower()
-    merged = {**cfg, **{k: v for k, v in form.items() if k not in ("action", "key", "expr", "label", "value")}}
+    merged = {**cfg, **{k: v for k, v in form.items() if k not in ("action", "key")}}
     try:
-        # A backfill is a real scan, not a catalog job: it runs under the
-        # same cap as a chart, and a rejection reports its figures.
         conn = connection_from_form(merged)
         warehouse = await run_in_threadpool(connect, form_kind(merged), **conn)
         registry = await run_in_threadpool(
-            managed_mod.apply_action,
-            merged,
-            warehouse.run,
-            action=action,
-            key=str(form.get("key") or ""),
-            expr=str(form.get("expr") or ""),
-            label=str(form.get("label") or ""),
-            value=form.get("value"),
-        )
-    except BytesCapError as exc:
-        # Over the cap: the figures, the cap, and where to raise it — the same
-        # facts the Events report shows, in the Setup callout.
-        cap = _cap_from_error(exc, merged)
-        scanned = (
-            f"would scan {managed_mod._gb(exc.bytes_processed)}"
-            if exc.bytes_processed is not None
-            else "is over the scan cap"
-        )
-        over = f", over the {managed_mod._gb(cap)} scan cap" if cap is not None and exc.bytes_processed is not None else ""
-        return JSONResponse(
-            {
-                "ok": False,
-                "error": f"{_action_verb(action)} did not run: it {scanned}{over}. Raise the cap above and try again.",
-                "over_cap": True,
-                "bytes": exc.bytes_processed,
-                "cap": cap,
-            },
-            status_code=400,
+            managed_mod.apply_action, merged, warehouse.run, action=action, key=str(form.get("key") or "")
         )
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         if isinstance(exc, ImportError):
             return _catalog_error(exc, merged)
-        return JSONResponse({"ok": False, "error": f"{_action_verb(action)} did not run: {exc}"}, status_code=400)
+        return JSONResponse({"ok": False, "error": f"Drop did not run: {exc}"}, status_code=400)
     save({"managed_tables": registry})
     return JSONResponse({"ok": True, "registry": registry})
-
-
-def _action_verb(action: str) -> str:
-    return {"refresh": "Refresh", "rebuild": "Rebuild", "drop": "Drop", "index": "Index", "pin": "Pin", "override": "The override"}.get(action, "The action")
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

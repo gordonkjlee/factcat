@@ -2507,7 +2507,7 @@ def test_run_builds_the_index_first_then_queries_through_it(monkeypatch, tmp_pat
     ]
     assert order == sorted(order), ups
     assert "fc_column_index" in body["sql"]
-    assert body.get("managed_note", "").startswith("Prepared `plan` for faster breakdowns")
+    assert body.get("managed_note", "").startswith("Indexed `plan` \u00b7 later runs ~ ")
     saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
     assert "plan" in saved["managed_tables"]["columns"]
     assert saved["managed_last_sweep"]
@@ -2524,7 +2524,7 @@ def test_run_falls_back_live_when_the_build_fails(monkeypatch, tmp_path):
     assert res.status_code == 200, res.text
     body = res.json()
     assert "fc_column_index" not in body["sql"]
-    assert body["managed_failed"].startswith("Could not prepare `plan`")
+    assert body["managed_failed"].startswith("Could not index `plan`")
     assert "chart is correct" in body["managed_failed"]
 
 
@@ -2559,7 +2559,8 @@ def test_estimate_never_probes_or_writes(monkeypatch, tmp_path):
     assert all(c[1] for c in wh.calls)  # every call was a dry run
     assert not any("FC_PRESENT" in c[0].upper() for c in wh.calls)
     # unprobed: the chip already covers a possible build; the line says "may"
-    assert res.json()["managed_note"].startswith("May also prepare `plan`")
+    # nothing is said before the run: the chip already includes a build
+    assert "managed_note" not in res.json()
     assert "managed_build" not in res.json()
 
 
@@ -2575,8 +2576,8 @@ def test_estimate_prices_the_build_once_the_probe_is_cached(monkeypatch, tmp_pat
     res = client.post("/api/estimate", json=_managed_body())
     assert res.status_code == 200, res.text
     body = res.json()
-    assert body["managed_build"] == ["plan"]
-    assert body["managed_note"].startswith("Also prepares `plan` for faster breakdowns (one-time")
+    assert body["managed_build"] == ["plan"]  # feeds the running copy only
+    assert "managed_note" not in body
     assert body["bytes"] == 2 * 1024 ** 3  # query + build, both dry-run
     assert all(c[1] for c in wh.calls)
 
@@ -2605,9 +2606,8 @@ def test_managed_list_and_actions(monkeypatch, tmp_path):
     assert any(t["name"] == "fc_column_index" and t["bytes"] == 84 * 1024 ** 2 for t in body["tables"])
     wh = _ManagedWarehouse()
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
-    pin = client.post("/api/managed/action", json={**_managed_body(), "action": "pin", "key": "plan", "value": True})
-    assert pin.status_code == 200, pin.text
-    assert pin.json()["registry"]["columns"]["plan"]["pinned"] is True
+    gone = client.post("/api/managed/action", json={**_managed_body(), "action": "pin", "key": "plan", "value": True})
+    assert gone.status_code == 400 and "action must be drop" in gone.json()["error"]
     drop = client.post("/api/managed/action", json={**_managed_body(), "action": "drop", "key": "plan"})
     assert drop.status_code == 200, drop.text
     assert "plan" not in drop.json()["registry"]["columns"]
@@ -2620,13 +2620,22 @@ def test_setup_and_events_carry_the_managed_chrome(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     client = TestClient(app)
     setup = client.get("/setup").text
-    for needle in ("id=\"managed-wrap\"", "name=\"managed_mode\"", "managed_drop_days", "managed_refresh_days", "managed_lookback_days", "id=\"managed-list\"", "Index a column now"):
+    for needle in ("id=\"managed-wrap\"", "name=\"managed_mode\"", "managed_drop_days", "managed_refresh_days", "managed_lookback_days", "id=\"managed-list\""):
         assert needle in setup, needle
+    # withdrawn at the owner's review: manual index, pins, overrides, per-row refresh/rebuild
+    for gone in ("Index a column now", "managed-add", "data-act=\"pin\"", "data-ovr", "data-act=\"rebuild\"", "data-act=\"refresh\""):
+        assert gone not in setup, gone
     assert "physical" not in setup.lower()  # withdrawn field stays out
     events = client.get("/events").text
     assert "id=\"run-note\"" in events
-    assert "for faster breakdowns" in events
-    assert "index" not in events.split("runningPrefix")[1][:400].lower()  # business register
+    # the owner's word on Events is "Indexing"; the mechanism words stay out
+    running = events.split("function runningPrefix")[1][:400]
+    assert '"Indexing "' in running
+    for word in ("relation", "watermark", "prepar"):
+        assert word not in running.lower()
+    # the line sits on its own toolbar line, right-aligned and capped
+    assert "#run-note { flex: 1 1 100%; display: flex; justify-content: flex-end;" in events
+    assert "#run-note > span { max-width: 32rem; text-align: right;" in events
     # One convention for backticked labels: the note and both running-copy
     # branches render through the same helper (never literal backticks).
     assert events.count("appendMarked(") >= 3
@@ -2642,7 +2651,7 @@ def test_setup_and_events_carry_the_managed_chrome(monkeypatch, tmp_path):
     assert "renderManaged();" in load_js.split("managedSetLoading(true);")[1]
     assert "if (managedListLoading) return;" in setup.split("function renderManaged")[1]
     assert 'managedSetStatus((err && err.message) || "The action did not run.", true, false)' in setup
-    assert "appendMarked(el, text" in events.split("function setRunNote")[1][:200]
+    assert "appendMarked(box, text" in events.split("function setRunNote")[1][:260]
     assert events.split("function setRunningCopy")[1][:700].count("appendMarked(copy") == 2
 
 
@@ -2729,7 +2738,7 @@ def test_run_falls_back_live_when_the_attached_table_vanishes(monkeypatch, tmp_p
     assert res.status_code == 200, res.text
     out = res.json()
     assert "fc_column_index" not in out["sql"]
-    assert out["managed_failed"].startswith("The prepared table was not found")
+    assert out["managed_failed"].startswith("The indexed table was not found")
     assert "managed_note" not in out
     ups = [c[0].upper() for c in wh.calls if not c[1]]
     assert not any(u.startswith("ALTER TABLE") or u.startswith("COMMENT ON") for u in ups)
@@ -2760,66 +2769,6 @@ def test_estimate_attaches_an_existing_index_from_the_config_mirror(monkeypatch,
     dry = [c[0] for c in wh.calls if c[1]]
     assert any("fc_column_index" in s for s in dry)
     assert "managed_note" not in res.json()
-
-
-def test_estimate_before_the_first_build_says_may_prepare_and_prices_later_runs(monkeypatch, tmp_path):
-    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
-    wh = _ManagedWarehouse()
-    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
-    client = TestClient(app)
-    res = client.post("/api/estimate", json=_managed_body())
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert body["managed_note"].startswith("May also prepare `plan` for faster breakdowns (one-time, included above).")
-    assert "Later runs" in body["managed_note"]
-    assert "managed_build" not in body
-    assert all(c[1] for c in wh.calls)  # still a pure dry run
-
-
-def test_managed_actions_run_under_the_scan_cap(monkeypatch, tmp_path):
-    """Rebuild / Index now are real scans, not catalog jobs: the cap stays on."""
-    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
-    from factcat_app import managed as managed_mod
-
-    seen = {}
-
-    def fake_connect(kind, **kw):
-        seen.update(kw)
-        return _ManagedWarehouse()
-
-    monkeypatch.setattr("factcat_app.main.connect", fake_connect)
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: ({}, None))
-    client = TestClient(app)
-    res = client.post("/api/managed/action", json={**_managed_body(bytes_cap_gb=2), "action": "index", "key": "plan", "expr": "plan", "label": "plan"})
-    assert res.status_code == 200, res.text
-    assert seen.get("maximum_bytes_billed") == 2 * 1024 ** 3
-
-
-def test_managed_action_over_the_cap_reports_its_figures(monkeypatch, tmp_path):
-    """A capped Rebuild / Index rejection comes back with the figures and the
-    cap in the Setup callout's own sentence — never a raw warehouse message.
-    Mutation: drop the BytesCapError branch in api_managed_action."""
-    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
-    from factcat.warehouses import BytesCapError
-    from factcat_app import managed as managed_mod
-
-    class _Capped(_ManagedWarehouse):
-        def run(self, sql, *, dry_run=False):
-            if sql.upper().startswith("INSERT") and not dry_run:
-                raise BytesCapError("Query exceeded limit for bytes billed", bytes_processed=12 * 1024 ** 3, maximum_bytes_billed=2 * 1024 ** 3)
-            return super().run(sql, dry_run=dry_run)
-
-    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: _Capped())
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: ({}, None))
-    client = TestClient(app)
-    res = client.post("/api/managed/action", json={**_managed_body(bytes_cap_gb=2), "action": "index", "key": "plan", "expr": "plan", "label": "plan"})
-    assert res.status_code == 400, res.text
-    body = res.json()
-    assert body["over_cap"] is True
-    assert (body["bytes"], body["cap"]) == (12 * 1024 ** 3, 2 * 1024 ** 3)
-    gb = managed_mod._gb
-    assert body["error"] == f"Index did not run: it would scan {gb(12 * 1024 ** 3)}, over the {gb(2 * 1024 ** 3)} scan cap. Raise the cap above and try again."
-    assert "exceeded limit" not in body["error"]
 
 
 def test_sweep_plans_from_the_table_registry_not_the_mirror(monkeypatch, tmp_path):
@@ -2879,13 +2828,3 @@ def test_write_access_verdict_is_saved_for_the_run_gate(monkeypatch, tmp_path):
     assert json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))["write_access_status"] == "ok"
 
 
-def test_setup_offers_only_text_columns_to_index_now(monkeypatch, tmp_path):
-    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
-    (tmp_path / "cfg.json").write_text(json.dumps({"columns": [
-        {"name": "plan", "type": "STRING"}, {"name": "rows_count", "type": "INT64"}, {"name": "occurred_at", "type": "TIMESTAMP"},
-    ]}), encoding="utf-8")
-    client = TestClient(app)
-    html = client.get("/setup").text
-    payload = html.split("managed_columns:")[1].split("\n")[0]
-    assert "plan" in payload
-    assert "rows_count" not in payload and "occurred_at" not in payload

@@ -127,21 +127,8 @@
     .mt-acts .linkish { margin: 0; padding: 0; }
     .mt-acts .loading { margin-left: 0; }
     .mt-acts .layout-checking { margin-left: 0.25rem; }
-    .mt .pin { font-size: 0.75rem; color: var(--fc-slate); display: inline-flex; align-items: center; font-weight: 400; margin: 0; }
-    .mt .pin input { width: auto; display: inline; margin: 0 0.3rem 0 0; }
-    .mt details { margin-top: 0.3rem; }
-    .mt details > summary { cursor: pointer; font-size: 0.75rem; color: var(--fc-ochre-deep); list-style: none; }
-    .mt details > summary::-webkit-details-marker { display: none; }
-    .mt details > summary::before { content: "\25B8 "; }
-    .mt details[open] > summary::before { content: "\25BE "; }
-    .mt .ovr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1rem; padding: 0.4rem 0 0.2rem; }
-    .mt .ovr label { margin-top: 0.3rem; font-size: 0.75rem; }
-    .mt .ovr input[type=number] { width: 4.5rem; display: inline-block; }
     .mt .callout { margin: 0.35rem 0 0.1rem; }
     .mt-empty { padding: 0.55rem 0; border-bottom: 1px solid var(--fc-line); }
-    #managed-add { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.6rem; font-size: 0.82rem; flex-wrap: wrap; }
-    #managed-add select { width: auto; min-width: 12rem; margin: 0; }
-    #managed-add .hint { margin: 0; }
     #managed-status { font-size: 0.75rem; color: var(--fc-slate); margin: 0.4rem 0 0; }
     #managed-status:empty { display: none; }
     #managed-status.callout { font-size: 0.85rem; color: var(--fc-ink); margin: 0.6rem 0 0; }
@@ -354,12 +341,12 @@
           <option value="auto"{% if (config.managed_mode or 'auto') == 'auto' %} selected{% endif %}>Automatic</option>
           <option value="off"{% if config.managed_mode == 'off' %} selected{% endif %}>Off</option>
         </select>
-        <span class="hint">Automatic prepares a sparse column the first time an expensive breakdown mode uses it, refreshes it when stale, and drops it when unused. Off keeps existing tables and builds nothing new.</span>
+        <span class="hint">Automatic indexes a sparse column the first time an expensive breakdown mode uses it, refreshes it when stale, and drops it when unused. Off keeps existing tables and changes nothing.</span>
       </div>
       <div>
         <label for="managed_drop_days">Drop unused after</label>
         <input id="managed_drop_days" name="managed_drop_days" type="number" min="1" step="1" value="{{ config.managed_drop_days if config.managed_drop_days is not none else 60 }}"><span class="mt-unit">days</span>
-        <span class="hint">A column no chart has used for this long is dropped on the next daily sweep. Pinned columns stay.</span>
+        <span class="hint">A column no chart has used for this long is dropped on the next daily sweep.</span>
       </div>
       <div>
         <label for="managed_refresh_days">Refresh when older than</label>
@@ -374,12 +361,6 @@
     </div>
     <label>Tables Factcat keeps here <span id="managed-list-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish" id="managed-refresh-list">Refresh list</button></label>
     <div class="mt" id="managed-list" role="list" aria-label="Factcat-managed tables"></div>
-    <div id="managed-add">
-      <span>Index a column now</span>
-      <select id="managed-add-column" aria-label="Column to index"></select>
-      <button type="button" class="linkish" id="managed-add-go" style="margin:0">Index</button>
-      <span class="hint">Skips the sparsity check. One full scan of that column, once.</span>
-    </div>
     <div id="managed-status" role="status"></div>
   </div>
 
@@ -412,7 +393,6 @@ const saved = {
   warehouse: {{ config.warehouse|tojson }},
   write_project: {{ config.write_project|tojson }},
   managed_tables: {{ (config.managed_tables or {})|tojson }},
-  managed_columns: {{ (managed_text_columns or [])|tojson }},
   write_dataset: {{ config.write_dataset|tojson }},
   write_database: {{ config.write_database|tojson }},
   write_schema: {{ config.write_schema|tojson }},
@@ -1773,8 +1753,7 @@ function renderManaged() {
       + "<span class=\"mt-meta\">" + metaText([idx && cols.length === 1 ? fmtBytesShort(idx.bytes) : "", c.stale ? "" : fmtAgo(c.refreshed_at || c.built_at)]) + "</span></div>";
     if (c.stale) {
       row.innerHTML = head
-        + "<div class=\"callout\"><p>The mapping changed since this was built. Charts read the full history until it is rebuilt. "
-        + "<button type=\"button\" class=\"linkish\" data-act=\"rebuild\" style=\"margin:0\">Rebuild</button></p></div>"
+        + "<div class=\"callout\"><p>The mapping changed since this was built. Charts read the full history until the next run that uses it rebuilds it.</p></div>"
         + "<div class=\"mt-acts\"><button type=\"button\" class=\"linkish\" data-act=\"drop\">Drop</button></div>";
       managedBody.appendChild(row);
       return;
@@ -1782,22 +1761,17 @@ function renderManaged() {
     let serves = "<div class=\"mt-serves\">Carried and as-of breakdowns<span class=\"sub\">";
     serves += metaText([c.last_used_at ? "last used " + fmtAgo(c.last_used_at) : "", c.bookmark ? "bookmark " + String(c.bookmark).slice(0, 16).replace("T", " ") : ""]);
     serves += "</span></div>";
+    // Drop is the only row action: Automatic mode builds, refreshes and
+    // rebuilds on its own; the owner withdrew Refresh / Rebuild / Pin /
+    // Overrides as noise for the people who use Setup.
     let acts = "<div class=\"mt-acts\">";
     if (busy) {
       acts += "<span class=\"loading\" aria-label=\"" + busy + "\"></span><span class=\"layout-checking\">" + busy + "\u2026</span>";
     } else {
-      acts += "<button type=\"button\" class=\"linkish\" data-act=\"refresh\">Refresh</button>";
+      acts += "<button type=\"button\" class=\"linkish\" data-act=\"drop\">Drop</button>";
     }
-    acts += "<button type=\"button\" class=\"linkish\" data-act=\"rebuild\">Rebuild</button>";
-    acts += "<button type=\"button\" class=\"linkish\" data-act=\"drop\">Drop</button>";
-    acts += "<label class=\"pin\"><input type=\"checkbox\" data-act=\"pin\"" + (c.pinned ? " checked" : "") + "> Pin</label>";
     acts += "</div>";
-    const ov = c.overrides || {};
-    const overrides = "<details><summary>Overrides</summary><div class=\"ovr\">"
-      + "<div><label>Refresh when older than</label><input type=\"number\" min=\"0\" data-ovr=\"refresh_days\" placeholder=\"" + document.getElementById("managed_refresh_days").value + "\" value=\"" + (ov.refresh_days ?? "") + "\"><span class=\"mt-unit\">days</span></div>"
-      + "<div><label>Late-arrival lookback</label><input type=\"number\" min=\"0\" data-ovr=\"lookback_days\" placeholder=\"" + document.getElementById("managed_lookback_days").value + "\" value=\"" + (ov.lookback_days ?? "") + "\"><span class=\"mt-unit\">days</span></div>"
-      + "</div></details>";
-    row.innerHTML = head + serves + acts + overrides;
+    row.innerHTML = head + serves + acts;
     managedBody.appendChild(row);
   });
   if (managedUnreadable) {
@@ -1812,17 +1786,6 @@ function renderManaged() {
     row.innerHTML = "<span class=\"hint\" style=\"margin:0\">Nothing here yet. Factcat creates tables when a chart needs one.</span>";
     managedBody.appendChild(row);
   }
-  const pick = document.getElementById("managed-add-column");
-  const have = new Set(cols.map((c) => c.key));
-  const skip = new Set([saved.entity, saved.event_time, saved.event_column].filter(Boolean));
-  pick.innerHTML = "";
-  (saved.managed_columns || []).forEach((col) => {
-    const name = typeof col === "string" ? col : (col && col.name);
-    if (!name || have.has(name) || skip.has(name)) return;
-    const opt = document.createElement("option");
-    opt.value = name; opt.textContent = name;
-    pick.appendChild(opt);
-  });
 }
 async function loadManaged(force) {
   if (!managedDestSet()) { renderManaged(); return; }
@@ -1850,7 +1813,7 @@ async function loadManaged(force) {
   renderManaged();
 }
 async function managedAction(key, act, extra) {
-  managedBusy[key] = {refresh: "Refreshing", rebuild: "Rebuilding", drop: "Dropping", index: "Building"}[act] || "Working";
+  managedBusy[key] = {drop: "Dropping"}[act] || "Working";
   renderManaged();
   managedSetStatus("");
   try {
@@ -1871,31 +1834,11 @@ managedBody.addEventListener("click", (e) => {
   if (!tr || !tr.dataset.key) return;
   managedAction(tr.dataset.key, btn.dataset.act);
 });
-managedBody.addEventListener("change", (e) => {
-  const el = e.target;
-  const tr = el.closest(".mt-row");
-  if (!tr || !tr.dataset.key) return;
-  if (el.dataset.act === "pin") {
-    managedAction(tr.dataset.key, "pin", {value: el.checked});
-    return;
-  }
-  if (el.dataset.ovr) {
-    const box = tr.querySelector(".ovr");
-    const value = {};
-    box.querySelectorAll("input[data-ovr]").forEach((inp) => { if (inp.value !== "") value[inp.dataset.ovr] = inp.value; });
-    managedAction(tr.dataset.key, "override", {value});
-  }
-});
 document.getElementById("managed-refresh-list").addEventListener("click", () => loadManaged(true));
-document.getElementById("managed-add-go").addEventListener("click", () => {
-  const name = document.getElementById("managed-add-column").value;
-  if (!name) return;
-  managedAction(name, "index", {expr: name, label: name});
-});
 form.addEventListener("change", (e) => {
   // Only the destination decides whether the section shows; any other
-  // Setup change must not rebuild the list (an open Overrides would
-  // collapse and a half-typed override would be lost).
+  // Setup change must not rebuild the list (a row mid-action would lose
+  // its spinner).
   const id = (e.target && e.target.id) || "";
   if (!/^write_(project|dataset|database|schema)$/.test(id)) return;
   const was = managedWrap.hidden;

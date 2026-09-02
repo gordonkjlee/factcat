@@ -35,9 +35,9 @@ from factcat_app.managed import (
     drop_table_sql,
     ensure_table_sql,
     expensive_columns,
+    built_note,
     failure_note,
     index_table,
-    notes_for,
     parse_registry,
     refresh_sql,
     registry_comment,
@@ -362,7 +362,7 @@ def test_apply_failure_turns_the_column_live_and_reports():
     assert plan.columns[0].action == "live"
     assert plan.failures and "plan" in plan.failures[0]
     note = failure_note(plan)
-    assert note.startswith("Could not prepare `plan`")
+    assert note.startswith("Could not index `plan`")
     assert "chart is correct" in note
 
 
@@ -400,10 +400,11 @@ def test_bump_usage_is_hourly():
 def test_sweep_drops_unused_unpinned_and_respects_the_daily_clock():
     form = _form()
     reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
-    reg["columns"]["utm"] = {**reg["columns"]["plan"], "label": "utm", "pinned": True}
+    reg["columns"]["utm"] = {**reg["columns"]["plan"], "label": "utm", "last_used_at": (NOW - timedelta(hours=3)).isoformat(), "pinned": True}
     run = _Run()
     registry, dropped, ran = sweep({**form, "managed_tables": reg}, run, now=NOW)
     assert ran and dropped == ["plan"]
+    # utm stays because it was used, not because an old mirror says pinned (pins are withdrawn)
     assert "utm" in registry["columns"] and "plan" not in registry["columns"]
     assert any(c.upper().startswith("DELETE FROM") for c in run.calls)
     # swept an hour ago: nothing runs
@@ -426,16 +427,23 @@ def test_sweep_drops_the_table_when_the_last_column_goes():
 # ---------------------------------------------------------------- copy register
 
 
-def test_events_notes_never_say_index():
+def test_events_notes_say_indexed_and_never_relation_or_watermark():
+    """One short line after a run: past tense, the owner's word "Indexed",
+    what later runs cost; nothing before the run (the chip already includes
+    the build). "relation" / "watermark" are mechanism words and stay out."""
     form = _form()
-    plan = build_plan(form, _Run(density=0.01), now=NOW, allow_probe=True)
-    note = notes_for(plan, bytes_build=12 * 1024**3, bytes_after=int(1.9 * 1024**3))
-    assert note == "Also prepares `plan` for faster breakdowns (one-time ~ 12 GB). Later runs ~ 1.9 GB."
-    assert "index" not in note.lower()
-    assert notes_for(Plan([], None, None, {}, settings(form))) == ""
-
-
-# ---------------------------------------------------------------- review fixes
+    plan = Plan([], None, None, {}, settings(form))
+    plan.built = ["plan"]
+    note = built_note(plan, bytes_after=131 * 1024 ** 2)
+    assert note == "Indexed `plan` \u00b7 later runs ~ 131 MB"
+    assert built_note(plan) == "Indexed `plan` \u00b7 later runs read less"
+    assert built_note(Plan([], None, None, {}, settings(form))) == ""
+    plan.failures = ["plan: Access Denied."]
+    fail = failure_note(plan)
+    assert fail.startswith("Could not index `plan`: Access Denied.")
+    for word in ("relation", "watermark"):
+        assert word not in (note + fail).lower()
+    assert not hasattr(managed, "notes_for") and not hasattr(managed, "maybe_note")
 
 
 def test_fingerprint_includes_the_write_destination():
@@ -489,30 +497,6 @@ def test_reconcile_prefers_the_table_description_and_forgets_a_dropped_table(mon
     assert out2["columns"]["plan"]["bookmark"] == (NOW - timedelta(days=3)).isoformat()
 
 
-def test_no_preview_means_no_automatic_build():
-    """Without a dry run there is no consent moment: the column stays live
-    with a reason that points at Index a column now. Mutation: ignore
-    auto_ok and the run builds unpriced."""
-    plan = build_plan(_form(), _Run(density=0.01), now=NOW, allow_probe=True, auto_ok=False)
-    assert plan.columns[0].action == "live"
-    assert plan.columns[0].reason == managed.NO_PREVIEW
-    # an existing index still attaches — reading is free of the consent question
-    form = _form()
-    att = build_plan({**form, "managed_tables": _registry(form)}, None, now=NOW, auto_ok=False)
-    assert att.columns[0].action == "attach"
-
-
-def test_maybe_note_and_rows_mode_form():
-    plan = build_plan(_form(), None, now=NOW)  # unprobed: maybe
-    assert [c.column.key for c in plan.maybe()] == ["plan"]
-    note = managed.maybe_note(plan, bytes_after=259 * 1024 ** 2)
-    assert note == "May also prepare `plan` for faster breakdowns (one-time, included above). Later runs ~ 259 MB."
-    downgraded = managed.rows_mode_form(_form())
-    slot = downgraded["breakdowns"][0]
-    assert (slot["value_at"], slot["if_missing"]) == ("event", "null")
-    assert expensive_columns(downgraded) == []
-
-
 def test_registry_comment_flags_a_dropped_census():
     big = {"v": 1, "fp": {}, "columns": {"plan": {"expr": "plan", "names": {f"e{i}": {"rows": i, "first": "2026-01-01T00:00:00+00:00", "last": "2026-09-01T00:00:00+00:00"} for i in range(400)}}}}
     assert json.loads(registry_comment(big)).get("names_dropped") is True
@@ -562,19 +546,28 @@ def test_mode_off_reads_an_existing_index_as_is_and_never_writes():
 
 def test_non_text_columns_stay_live_with_a_cast_hint(monkeypatch):
     """fc_value is text: an INT64 or DATE column would fail the INSERT on
-    every Run. The planner leaves it live with the CAST hint, spends no probe
-    on it, Index a column now refuses it, and Setup does not offer it.
-    Expressions and unknown types pass. Mutation: is_text_column -> True."""
+    every Run. The planner leaves it live with the CAST hint and spends no
+    probe on it. Expressions and unknown types pass. Mutation:
+    is_text_column -> True."""
     form = _form(columns=[{"name": "plan", "type": "INT64"}, {"name": "occurred_at", "type": "TIMESTAMP"}, {"name": "tier", "type": "STRING"}])
     run = _Run(density=0.01)
     plan = build_plan(form, run, now=NOW, allow_probe=True)
     assert plan.columns[0].action == "live"
     assert plan.columns[0].reason == managed.NON_TEXT
     assert not any("FC_PRESENT" in c.upper() for c in run.calls)
-    monkeypatch.setattr(managed, "authoritative_registry", lambda f: ({}, None))
-    with pytest.raises(ValueError, match="CAST"):
-        managed.apply_action(form, run, action="index", key="plan", expr="plan", label="plan")
     assert managed.is_text_column(form, "tier")
     assert managed.is_text_column(_form(), "plan")  # unmapped: the caller knows
     assert managed.is_text_column(form, "CAST(plan AS STRING)")
-    assert [c["name"] for c in managed.text_columns(form)] == ["tier"]
+    # Setup no longer offers a manual index: drop is the only action
+    monkeypatch.setattr(managed, "authoritative_registry", lambda f: ({}, None))
+    with pytest.raises(ValueError, match="action must be drop"):
+        managed.apply_action(form, run, action="index", key="plan")
+
+
+def test_builds_are_automatic_without_a_dry_run_too():
+    """Mode: Automatic is the consent on every warehouse. Snowflake has no
+    cost preview, but neither does the chart it runs; a build costs about
+    what that chart scans. Mutation: gate builds on a dry-run capability."""
+    plan = build_plan(_form("snowflake"), _Run(density=0.01), now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "build"
+    assert "auto_ok" not in build_plan.__code__.co_varnames

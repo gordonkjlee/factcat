@@ -131,16 +131,16 @@ large. The expensive Value-at modes read it plus the live rows after its
 bookmark, bounded on the bare timestamp column; results are exact
 regardless of how stale the index is.
 
-**Snowflake has no dry run, so nothing is prepared automatically.** A
-cost preview is the consent moment for a build, and without one Factcat
-does not start a full-history scan on its own — **Mode** governs refresh
-and the daily sweep here, not building. Use **Index a column now** to
-build a column; it runs under the scan settings of your warehouse, and a
-first build reads that column's full history once. **Refresh when older
-than** decides when newer rows are folded in, **Drop unused after** drops
-columns no chart has used (daily sweep), **Late-arrival lookback** is how
-late a row can land after its event time. Off builds nothing new and drops
-nothing.
+**Mode** Automatic indexes a sparse column the first time an expensive
+mode uses it, on Snowflake as on BigQuery. Snowflake has no cost preview,
+but neither does the chart Run executes, and a first build reads about
+what that chart would have scanned — the column's full history, once; the
+running copy says "Indexing `x`… then running" and one line under the Run
+button afterwards says the index is in place. **Refresh when older than**
+decides when newer rows are folded in, **Drop unused after** drops columns
+no chart has used (daily sweep), **Late-arrival lookback** is how late a
+row can land after its event time. Off changes nothing: no build, refresh,
+rebuild or drop; an existing index is still read.
 
 Columns that are not text are left alone (the index stores text); write
 `CAST(x AS STRING)` as the breakdown expression to index one. The build
@@ -149,8 +149,9 @@ grammar in the test suite; no live Snowflake account ran them for this
 release. If a build fails, the chart reads the full history and the Setup
 list says why.
 
-The list shows size and age per table (from `SHOW TABLES`), with Refresh,
-Rebuild, Drop, Pin (never drop) and per-column overrides. Its bookkeeping
+The list shows size and age per table (from `SHOW TABLES`); Drop is the
+only per-table action (building, refreshing and rebuilding are Automatic
+mode's job). Its bookkeeping
 lives in the table's comment; a mapping change rebuilds, a new event name
 with backfilled history is back-filled on the next refresh, a name whose
 row count shrank is rebuilt. Needs CREATE TABLE on the schema (the rights
