@@ -240,7 +240,9 @@
       {% endfor %}
     </select>
     <input type="hidden" name="event_time_tz" id="event_time_tz" value="{{ config.event_time_tz or 'utc' }}">
-    <span class="hint" id="event-time-tz-hint">This column has no timezone. Pick the zone the numbers were recorded in. Reporting timezone (Preferences) is whose midnight is a day.</span>
+    <!-- syncEventTimeKind() rewrites this on every kind change, so the server
+         copy renders the SAME two branches. Edit both, or the edit is dead source. -->
+    <span class="hint" id="event-time-tz-hint">{% if config.kind == "snowflake" %}TIMESTAMP_NTZ / DATETIME have no zone on the column. TIMESTAMP_TZ and TIMESTAMP_LTZ are instants and do not need this.{% else %}DATETIME has no zone on the column. TIMESTAMP is a UTC instant and does not need this.{% endif %}</span>
   </div>
   <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span> <span id="event-column-checking" class="layout-checking" hidden>Checking whether event-name filters prune…</span></label>
   <select id="event_column" name="event_column" disabled>
@@ -252,7 +254,7 @@
   <div class="callout" id="calendar-moved">
     <p><strong>Week starts on</strong> and <strong>Reporting timezone</strong> are on
     <a href="/preferences" id="calendar-moved-link">Preferences</a>. They change the query, so they
-    still shape this project's charts - they just belong to whoever builds the report.</p>
+    still shape this project's charts — they just belong to whoever builds the report.</p>
   </div>
   <!-- Read by dateFingerprint() and sent with /api/layout: the date-prune cache
        depends on them, and layout.py fingerprints them server-side too. They
@@ -1591,7 +1593,7 @@ labelOtherEl.addEventListener("input", () => { syncEntityName(); scheduleSave();
 seedEntityName();
 
 const autosave = fcAutosave({
-  save: async () => {
+  save: async (init) => {
     syncEntityName();
     syncEventTimeStored();
     tableEl.value = combinedTable();
@@ -1600,7 +1602,7 @@ const autosave = fcAutosave({
     if (Object.prototype.hasOwnProperty.call(body, "event_column") && !body.event_column) {
       body.event_names = [];
     }
-    return post("/api/save", body);
+    return post("/api/save", body, init);
   },
   onSaved: () => {
     setError("");

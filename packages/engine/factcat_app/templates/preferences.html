@@ -204,7 +204,7 @@
 
   <h2>Calendar</h2>
   <span class="hint">Unlike everything else here, these two change the query: they decide which day
-  and which week each event falls in. They are yours - a colleague working in this project keeps
+  and which week each event falls in. They are yours — a colleague working in this project keeps
   their own.</span>
   <label for="week_start">Week starts on</label>
   <select id="week_start" name="week_start">
@@ -344,10 +344,10 @@ themeBtn.addEventListener("click", () => {
 });
 themeBtn.setAttribute("aria-label", themeEl.value === "dark" ? "Dark" : "Light");
 const autosave = fcAutosave({
-  save: async () => {
+  save: async (init) => {
     const body = Object.fromEntries(new FormData(form).entries());
     body.pad_day = body.pad_day === "true";
-    return post("/api/preferences", body);
+    return post("/api/preferences", body, init);
   },
   onSaved: (data) => {
     setError("");

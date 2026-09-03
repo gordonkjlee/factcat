@@ -2611,3 +2611,62 @@ def test_a_broken_preference_value_falls_back_instead_of_breaking_every_query():
     assert incoming == {"reporting_timezone": "Mars/Olympus"}, "validate mutated its argument"
 
 
+def test_the_autosave_flush_survives_the_navigation_that_triggers_it():
+    """`flush()` exists for exactly one caller: the Preferences link inside
+    Setup's autosaving form. A click during the debounce window navigates
+    away, and a plain `fetch` is aborted with the document - so an ordinary
+    flush only narrows the race it was written to close. `keepalive` is what
+    makes the POST outlive the page, and both autosaving forms have to
+    forward the init through to `post()` or it never reaches the request.
+
+    Mutation: drop `{keepalive: true}`, or stop forwarding `init` on either
+    page.
+    """
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parents[1] / "factcat_app"
+    save_js = (app_dir / "static" / "save.js").read_text(encoding="utf-8")
+    assert "run({keepalive: true})" in save_js, "an abortable flush can still lose the save"
+    assert "async function post(url, body, init)" in save_js
+    assert "...(init || {})" in save_js, "post() takes the init but never applies it"
+    assert "async function run(init)" in save_js
+    assert "opts.save(init)" in save_js, "run() has the init but the page's save() never sees it"
+
+    for page in ("setup.html", "preferences.html"):
+        src = (app_dir / "templates" / page).read_text(encoding="utf-8")
+        assert "save: async (init) =>" in src, page + ": save() drops the init"
+        assert ", init);" in src, page + ": save() never forwards the init to post()"
+
+
+def test_the_timestamp_hint_says_the_same_thing_server_side_and_in_js(monkeypatch, tmp_path):
+    """`syncEventTimeKind()` rewrites #event-time-tz-hint on load and on every
+    kind change, so whatever the server rendered there is gone before anyone
+    reads it. Copy edited on one side only is dead source - which is how a
+    pointer to Preferences came to be written into a sentence that could
+    never appear on screen. The server renders the same two branches; this
+    proves it for both kinds.
+
+    Mutation: edit either string without the other.
+    """
+    import re
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parents[1] / "factcat_app"
+    src = (app_dir / "templates" / "setup.html").read_text(encoding="utf-8")
+    js = re.search(
+        r'hint\.textContent = currentKind\(\) === "snowflake"\s*\?\s*"([^"]+)"\s*:\s*"([^"]+)"',
+        src,
+    )
+    assert js, "the JS branch moved; this guard needs updating with it"
+    owned = {"snowflake": js.group(1), "bigquery": js.group(2)}
+
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "prefs.json"))
+    for kind, expected in owned.items():
+        (tmp_path / "cfg.json").write_text(json.dumps({"kind": kind}), encoding="utf-8")
+        page = TestClient(app).get("/setup").text
+        rendered = re.search(r'id="event-time-tz-hint">(.*?)</span>', page, re.S)
+        assert rendered, kind + ": the hint is not on the page"
+        assert rendered.group(1).strip() == expected, (
+            kind + ": the server copy and the JS copy have diverged; one is dead source"
+        )
