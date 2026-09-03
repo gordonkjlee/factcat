@@ -240,7 +240,7 @@
       {% endfor %}
     </select>
     <input type="hidden" name="event_time_tz" id="event_time_tz" value="{{ config.event_time_tz or 'utc' }}">
-    <span class="hint" id="event-time-tz-hint">This column has no timezone. Pick the zone the numbers were recorded in. Whose midnight counts as a day is <strong>Reporting timezone</strong>, on Preferences.</span>
+    <span class="hint" id="event-time-tz-hint">This column has no timezone. Pick the zone the numbers were recorded in. Reporting timezone (Preferences) is whose midnight is a day.</span>
   </div>
   <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span> <span id="event-column-checking" class="layout-checking" hidden>Checking whether event-name filters prune…</span></label>
   <select id="event_column" name="event_column" disabled>
@@ -249,9 +249,17 @@
   </select>
   <span class="hint">String column of event names. Events <strong>Refresh list</strong> loads names from the lookback below.</span>
   <div id="event-column-layout"></div>
-  <span class="hint" id="calendar-moved">Week start and reporting timezone are on
-  <a href="/preferences">Preferences</a>: they change the query, but they belong to whoever
-  builds the report rather than to this project.</span>
+  <div class="callout" id="calendar-moved">
+    <p><strong>Week starts on</strong> and <strong>Reporting timezone</strong> are on
+    <a href="/preferences" id="calendar-moved-link">Preferences</a>. They change the query, so they
+    still shape this project's charts - they just belong to whoever builds the report.</p>
+  </div>
+  <!-- Read by dateFingerprint() and sent with /api/layout: the date-prune cache
+       depends on them, and layout.py fingerprints them server-side too. They
+       carry no `name`, so the Setup autosave cannot write them back into the
+       project file - which is the whole point of the move. -->
+  <input type="hidden" id="week_start" value="{{ prefs.week_start or 'monday' }}">
+  <input type="hidden" id="reporting_timezone" value="{{ prefs.reporting_timezone or 'UTC' }}">
   <h2>Limits</h2>
   <div id="scan-cap-wrap">
     <label for="bytes_cap_gb">Job scan cap (GB)</label>
@@ -1601,6 +1609,16 @@ const autosave = fcAutosave({
   onFail: (msg) => setError(msg || "Could not save mapping"),
   suppressed: () => suppressChange,
 });
+
+// The only link inside this autosaving form. A click during the debounce
+// window would navigate away and drop the pending save, so flush first and
+// let the navigation follow.
+const calendarLink = document.getElementById("calendar-moved-link");
+if (calendarLink) {
+  calendarLink.addEventListener("click", () => {
+    if (autosave && typeof autosave.flush === "function") autosave.flush();
+  });
+}
 function scheduleSave() {
   autosave.schedule();
 }
