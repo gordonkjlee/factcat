@@ -456,7 +456,8 @@ view, or a table if the source cannot back a view). Lookback does not apply
 while that cache is in use. When a run indexes a column for faster breakdowns, the running copy says
 so ("Indexing `x`… then running") and one line under the chip afterwards
 says what later runs cost. Week start and reporting
-timezone stay on Setup (they change SQL). Thousand/decimal separators, wording
+timezone are **Preferences**: they change SQL, but they belong to whoever builds
+the report rather than to the project, so a colleague keeps their own. Thousand/decimal separators, wording
 (business user / SQL analyst, with uppercase or lowercase SQL and `<>` or `!=`
 for the analyst), weekday/month display, day-of-month pad, hour
 style (12-hour or 24-hour first, then a short list of complete formats) are

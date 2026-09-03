@@ -63,10 +63,19 @@ DEFAULTS: dict[str, Any] = {
     "month_style": "long",
     "pad_day": False,
     "hour_style": "3",
+    # Which day and week an event falls in. These DO change the SQL, unlike
+    # everything else here, and they belong to whoever builds the report -
+    # not to the project, which is where they used to live.
+    "week_start": "monday",
+    "reporting_timezone": "UTC",
 }
 
 # Once lived on the project file. Copied into the user file, then stripped.
 MIGRATED_KEYS = ("thousand_sep", "decimal_sep")
+
+#: Moved off the project file later, when a user file already existed, so the
+#: first-run migration above could not carry them: adopt them on any load.
+ADOPTED_KEYS = ("week_start", "reporting_timezone")
 
 _SEP_CHAR = {
     "comma": ",",
@@ -189,6 +198,14 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
         else:
             style = _canonical_hour_style(style)
     out["hour_style"] = style if style in HOUR_STYLES else "3"
+    week = str(out.get("week_start") or "monday").strip().lower()
+    out["week_start"] = week if week in {"monday", "sunday"} else "monday"
+    # Function-local: query imports prefs, so a module-level import here is a cycle.
+    from .query import REPORTING_TIMEZONES
+
+    tz = str(out.get("reporting_timezone") or "UTC").strip() or "UTC"
+    out["reporting_timezone"] = tz if tz in REPORTING_TIMEZONES else "UTC"
+
     return {key: out[key] for key in DEFAULTS}
 
 
@@ -221,11 +238,52 @@ def _strip_project_seps() -> None:
         path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
 
 
+def _adopt_from_project(data: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    """Carry the calendar settings off the project file, once.
+
+    The first-run migration cannot be the only path: these moved after most
+    people already had a user file, so that branch never runs for them, and
+    a silent fall back to the defaults would move every bucket. This runs on
+    both load paths.
+
+    It reads the project file ONLY while the user file is still missing one
+    of the keys, so the steady state costs nothing; it takes only what the
+    user file does not already state, so a personal choice always wins; and
+    it strips only what it actually took, so nothing the user never adopted
+    is destroyed on their behalf.
+    """
+    missing = [k for k in ADOPTED_KEYS if k not in raw]
+    if not missing:
+        return data
+    from .config import config_path
+
+    blob = _read_object(config_path()) or {}
+    taken = {k: blob[k] for k in missing if blob.get(k) not in (None, "")}
+    if not taken:
+        return data
+    data = _validate({**data, **taken})
+    save(data)
+    _strip_project_keys(list(taken))
+    return data
+
+
+def _strip_project_keys(keys: list[str]) -> None:
+    from .config import config_path
+
+    path = config_path()
+    blob = _read_object(path)
+    if not blob:
+        return
+    for key in keys:
+        blob.pop(key, None)
+    path.write_text(json.dumps(blob, indent=2) + "\n", encoding="utf-8")
+
+
 def load() -> dict[str, Any]:
     path = prefs_path()
     raw = _read_object(path)
     if raw is not None:
-        return _validate(_merge(raw))
+        return _adopt_from_project(_validate(_merge(raw)), raw)
     from .config import config_path
 
     blob = _read_object(config_path()) or {}
@@ -234,7 +292,8 @@ def load() -> dict[str, Any]:
     if had:
         save(data)
         _strip_project_seps()
-    return data
+    # No user file either, so the calendar has to be adopted here too.
+    return _adopt_from_project(data, {})
 
 
 def save(data: dict[str, Any]) -> None:

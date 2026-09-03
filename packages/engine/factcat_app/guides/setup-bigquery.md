@@ -30,7 +30,7 @@ properties bag, and not one table per event type.
 
 ```text
 event_name     STRING      -- 'purchase', 'page_view', …
-occurred_at    TIMESTAMP   -- UTC instant (see Time below)
+occurred_at    TIMESTAMP   -- UTC instant
 account_id     INT64       -- null when the event has no account
 country        STRING      -- null when unknown
 revenue        NUMERIC     -- null on non-purchase events
@@ -72,7 +72,9 @@ epochs are not accepted.
 **Reporting timezone** is whose midnight is a “day”, and whose Monday is
 a “week”. `CURRENT_DATE` and day buckets follow that zone. Week start
 (Monday/Sunday) is applied **after** the instant is converted to that
-calendar.
+calendar. Both live on **Preferences**, not here: they change the query,
+but they belong to whoever builds the report, so a colleague keeps their
+own.
 
 DATETIME has no zone: a timezone picker appears under Timestamp. TIMESTAMP
 and Unix epochs are instants and do not need it. Reporting timezone is

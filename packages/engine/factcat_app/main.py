@@ -419,6 +419,7 @@ def preferences(request: Request) -> HTMLResponse:
             "hour_previews": prefs_mod.hour_style_previews(),
             "hour_clock": prefs_mod.hour_clock_of_style(user["hour_style"]),
             "hour_clock_default": prefs_mod.HOUR_CLOCK_DEFAULT,
+            "reporting_timezones": REPORTING_TIMEZONES,
             "screen": "preferences",
             "mapping_ready": mapping_ready(),
         },

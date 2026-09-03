@@ -1,11 +1,12 @@
 // Shared save chrome: post(), the #status save-toast, and the fcAutosave
 // debounce/generation/dwell machinery. Pages provide the payload and the
 // #status / #error elements; .save-toast CSS lives in base.html.
-async function post(url, body) {
+async function post(url, body, init) {
   const res = await fetch(url, {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body),
+    ...(init || {}),
   });
   return res.json();
 }
@@ -37,7 +38,7 @@ function fcAutosave(opts) {
   let saveTimer = 0;
   let saveGen = 0;
   let savingSince = 0;
-  async function run() {
+  async function run(init) {
     if (opts.gate && !opts.gate()) {
       savingSince = 0;
       hideToast();
@@ -45,7 +46,7 @@ function fcAutosave(opts) {
     }
     const gen = ++saveGen;
     try {
-      const data = await opts.save();
+      const data = await opts.save(init);
       if (gen !== saveGen) return;
       if (!data.ok) {
         savingSince = 0;
@@ -79,8 +80,12 @@ function fcAutosave(opts) {
       if (opts.suppressed && opts.suppressed()) return;
       if (begin()) saveTimer = setTimeout(run, debounceMs);
     },
+    // Called when the page is about to go away. `keepalive` is the only
+    // thing that makes the POST survive the navigation that follows: a plain
+    // fetch is aborted with the document, which is the save we are trying not
+    // to lose.
     flush() {
-      if (begin()) run();
+      if (begin()) run({keepalive: true});
     },
   };
 }

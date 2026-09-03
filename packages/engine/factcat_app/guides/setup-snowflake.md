@@ -76,7 +76,9 @@ on the session `TIMEZONE` for NTZ. TIMESTAMP_TZ, TIMESTAMP_LTZ, and Unix
 epochs do not show a timezone picker.
 
 **Reporting timezone** is whose midnight is a “day”, and whose Monday is
-a “week”.
+a “week”. It and **Week starts on** live on **Preferences**, not here: they
+change the query, but they belong to whoever builds the report, so a
+colleague keeps their own.
 
 ## Clustering
 
