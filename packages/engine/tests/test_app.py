@@ -110,10 +110,11 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "Event name column" in res.text
     # Week start and reporting timezone moved to Preferences: they change the
     # SQL, but they belong to whoever builds the report, not to the project.
-    # The CONTROLS are gone; the pointer names them, so match on the control.
+    # The CONTROLS are gone, and so is any pointer sentence — Setup does not
+    # narrate every page a setting isn't on.
     assert 'name="week_start"' not in res.text
     assert 'name="reporting_timezone"' not in res.text
-    assert 'id="calendar-moved"' in res.text  # Setup says where they went
+    assert "calendar-moved" not in res.text
     # …but their VALUES stay on the page, unnamed: dateFingerprint() and
     # /api/layout still need them, and an unnamed input is not autosaved back
     # into the project file.

@@ -291,7 +291,7 @@ EVENTS_BREAKDOWN_CARRIED_DISTINCT = EventsSpec(
     top_n=8,
 )
 
-# values_table specs (item 12): a column's recorded values read from a
+# values_table specs: a column's recorded values read from a
 # relation plus the live tail after the watermark; a complete relation
 # (no watermark) skips the table for that column; event_time_column keeps
 # the tail bound on the stored column so partitions prune.
