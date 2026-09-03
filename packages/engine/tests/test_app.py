@@ -1318,6 +1318,58 @@ def test_template_ships_with_package():
     assert (Path(APP_DIR) / "guides" / "setup-snowflake.md").is_file()
 
 
+def test_no_shipped_copy_says_an_index_is_read_while_indexing_is_off():
+    """Mode: Off stops Factcat USING the indexes, not only maintaining them.
+
+    This guard exists because the Snowflake guide shipped a sentence that
+    contradicted itself inside its own full stop - "Off stops Factcat using
+    the indexes ... an existing index is still read" - after a partial
+    string replacement updated the first clause and left the second. Every
+    surface that describes the toggle is checked, and the walk is over
+    ADAPTERS rather than a hand-written list of two, so a third warehouse
+    cannot ship the retired promise in a guide nobody re-read.
+
+    Mutation: restore any of the retired claims to any surface.
+    """
+    from factcat.warehouses import ADAPTERS
+
+    retired = [
+        "an existing index is still read",
+        "existing index is still read",
+        "Off changes nothing",
+        "Off keeps existing tables and changes nothing",
+        # Also retired: the reassurance overclaimed. Nothing is deleted WHILE
+        # off, but time spent off still counts toward Drop unused after, so
+        # a column no chart is asking for is dropped when it goes back on.
+        "the tables are waiting when it goes back on",
+        "the tables are waiting when you switch back",
+        "are used again when it goes back on",
+    ]
+    surfaces = {
+        "README.md": Path(APP_DIR).parents[2] / "README.md",
+        "setup.html": Path(APP_DIR) / "templates" / "setup.html",
+    }
+    for kind in ADAPTERS:
+        surfaces[f"guides/setup-{kind}.md"] = Path(APP_DIR) / "guides" / f"setup-{kind}.md"
+
+    for name, path in surfaces.items():
+        assert path.is_file(), f"{name} is missing: {path}"
+        text = path.read_text(encoding="utf-8")
+        for claim in retired:
+            assert claim not in text, (
+                f"{name} still promises that an index is used while indexing is off: "
+                f"{claim!r}"
+            )
+
+    # and every kind's guide states the real meaning, so the absence above is
+    # not just silence
+    for kind in ADAPTERS:
+        guide = (Path(APP_DIR) / "guides" / f"setup-{kind}.md").read_text(encoding="utf-8")
+        assert "Off stops Factcat using the indexes" in guide, (
+            f"the {kind} guide never says what Off does"
+        )
+
+
 def test_favicon_and_mark_are_served(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     client = TestClient(app)

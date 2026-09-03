@@ -141,14 +141,20 @@ under the chip says what later runs cost. Once the index exists the chip
 prices the cheap query. The build runs under the same scan cap as a chart;
 over the cap it fails cleanly and the chart reads the full history. Automatic refreshes
 it when older than **Refresh when older than**, and drops columns no
-chart has used for **Drop unused after** on a daily sweep. **Late-arrival
+chart has used for **Drop unused after**, during a chart Run and at most
+once a day — nothing runs in the background, and a column the current
+chart asks for is never dropped. **Late-arrival
 lookback** is how late a row can land after its event time; a refresh
 re-reads that much before each event name's bookmark. Dense columns (the
 value on more than about a quarter of recent rows) are not indexed —
 **Value at: each event** already has them. Columns that are not text are left alone too (the
 index stores text); write `CAST(x AS STRING)` as the breakdown expression to
-index one. Off changes nothing: no build, refresh, rebuild or drop; an
-existing index is still read.
+index one. Off stops Factcat using the indexes: charts read the full
+history and scan more. It also stops every build, refresh, rebuild and
+drop, and deletes nothing while it is off. Time spent off still counts
+toward **Drop unused after**, so switching back on resumes the ordinary
+clean-up — a column no chart has used for longer than that is dropped on
+the next Run. The chart you are running keeps its index either way.
 
 The list shows size and age per table; Drop is the only per-table action
 (building, refreshing and rebuilding are Automatic mode's job). Its
@@ -167,9 +173,11 @@ run row says why.
 The table holds entity ids and column values copied from your events table,
 so check who can read the write dataset before indexing a column that
 carries personal data. Rows deleted from the events table leave the index
-at the next refresh of that column (the census notices the row count fall);
-with Mode: Off, or for a column no chart uses, they stay until the sweep
-drops it. Drop the column for an immediate removal. One gap to know about: if an event name
+at the next refresh of that column (the census notices the row count fall).
+With **Mode: Off** there are no refreshes and no clean-up, so deleted rows
+stay in the index until you Drop the column or the table yourself. For a
+column no chart uses, they stay until the clean-up drops it (**Drop unused
+after**). Drop the column for an immediate removal. One gap to know about: if an event name
 that already existed starts carrying a column it never carried before, the
 index does not pick that up on its own — Drop the column and let the next
 chart rebuild it. The index is

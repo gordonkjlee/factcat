@@ -382,14 +382,22 @@ index stores text); write `CAST(x AS STRING)` as the breakdown expression to
 index one.
 Builds are automatic on every warehouse; **Mode** is the consent. A
 column no chart has used for
-**Drop unused after** (60 days) is dropped on a daily sweep and rebuilt
-on next use; **Refresh when older than** (7 days) decides when newer rows
+**Drop unused after** (60 days) is dropped and rebuilt on next use — the
+clean-up runs during a chart Run, at most once a day, never in the
+background (Factcat schedules nothing); a column the chart in front of it
+is asking for is never dropped, so returning to a chart does not cost a
+rebuild; **Refresh when older than** (7 days) decides when newer rows
 are folded in; **Late-arrival lookback** (3 days) is how late a row can
 land after its event time. Setup's **Factcat-managed tables** section
 lists every table with size and age; Drop is the only per-table action —
 building, refreshing and rebuilding are Automatic mode's job. **Mode:
-Off** changes nothing: no build, refresh, rebuild or drop; an existing
-index is still read. If a build fails (rights, cap), the chart runs on
+Off** stops Factcat using the indexes: charts read the full history and
+scan more, which is what turning indexing off means. It also stops every
+build, refresh, rebuild and drop, and it deletes nothing while it is off.
+Time spent off still counts toward **Drop unused after**, so switching back
+on resumes the ordinary clean-up: a column no chart has used for longer
+than that is dropped on the next Run, the same as if indexing had never
+been off. Charts you are actually running keep their indexes either way. If a build fails (rights, cap), the chart runs on
 the full history and the run row says so. Every managed table is derived
 and safe to drop; nothing lives only there.
 
@@ -398,8 +406,10 @@ events table, so check the grants on your write destination before indexing
 a column that carries personal data — it is a second home for it. Rows
 deleted from the events table leave the index at the next refresh of that
 column (**Refresh when older than**, 7 days by default), detected through
-the event-name census; with **Mode: Off**, or for a column no chart uses,
-they stay until the daily sweep drops it (**Drop unused after**, 60 days).
+the event-name census. For a column no chart uses, they stay until the
+clean-up drops it (**Drop unused after**, 60 days). With **Mode: Off**
+there are no refreshes and no clean-up, so deleted rows stay in the index
+until you Drop the column or the table yourself.
 If an erasure has to be immediate, Drop the column on Setup or drop the
 table. Two changes the index cannot see are a value rewritten in place with
 no change in row count, and an identity remap; Drop is the remedy for both.
@@ -409,7 +419,7 @@ and how far back from the table's own rows, matching them by name to what
 the current mapping wants — trusting that the entity, table and timestamp
 mapping have not changed underneath it, the same trust an identity remap
 already breaks. The table is charged as ordinary storage in your own
-warehouse, and it is only swept while someone is using Factcat.
+warehouse, and it is only cleaned up while someone is using Factcat.
 On Events, each **event series** is a card: event name, **measure** (and Of
 when the measure is a property), and filters. Filter operators follow the
 column type (boolean, number, date, time, timestamp, string). String rows

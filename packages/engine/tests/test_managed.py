@@ -22,6 +22,7 @@ from factcat.warehouses import ADAPTERS, AdapterError, QueryResult
 from factcat_app import managed
 from factcat_app.managed import (
     ColumnPlan,
+    _parse_iso,
     IndexColumn,
     Plan,
     apply_plan,
@@ -104,11 +105,19 @@ def _form(kind: str = "bigquery", **extra):
 class _Run:
     """Records statements; answers bookmark / probe / census reads."""
 
-    def __init__(self, *, bookmark=None, density=0.02, fail_on=None, recovered=None):
+    def __init__(self, *, bookmark=None, density=0.02, fail_on=None, recovered=None,
+                 rows=5, rows_after=None):
         self.calls: list[str] = []
         self.bookmark = bookmark
         self.density = density
         self.fail_on = fail_on or ()
+        # Bookmark reads must be able to DIFFER between calls, or a
+        # stored-vs-fresh count comparison reads 5 against 5 in every test and
+        # the detector can never fire - a guard that cannot fail. `rows` is
+        # what the first read reports, `rows_after` every later one.
+        self.rows = rows
+        self.rows_after = rows if rows_after is None else rows_after
+        self._bookmark_reads = 0
         # Rows for the recovery query (recovered_columns_sql): a bare
         # "SELECT fc_column, ..." with no WHERE, distinct from
         # bookmarks_sql's per-key "WHERE fc_column = ..." — checked first
@@ -124,10 +133,12 @@ class _Run:
         if "GROUP BY" in upper and "WHERE" not in upper:
             return QueryResult(rows=list(self.recovered))
         if "FC_BOOKMARK" in upper:
+            self._bookmark_reads += 1
+            n = self.rows if self._bookmark_reads == 1 else self.rows_after
             if self.bookmark is None:
                 return QueryResult(rows=[])
             return QueryResult(
-                rows=[{"fc_event_name": "subscription_started", "fc_bookmark": self.bookmark, "fc_rows": 5}]
+                rows=[{"fc_event_name": "subscription_started", "fc_bookmark": self.bookmark, "fc_rows": n}]
             )
         if "FC_PRESENT" in upper:
             return QueryResult(rows=[{"fc_rows": 1000, "fc_present": int(1000 * self.density)}])
@@ -418,13 +429,17 @@ def test_bump_usage_is_hourly():
 
 def test_sweep_drops_unused_unpinned_and_respects_the_daily_clock():
     form = _form()
+    # `plan` is what this chart asks for, so the demand guard keeps it however
+    # stale it looks. `utm` is not on the chart and is past the TTL, so it
+    # goes - and it goes despite `pinned`, because pins are withdrawn and use
+    # is the only thing that keeps a column.
     reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
-    reg["columns"]["utm"] = {**reg["columns"]["plan"], "label": "utm", "last_used_at": (NOW - timedelta(hours=3)).isoformat(), "pinned": True}
+    reg["columns"]["utm"] = {**reg["columns"]["plan"], "label": "utm", "expr": "utm",
+                             "last_used_at": (NOW - timedelta(days=61)).isoformat(), "pinned": True}
     run = _Run()
     registry, dropped, ran = sweep({**form, "managed_tables": reg}, run, now=NOW)
-    assert ran and dropped == ["plan"]
-    # utm stays because it was used, not because an old mirror says pinned (pins are withdrawn)
-    assert "utm" in registry["columns"] and "plan" not in registry["columns"]
+    assert ran and dropped == ["utm"]
+    assert "plan" in registry["columns"] and "utm" not in registry["columns"]
     assert any(c.upper().startswith("DELETE FROM") for c in run.calls)
     # swept an hour ago: nothing runs
     run2 = _Run()
@@ -437,7 +452,9 @@ def test_sweep_drops_unused_unpinned_and_respects_the_daily_clock():
 
 def test_sweep_drops_the_table_when_the_last_column_goes():
     form = _form()
+    # a column this chart does not ask for, so the demand guard does not hold it
     reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
+    reg["columns"] = {"utm": {**reg["columns"]["plan"], "label": "utm", "expr": "utm"}}
     run = _Run()
     sweep({**form, "managed_tables": reg}, run, now=NOW)
     assert any(c.upper().startswith("DROP TABLE IF EXISTS") for c in run.calls)
@@ -450,9 +467,12 @@ def test_sweep_persists_once_per_dropped_column_not_batched():
     rejection) can skip.
     Mutation: call persist() once at the end instead of per column."""
     form = _form()
+    # neither column is on this chart, so both are sweepable
     reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
-    reg["columns"]["utm"] = {**reg["columns"]["plan"], "label": "utm",
-                              "last_used_at": (NOW - timedelta(days=61)).isoformat()}
+    reg["columns"] = {
+        "utm": {**reg["columns"]["plan"], "label": "utm", "expr": "utm"},
+        "src": {**reg["columns"]["plan"], "label": "src", "expr": "src"},
+    }
     run = _Run()
     seen: list[dict] = []
     sweep({**form, "managed_tables": reg}, run, persist=lambda r: seen.append(copy.deepcopy(r)), now=NOW)
@@ -472,6 +492,9 @@ def test_sweep_persists_before_the_delete_runs():
     Mutation: call persist() after run(), not before."""
     form = _form()
     reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
+    # `utm` is not on the chart so it sweeps; `plan` is, so it stays and the
+    # remaining-columns branch (DELETE, not DROP TABLE) is the one exercised
+    reg["columns"]["utm"] = {**reg["columns"]["plan"], "label": "utm", "expr": "utm"}
     order: list[str] = []
     run = _Run(fail_on=("DELETE FROM",))
     registry, dropped, ran = sweep(
@@ -481,7 +504,7 @@ def test_sweep_persists_before_the_delete_runs():
     # the DELETE fails (not missing-relation), so run() raises nothing here
     # (sweep swallows it) but never gets the chance to append to `order`
     assert order == ["persist"], "the mirror must be written before the DELETE, not after"
-    assert dropped == ["plan"], "the mirror already says the column is gone, rows or not"
+    assert dropped == ["utm"], "the mirror already says the column is gone, rows or not"
 
 
 # ---------------------------------------------------------------- copy register
@@ -711,17 +734,22 @@ def test_planning_never_mutates_the_shared_config_defaults():
     assert config.DEFAULTS["managed_tables"] == before == {}
 
 
-def test_mode_off_reads_an_existing_index_as_is_and_never_writes():
-    """Off is the kill-switch for every automatic write: a stale index is
-    read as-is (the live tail keeps results exact), a moved mapping or a
-    missing bookmark means live rather than a rebuild, and the sweep neither
-    drops nor advances its clock. Mutation: gate only the build branch."""
+def test_mode_off_does_not_use_the_index_and_never_writes():
+    """Off is a USE toggle, not only a maintenance one: it says whether
+    Factcat may read the index at all, so charts read full history and scan
+    more - the honest meaning of turning indexing off. It still never
+    builds, refreshes, rebuilds or drops, and the rows are kept.
+    Mutation: let an entry attach when the mode is closed."""
     form = {**_form(), "managed_mode": "off"}
     stale = _registry(form, refreshed_at=(NOW - timedelta(days=30)).isoformat())
     run = _Run()
     plan = build_plan({**form, "managed_tables": stale}, run, now=NOW, allow_probe=True)
-    assert plan.columns[0].action == "attach"
+    assert plan.columns[0].action == "live"
+    assert plan.columns[0].reason == "indexing is off"
     assert run.calls == []
+    # and a perfectly fresh index is not used either
+    fresh = build_plan({**form, "managed_tables": _registry(form)}, run, now=NOW, allow_probe=True)
+    assert fresh.columns[0].action == "live"
     moved = {**stale, "fp": {"moved": True}}
     plan2 = build_plan({**form, "managed_tables": moved}, run, now=NOW, allow_probe=True)
     assert plan2.columns[0].action == "live" and "off" in plan2.columns[0].reason
@@ -943,3 +971,304 @@ def test_a_refusal_the_caller_can_act_on_is_said_out_loud():
     dense = build_plan(_form(), _Run(density=0.9), now=NOW, allow_probe=True)
     assert dense.columns[0].action == "live"
     assert managed.pending_note(dense) == ""
+
+
+def test_the_sweep_does_not_evict_what_this_chart_is_asking_for():
+    """The sweep runs BEFORE the plan, so it used to evict on "unused as of a
+    moment ago" while the request in flight was the use: opening a chart you
+    had not run for longer than the TTL dropped the column, dropped the
+    table, and rebuilt it from full history in the same Run. Returning to a
+    chart destroyed its index and charged a full backfill for coming back.
+
+    Demand means servable demand: this chart asks for it, the mapping still
+    matches, and there is a bookmark to attach to.
+
+    Mutation: drop the `key in wanted` guard.
+    """
+    form = _form()
+    reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
+    run = _Run()
+    registry, dropped, ran = sweep({**form, "managed_tables": reg}, run, now=NOW)
+    assert ran and dropped == [], "the sweep evicted the column the chart was asking for"
+    assert "plan" in registry["columns"]
+    assert run.calls == [], "nothing should have been deleted or dropped"
+    # and the Run that follows uses the index it kept, rather than paying to
+    # build one it had just destroyed
+    plan = build_plan({**form, "managed_tables": registry}, _Run(), now=NOW)
+    assert plan.columns[0].action == "attach"
+    assert plan.columns[0].action != "build"
+
+
+def test_the_sweep_still_evicts_a_column_no_chart_wants():
+    """The demand guard must not become "never evict". A column this chart
+    does not ask for, past the TTL, still goes."""
+    form = _form()
+    reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
+    reg["columns"] = {"utm": {**reg["columns"]["plan"], "label": "utm", "expr": "utm"}}
+    _r, dropped, ran = sweep({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert ran and dropped == ["utm"]
+
+
+def test_an_expression_slot_earns_no_shelter_from_the_sweep():
+    """Demand only counts when it is SERVABLE. `build_plan` routes a slot
+    filled from a SQL expression to live before it ever looks at the
+    registry, so sheltering that column would keep a cache alive on demand
+    the Run can never satisfy - the opposite of demand-shaped.
+
+    Mutation: drop the `fill != "expr"` filter from `wanted`.
+    """
+    form = _form()
+    form["breakdowns"] = [{**form["breakdowns"][0],
+                           "fill_from_event": "",
+                           "fill_from_expr": "plan IS NOT NULL"}]
+    # the chart really does name this column, and it really is past the TTL
+    reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
+    assert build_plan({**form, "managed_tables": reg}, _Run(), now=NOW).columns[0].action == "live"
+    _r, dropped, ran = sweep({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert ran and dropped == ["plan"], "an unservable slot sheltered the column"
+
+
+def test_a_backfill_that_landed_no_rows_is_not_reported_as_indexed():
+    """`built` is what the run row prints. A backfill that recorded nothing
+    leaves the chart on the live path, so saying "Indexed `plan`" there is
+    false - the note must describe what happened, not what was attempted.
+
+    Mutation: append to `built` before the attach/live decision.
+    """
+    form = _form()
+    plan = build_plan(form, _Run(), now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "build"
+    # bookmark=None: the backfill inserted nothing, so there is no index to read
+    apply_plan(plan, form, _Run(bookmark=None), now=NOW)
+    assert plan.columns[0].action == "live"
+    assert plan.built == [], "a run that fell back to live claimed it had indexed"
+    assert built_note(plan) == ""
+
+
+def test_a_rebuilt_column_says_rebuilt_not_indexed():
+    """A repaired column was ALREADY indexed and the user is paying for a
+    full-history backfill they did not ask for, so the verb differs. Same
+    grammar, same backticked label - not a second sentence family.
+
+    Mutation: render `repaired` labels with the "Indexed" verb.
+    """
+    form = _form()
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 500}
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    apply_plan(plan, {**form, "managed_tables": reg},
+               _Run(bookmark=NOW - timedelta(days=1), rows=9), now=NOW)
+    assert plan.repaired == ["plan"] and plan.built == ["plan"]
+    note = built_note(plan)
+    assert note == "Rebuilt `plan` · later runs read less", note
+    assert "Indexed" not in note
+    # a first build still says Indexed, and a run with both says both
+    first = Plan([], None, None, {}, settings(form))
+    first.built = ["utm"]
+    assert built_note(first) == "Indexed `utm` · later runs read less"
+    both = Plan([], None, None, {}, settings(form))
+    both.built, both.repaired = ["utm", "plan"], ["plan"]
+    assert built_note(both) == "Indexed `utm` · Rebuilt `plan` · later runs read less"
+
+
+def test_a_stale_mapping_does_not_shelter_a_column_from_the_sweep():
+    """Demand only counts when it is servable. If the mapping moved, the
+    entry would be rebuilt rather than attached, so it earns no shelter.
+    Mutation: drop the fingerprint check from `wanted`."""
+    form = _form()
+    reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
+    reg["fp"] = {**reg["fp"], "entity": "someone_else"}
+    _r, dropped, ran = sweep({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert ran and dropped == ["plan"]
+
+
+def test_rows_deleted_behind_us_rebuild_instead_of_appending_a_tail():
+    """A bookmark only moves when the NEWEST row changes, so comparing
+    bookmarks cannot see rows removed from the middle or the old end, or one
+    event name's rows removed while another's remain - the shapes that
+    actually lose history. Counts can. `bookmarks_sql` has always computed
+    COUNT(*) and `_read_bookmarks` always threw it away.
+
+    A refresh here would append a tail onto a hole and answer from an index
+    missing history, silently. Rebuild the column whole instead.
+
+    Mutation: ignore row_counts, or compare bookmarks instead of counts.
+    """
+    form = _form()
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 500}
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert plan.columns[0].action == "refresh"
+    # the index now reports far fewer rows than we recorded: something deleted them
+    run = _Run(bookmark=NOW - timedelta(days=1), rows=9)
+    registry = apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
+    ups = [c.upper().strip() for c in run.calls]
+    assert plan.repaired == ["plan"], "the column was not rebuilt"
+    assert any(u.startswith("DELETE FROM") for u in ups), "a rebuild clears the column first"
+    inserts = [u for u in ups if u.startswith("INSERT")]
+    assert inserts and "FC_BOOKMARK" not in inserts[0], "it appended a tail instead of rebuilding whole"
+    # and the fresh counts are stamped for next time
+    assert registry["columns"]["plan"]["row_counts"] == {managed._count_key("subscription_started"): 9}
+
+
+def test_an_ordinary_refresh_does_not_read_as_tampering():
+    """Counts GROW on a normal refresh, and Factcat's own census repair
+    deletes names and re-inserts them. The stamp is always the post-write
+    read, so neither can look like deletion. A false alarm here would cost a
+    full-history rebuild - the exact expense this is meant to avoid.
+
+    Mutation: stamp the counts BEFORE the writes instead of after.
+    """
+    form = _form()
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 5}
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    run = _Run(bookmark=NOW - timedelta(days=1), rows=5, rows_after=12)
+    registry = apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
+    assert plan.repaired == [], "an ordinary refresh was treated as tampering"
+    ups = [c.upper().strip() for c in run.calls]
+    assert not any(u.startswith("DELETE FROM") for u in ups), "it rebuilt a healthy column"
+    assert registry["columns"]["plan"]["row_counts"] == {managed._count_key("subscription_started"): 12}
+
+
+def test_an_event_name_that_vanished_entirely_counts_as_deletion():
+    """The per-name shape: one event name's rows removed while another's
+    remain. That name is simply absent from the fresh read - there is no row
+    to carry a smaller number - so absent must read as zero, not as "no
+    information". A retention job scoped to one event type is exactly this.
+
+    Mutation: default a missing name to something large instead of zero.
+    """
+    form = _form()
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    # `subscription_started` is untouched and still reports 5; `trial_started`
+    # is gone from the table altogether.
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 5,
+                                            managed._count_key("trial_started"): 40}
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert plan.columns[0].action == "refresh"
+    run = _Run(bookmark=NOW - timedelta(days=1), rows=5)
+    apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
+    assert plan.repaired == ["plan"], "a whole event name disappeared and went unnoticed"
+    assert any(c.upper().strip().startswith("DELETE FROM") for c in run.calls)
+
+
+def test_a_null_event_name_and_an_empty_one_are_different_buckets():
+    """A caller's event column can hold BOTH NULL and the empty string, and
+    both warehouses distinguish them. Folding NULL to "" put two GROUP BY
+    rows in one bucket - last row wins, and GROUP BY order is not
+    guaranteed - so the same index read as 900 rows or as 3 depending on the
+    order the warehouse happened to return. False negative in one direction
+    (800 rows vanish unnoticed, defeating the whole detector), false
+    positive in the other (a healthy column rebuilt from full history on
+    every refresh).
+
+    Mutation: key NULL as "" instead of through `_count_key`.
+    """
+    assert managed._count_key(None) != managed._count_key("")
+    both = {}
+    for name, n in [(None, 900), ("", 3)]:
+        both[managed._count_key(name)] = n
+    assert both == {"-": 900, "=": 3}, both
+    # order must not change the result
+    other = {}
+    for name, n in [("", 3), (None, 900)]:
+        other[managed._count_key(name)] = n
+    assert other == both
+
+    # and the two are compared independently: NULL rows lost, empty ones intact
+    fresh = {managed._count_key(None): 100, managed._count_key(""): 3}
+    assert managed._rows_went_missing(both, fresh) is True
+    assert managed._rows_went_missing(both, dict(both)) is False
+
+
+def test_an_unreadable_count_says_nothing_rather_than_crying_deletion():
+    """Dropping one unparseable name from the read would make it look
+    deleted on the next comparison and cost a full-history rebuild of a
+    healthy column. One bad count makes the whole read unusable, and the
+    safe answer is silence - no repair now, nothing stamped, compare again
+    next time.
+
+    Mutation: swallow the bad value and keep the partial dict.
+    """
+    class _Bad(_Run):
+        def __call__(self, sql, *, dry_run=False):
+            res = super().__call__(sql, dry_run=dry_run)
+            if "FC_BOOKMARK" in sql.upper() and res.rows:
+                res.rows[0]["fc_rows"] = "not a number"
+            return res
+
+    form = _form()
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 500}
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    run = _Bad(bookmark=NOW - timedelta(days=1))
+    registry = apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
+    assert plan.repaired == [], "an unreadable count was treated as a deletion"
+    assert registry["columns"]["plan"]["row_counts"] == {}, "a partial picture was stamped"
+
+
+def test_rows_are_read_whatever_case_the_warehouse_reports():
+    """Snowflake resolves unquoted identifiers and reports them UPPER CASE,
+    and its adapter builds row dicts straight from `cur.description` without
+    folding. `row.get("fc_rows")` then returns None and `int(None or 0)` is a
+    silent zero: no exception, no warning, a detector that never fires and a
+    bookmark that never attaches. Every column read here is one this module
+    named itself, so matching case-insensitively can only widen what is
+    already ours.
+
+    Mutation: read the rows with a plain `row.get(...)` again.
+    """
+    class _Shouty(_Run):
+        """Every generated column comes back upper-cased, as Snowflake does."""
+
+        def __call__(self, sql, *, dry_run=False):
+            res = super().__call__(sql, dry_run=dry_run)
+            res.rows[:] = [{k.upper(): v for k, v in row.items()} for row in res.rows]
+            return res
+
+    form = _form("snowflake")
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 5}
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert plan.columns[0].action == "refresh"
+    mark = NOW - timedelta(days=1)
+    registry = apply_plan(plan, {**form, "managed_tables": reg},
+                          _Shouty(bookmark=mark, rows=5, rows_after=12), now=NOW)
+    entry = registry["columns"]["plan"]
+    # the bookmark was read, so the next run attaches instead of rebuilding
+    assert entry["bookmark"] is not None, "an upper-cased bookmark column was not read"
+    assert _parse_iso(entry["bookmark"]) == mark
+    # and the counts are real numbers, not a silent zero
+    assert entry["row_counts"] == {managed._count_key("subscription_started"): 12},         entry["row_counts"]
+    assert plan.repaired == [], "an unread count was mistaken for a deletion"
+
+
+def test_a_column_with_no_bookmark_earns_no_shelter_from_the_sweep():
+    """The other half of servable demand. An entry with no bookmark has
+    nothing to attach to, so the chart asking for it does not make it
+    servable - sheltering it keeps a cache alive that can never be read.
+
+    Mutation: drop the `entry.get("bookmark")` conjunct from the guard.
+    """
+    form = _form()
+    reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat(),
+                    bookmark=None)
+    # the chart does name this column, and the mapping matches
+    assert "plan" in {c.key for c in expensive_columns(form)}
+    assert reg["fp"] == config_fingerprint(form)
+    _r, dropped, ran = sweep({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert ran and dropped == ["plan"], "a column with nothing to attach to was sheltered"
+
+
+def test_a_column_with_no_recorded_counts_is_not_treated_as_tampered():
+    """Entries written before this shipped, and recovered entries, carry no
+    counts. Absent is not evidence of deletion - stamp on the next write and
+    say nothing. Mutation: treat a missing row_counts as zero."""
+    form = _form()
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    reg["columns"]["plan"].pop("row_counts", None)
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    run = _Run(bookmark=NOW - timedelta(days=1), rows=5)
+    apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
+    assert plan.repaired == []

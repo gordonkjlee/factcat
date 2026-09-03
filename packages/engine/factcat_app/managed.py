@@ -28,9 +28,11 @@ Rules that shaped it:
   plus the live rows after its bookmark, so a stale index is a cost, not
   a wrong answer. Refresh folds the tail in when it is older than the
   staleness target.
-* Removal is automatic and lazy: a daily sweep drops columns unused for
-  the TTL. Adding costs a scan, so it waits for a real need; dropping
-  costs nothing, so it needs nobody.
+* Removal is automatic and lazy: a clean-up during a chart Run - at most
+  once every ``SWEEP_HOURS``, never in the background, nothing is
+  scheduled - drops columns unused for the TTL, except one the request in
+  flight is asking for. Adding costs a scan, so it waits for a real need;
+  dropping costs nothing, so it needs nobody.
 * Bounds on the events table compare the STORED time column through the
   existing date placeholder, never a function around it: partitions prune
   and the day of overlap only yields duplicate values, which the LOCF
@@ -551,6 +553,13 @@ class Plan:
     # false twice over.
     registry_failures: list[str] = field(default_factory=list)
     built: list[str] = field(default_factory=list)
+    # Columns rebuilt because rows had gone missing from the index behind
+    # us. Kept apart from `built` so the run row can say "Rebuilt" rather
+    # than "Indexed": the column was already indexed, and the user is being
+    # charged for a full-history backfill they did not ask for. Both lists
+    # carry the label - `built` is every column whose rows landed this run,
+    # `repaired` is the subset that had to be rebuilt.
+    repaired: list[str] = field(default_factory=list)
 
     def maybe(self) -> list[ColumnPlan]:
         """Columns that would be indexed but have not been measured yet: the
@@ -621,8 +630,8 @@ def _probe_density(
             return float(value) if value is not None else None
     res = run(density_probe_sql(form, expr, today=now.date()))
     rows = res.rows[0] if res.rows else {}
-    total = rows.get("fc_rows")
-    present = rows.get("fc_present")
+    total = _field(rows, "fc_rows")
+    present = _field(rows, "fc_present")
     density = None
     if total:
         density = float(present or 0) / float(total)
@@ -681,14 +690,26 @@ def build_plan(
         if col.fill == "expr":
             plan.columns.append(ColumnPlan(col, "live", "fill from is a SQL expression"))
             continue
-        # Mode: Off is the kill-switch for every automatic build, refresh,
-        # rebuild and drop (the hourly usage bump on an attached column is
-        # metadata-only and keeps last_used_at honest, so nothing is evicted
-        # the moment Mode returns to auto). An index whose fingerprint still matches
-        # is read as-is (the live tail keeps results exact however stale it
-        # is); Setup's own actions remain the way to change it.
+        # Mode: Off says whether Factcat may USE the indexes, not only whether
+        # it may maintain them - so it is the kill-switch for every automatic
+        # build, refresh, rebuild and drop AND stops an existing index being
+        # read. Charts then scan full history, which is the honest cost of
+        # turning indexing off. Nothing is deleted: the sweep returns early
+        # under Off, and its demand guard means a column the chart asks for
+        # survives the switch back on rather than being evicted for having
+        # gone unserved. Setup's own actions remain the way to change it.
         mode_open = _mode_open(form, cfg)
         if entry:
+            # Off is a USE toggle, not only a maintenance one: it says whether
+            # Factcat may read the index at all. Charts then read full history
+            # and scan more, which is the honest meaning of turning indexing
+            # off and is said where the toggle lives. The rows are kept and
+            # nothing is dropped - `sweep` returns early under Off, and the
+            # demand guard there means the index is still waiting when the
+            # toggle goes back on.
+            if not mode_open:
+                plan.columns.append(ColumnPlan(col, "live", "indexing is off"))
+                continue
             bookmark = _parse_iso(entry.get("bookmark"))
             refreshed = _parse_iso(entry.get("refreshed_at")) or _parse_iso(entry.get("built_at"))
             days = cfg["refresh_days"]
@@ -756,13 +777,13 @@ def _census(form: dict[str, Any], run: RunFn) -> dict[str, dict[str, Any]] | Non
         return None
     out: dict[str, dict[str, Any]] = {}
     for row in res.rows:
-        name = row.get("fc_value")
+        name = _field(row, "fc_value")
         if name is None:
             continue
         out[str(name)] = {
-            "rows": int(row.get("fc_rows") or 0),
-            "first": _iso_or_none(row.get("fc_first")),
-            "last": _iso_or_none(row.get("fc_last")),
+            "rows": int(_field(row, "fc_rows") or 0),
+            "first": _iso_or_none(_field(row, "fc_first")),
+            "last": _iso_or_none(_field(row, "fc_last")),
         }
     return out
 
@@ -775,11 +796,86 @@ def _iso_or_none(value: Any) -> str | None:
     return str(value)
 
 
-def _read_bookmarks(form: dict[str, Any], run: RunFn, key: str) -> dict[str | None, datetime]:
+def _field(row: Any, name: str) -> Any:
+    """Read one generated column out of a result row, whatever case the
+    warehouse reported it in.
+
+    BigQuery echoes an unquoted alias as written; Snowflake resolves
+    unquoted identifiers and reports them UPPER CASE, and
+    ``SnowflakeAdapter.run`` builds its row dicts straight from
+    ``cur.description`` without folding. A plain ``row.get("fc_rows")``
+    therefore returns None on Snowflake and ``int(None or 0)`` is a silent
+    zero - no exception, no warning, a detector that never fires and a
+    bookmark that never attaches. Every column this module reads is one it
+    named itself (``fc_*``), so matching case-insensitively can only widen
+    what is already ours; it cannot collide with a caller's column.
+
+    The same assumption lives at other row readers outside this module
+    (the chart's own ``fc_value``), which is a wider question than this
+    file can settle without a live account.
+    """
+    if not isinstance(row, dict):
+        return None
+    if name in row:
+        return row[name]
+    lowered = name.lower()
+    for key, value in row.items():
+        if str(key).lower() == lowered:
+            return value
+    return None
+
+
+def _count_key(name: Any) -> str:
+    """A collision-free JSON key for one event name.
+
+    JSON has no null key, and a caller's event column can legitimately hold
+    BOTH NULL and the empty string - both warehouses distinguish them, and
+    raw event data routinely contains both. Folding NULL to "" put two
+    GROUP BY rows in one bucket, last row wins, and GROUP BY order is not
+    guaranteed: the same index read as 900 rows or as 3 depending on the
+    order the warehouse happened to return. That is a false NEGATIVE in one
+    direction (800 rows can then vanish unnoticed - the detector's whole
+    purpose) and a false POSITIVE in the other (a healthy column rebuilt
+    from full history on every refresh - the expense this exists to avoid).
+
+    So tag the key: "-" is NULL, "=" + the name is a value. The empty name
+    is "=", which cannot equal "-".
+    """
+    return "-" if name is None else "=" + str(name)
+
+
+def _read_index_state(
+    form: dict[str, Any], run: RunFn, key: str
+) -> tuple[dict[str | None, datetime], dict[str, int] | None]:
+    """One column's per-event-name bookmarks AND row counts.
+
+    ``bookmarks_sql`` has always selected ``COUNT(*) AS fc_rows`` and the
+    reader that preceded this one always threw it away. Keeping it makes
+    divergence detectable at all: a bookmark only moves when the NEWEST row
+    changes, so comparing bookmarks cannot see rows deleted from the middle
+    or the old end, nor one event name's rows removed while another's stay -
+    which are the shapes that actually lose history. A count that went DOWN
+    is unambiguous, because only Factcat writes this table.
+
+    Counts are keyed by ``_count_key``, which keeps NULL and the empty
+    string apart.
+    """
     res = run(bookmarks_sql(form, key))
-    out: dict[str | None, datetime] = {}
+    marks: dict[str | None, datetime] = {}
+    # `None` means the read is not trustworthy enough to compare against.
+    counts: dict[str, int] | None = {}
     for row in res.rows:
-        bm = row.get("fc_bookmark")
+        name = _field(row, "fc_event_name")
+        if counts is not None:
+            try:
+                counts[_count_key(name)] = int(_field(row, "fc_rows") or 0)
+            except (TypeError, ValueError):
+                # Dropping just this name would make it read as a deletion
+                # on the next comparison and cost a full-history rebuild of
+                # a healthy column. One unreadable count makes the whole
+                # read unusable, and saying nothing is the safe answer.
+                counts = None
+        bm = _field(row, "fc_bookmark")
         if bm is None:
             continue
         if not isinstance(bm, datetime):
@@ -789,9 +885,29 @@ def _read_bookmarks(form: dict[str, Any], run: RunFn, key: str) -> dict[str | No
             bm = parsed
         if bm.tzinfo is None:
             bm = bm.replace(tzinfo=timezone.utc)
-        name = row.get("fc_event_name")
-        out[str(name) if name is not None else None] = bm
-    return out
+        marks[str(name) if name is not None else None] = bm
+    return marks, counts
+
+
+def _rows_went_missing(stored: Any, fresh: dict[str, int] | None) -> bool:
+    """True when any event name holds FEWER rows than we last recorded.
+
+    Only Factcat writes this table, and every path that removes rows
+    re-stamps in the same breath, so a decrease means something outside
+    Factcat deleted them - a retention job, a governance tool, a hand-run
+    DELETE. Growth is ordinary (a refresh appends), so only a decrease is a
+    signal. A name absent from the fresh read counts as zero. A ``fresh``
+    of ``None`` means the read could not be trusted, and says nothing.
+    """
+    if not isinstance(stored, dict) or not stored or not isinstance(fresh, dict):
+        return False
+    for key, was in stored.items():
+        try:
+            if int(was) > int(fresh.get(str(key), 0)):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def _census_repairs(
@@ -897,34 +1013,71 @@ def apply_plan(
                 }
             else:
                 entry = dict(cols.get(key) or {})
-                known = _read_bookmarks(form, run, key)
-                new_names, rebuild_names = _census_repairs(
-                    entry, census, {n for n in known if n is not None}
-                )
-                lookback = plan.settings["lookback_days"]
-                override = (entry.get("overrides") or {}).get("lookback_days")
-                if override not in (None, ""):
-                    lookback = int(override)
-                if rebuild_names:
-                    run(delete_column_sql(form, key, names=rebuild_names))
-                    run(backfill_sql(form, key, cp.column.expr, names=rebuild_names))
-                    known = {n: bm for n, bm in known.items() if n not in rebuild_names}
-                if new_names:
-                    run(backfill_sql(form, key, cp.column.expr, names=new_names))
-                if known:
-                    days = {n: bm.date() for n, bm in known.items()}
-                    run(refresh_sql(form, key, cp.column.expr, bookmarks=days, lookback_days=lookback))
-                entry["refreshed_at"] = now_iso(now)
-            marks = _read_bookmarks(form, run, key)
+                # The read the refresh needs anyway, now also carrying the
+                # per-name counts. One statement, two answers: nothing extra
+                # is billed to find out whether the index still holds what it
+                # claimed.
+                known, fresh_counts = _read_index_state(form, run, key)
+                if _rows_went_missing(entry.get("row_counts"), fresh_counts):
+                    # Rows this column had are gone and Factcat did not remove
+                    # them. Appending a tail onto a hole would answer from an
+                    # index missing history - silently, with no error - so
+                    # rebuild the column whole instead of refreshing it.
+                    run(delete_column_sql(form, key))
+                    run(backfill_sql(form, key, cp.column.expr))
+                    entry = {
+                        "expr": cp.column.expr,
+                        "label": label,
+                        "built_at": now_iso(now),
+                        "refreshed_at": now_iso(now),
+                        "last_used_at": now_iso(now),
+                        "use_count": int((cols.get(key) or {}).get("use_count") or 0),
+                        "pinned": bool((cols.get(key) or {}).get("pinned")),
+                        "overrides": dict((cols.get(key) or {}).get("overrides") or {}),
+                    }
+                    plan.repaired.append(label)
+                else:
+                    new_names, rebuild_names = _census_repairs(
+                        entry, census, {n for n in known if n is not None}
+                    )
+                    lookback = plan.settings["lookback_days"]
+                    override = (entry.get("overrides") or {}).get("lookback_days")
+                    if override not in (None, ""):
+                        lookback = int(override)
+                    if rebuild_names:
+                        run(delete_column_sql(form, key, names=rebuild_names))
+                        run(backfill_sql(form, key, cp.column.expr, names=rebuild_names))
+                        known = {n: bm for n, bm in known.items() if n not in rebuild_names}
+                    if new_names:
+                        run(backfill_sql(form, key, cp.column.expr, names=new_names))
+                    if known:
+                        days = {n: bm.date() for n, bm in known.items()}
+                        run(refresh_sql(form, key, cp.column.expr, bookmarks=days, lookback_days=lookback))
+                    entry["refreshed_at"] = now_iso(now)
+            # The post-write read: everything this Run wrote has landed, so
+            # these counts are the state to compare against next time. Stamping
+            # here rather than before the writes is what stops Factcat's own
+            # census repair (which deletes names and re-inserts them) reading
+            # as tampering on the next refresh.
+            marks, counts = _read_index_state(form, run, key)
+            # An untrustworthy read stamps nothing rather than a partial
+            # picture: absent reads as "no information" next time, a partial
+            # dict would read as deletion.
+            entry["row_counts"] = counts if counts is not None else {}
             entry["bookmark"] = now_iso(max(marks.values())) if marks else None
             if census is not None:
                 entry["names"] = {n: census[n] for n in census}
             cols[key] = entry
             cp.bookmark = _parse_iso(entry.get("bookmark"))
-            plan.built.append(label)
             cp.action = "attach" if cp.bookmark is not None else "live"
             if cp.bookmark is None:
+                # The backfill landed no rows, so the chart runs live. Saying
+                # "Indexed `x`" here was false: `built` is what the run row
+                # reports, and it must describe what happened rather than
+                # what was attempted.
                 cp.reason = "no values recorded yet"
+            else:
+                plan.built.append(label)
             # Persist now, this column, before the next one's rows are even
             # requested: a crash after this line still remembers what really
             # landed. Batching it behind the loop is what lost a
@@ -999,9 +1152,30 @@ def sweep(
     if dest is None or not cols:
         return registry, dropped, True
     ttl = timedelta(days=cfg["drop_days"])
+    # What THIS request is asking for. The sweep runs before the plan, so
+    # without this it evicts on "unused as of a moment ago" while the request
+    # in flight is the use: coming back to a chart after the TTL dropped the
+    # column, dropped the table, and then rebuilt it from full history in the
+    # same Run - the act of using a column destroyed it. Pure form parsing,
+    # no warehouse call.
+    # `fill == "expr"` is excluded because `build_plan` routes those to live
+    # BEFORE it ever looks at the registry: a slot filled from a SQL
+    # expression is demand this Run can never serve, and sheltering it would
+    # keep a column alive on a chart that will not read it - a cache held up
+    # by unservable demand, which is the opposite of demand-shaped.
+    wanted = (
+        {c.key for c in expensive_columns(form) if c.fill != "expr"}
+        if registry.get("fp") == config_fingerprint(form)
+        else set()
+    )
     for key in list(cols):
         entry = cols[key]
         if not isinstance(entry, dict):
+            continue
+        # Demand this request can actually be served: the chart asks for it,
+        # the mapping still matches, and there is a bookmark to attach to.
+        # Not "recently used" - being used right now.
+        if key in wanted and entry.get("bookmark"):
             continue
         # `pinned` / `overrides` keys from a pre-trim registry (never shipped)
         # are ignored: use is the only thing that keeps a column.
@@ -1089,9 +1263,19 @@ def built_note(plan: Plan, *, bytes_after: int | None = None) -> str:
     nothing is said — the chip already includes the build."""
     if not plan.built:
         return ""
-    what = ", ".join(f"`{l}`" for l in plan.built)
     tail = f"later runs ~ {_gb(bytes_after)}" if bytes_after is not None else "later runs read less"
-    return f"Indexed {what} \u00b7 {tail}"
+    # A repaired column was already indexed; the user is paying for a
+    # full-history backfill because rows went missing behind us, so the verb
+    # has to differ. Same grammar, same backticked label - the accurate verb,
+    # not a second sentence family.
+    fresh = [l for l in plan.built if l not in plan.repaired]
+    repaired = [l for l in plan.built if l in plan.repaired]
+    parts = []
+    if fresh:
+        parts.append("Indexed " + ", ".join(f"`{l}`" for l in fresh))
+    if repaired:
+        parts.append("Rebuilt " + ", ".join(f"`{l}`" for l in repaired))
+    return " \u00b7 ".join(parts) + f" \u00b7 {tail}"
 
 
 def failure_note(plan: Plan) -> str:
@@ -1195,11 +1379,11 @@ def recover_registry_from_rows(
     result = run(recovered_columns_sql(form))
     columns: dict[str, Any] = {}
     for row in result.rows:
-        cand = known.get(row.get("fc_column"))
+        cand = known.get(_field(row, "fc_column"))
         if cand is None:
             continue
-        first = _dt(row.get("fc_first_at"))
-        bm = _dt(row.get("fc_bookmark"))
+        first = _dt(_field(row, "fc_first_at"))
+        bm = _dt(_field(row, "fc_bookmark"))
         columns[cand.key] = {
             "expr": cand.expr,
             "label": cand.label,
