@@ -235,16 +235,6 @@
     td, th { border-bottom: 1px solid var(--fc-line); padding: 0.25rem 0.75rem 0.25rem 0; text-align: left; }
     details { margin-top: 0.75rem; font-size: 0.75rem; }
     pre { overflow: auto; background: var(--fc-snow); padding: 0.75rem; }
-    /* A tab left open across a restart is the recurring review hazard: the
-       page keeps running the code it loaded. This bar is the page telling
-       on itself, checked on focus so it costs nothing while you work. */
-    .stale-build {
-      position: sticky; top: 0; z-index: 40;
-      padding: 0.45rem 0.9rem; font-size: 0.8rem;
-      color: var(--fc-ink); background: var(--fc-ochre-wash, #fbf3e4);
-      border-bottom: 1px solid var(--fc-ochre);
-    }
-    .stale-build[hidden] { display: none !important; }
     {% block extra_css %}{% endblock %}
   </style>
 </head>
@@ -282,42 +272,7 @@
   </nav>
 </aside>
 <div class="app">
-<div id="stale-build" class="stale-build" hidden role="status">
-  This page is from an older build of Factcat. <button type="button" id="stale-reload" class="linkish">Reload</button>
-</div>
 {% block body %}{% endblock %}
 </div>
-<script>
-// The build this page was rendered from. Compared with the server's on every
-// focus: a stale tab is the difference between reviewing the change and
-// reviewing what used to be there.
-window.FACTCAT_BUILD = {{ (build_id or "")|tojson }};
-(function () {
-  var bar = document.getElementById("stale-build");
-  if (!bar || !window.FACTCAT_BUILD) return;
-  document.getElementById("stale-reload").addEventListener("click", function () {
-    location.reload();
-  });
-  var checking = false;
-  async function check() {
-    if (checking || bar.hidden === false) return;
-    checking = true;
-    try {
-      var res = await fetch("/api/build", {cache: "no-store"});
-      var data = await res.json();
-      if (data && data.build && data.build !== window.FACTCAT_BUILD) bar.hidden = false;
-    } catch (err) {
-      /* offline or restarting: say nothing rather than cry wolf */
-    } finally {
-      checking = false;
-    }
-  }
-  window.addEventListener("focus", check);
-  document.addEventListener("visibilitychange", function () {
-    if (!document.hidden) check();
-  });
-  check();
-})();
-</script>
 </body>
 </html>

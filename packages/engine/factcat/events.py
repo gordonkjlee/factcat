@@ -528,21 +528,13 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
     # another CTE ("cannot be de-correlated"). NULL is never folded into
     # (other). The approx pick filters NULL so it does not consume a top-N
     # slot; the first WHEN still keeps a NULL series.
-    # The value branches are CAST to text because the ELSE is a text label:
-    # a CASE has one type, and a numeric or date breakdown column against
-    # '(other)' is rejected outright by BigQuery ("all THEN/ELSE arguments
-    # must be coercible to a common type"). DuckDB coerces silently, which
-    # is why the equivalence fixtures never saw it and a compile-only walk
-    # cannot: sqlglot does not type-check. Folding produces a LABEL, so text
-    # is the honest common type; the un-folded branch below keeps the
-    # column's own type, because there is nothing to reconcile there.
     fold_selects = []
     for i in range(n):
         fold_selects.append(
             f"""CASE
-                WHEN sliced.fc_bd_{i} IS NULL THEN CAST(sliced.fc_bd_{i} AS TEXT)
+                WHEN sliced.fc_bd_{i} IS NULL THEN sliced.fc_bd_{i}
                 WHEN t.fc_hit IS NOT NULL
-                    THEN CAST(sliced.fc_bd_{i} AS TEXT)
+                    THEN sliced.fc_bd_{i}
                 ELSE '{OTHER_LABEL}'
             END AS fc_fold_{i}"""
         )
