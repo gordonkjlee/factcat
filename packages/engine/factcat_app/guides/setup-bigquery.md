@@ -116,4 +116,60 @@ source cannot back a view). Later Refresh reads the view, or rebuilds the
 table snapshot. The object stores a fingerprint of the mapped table and
 event-name column. Lookback does not apply (and is hidden here) while that
 dest is set. Catalog jobs do not use the scan cap. Events then filters
-`event_name = '…'`.
+`event_name = '…'`. The view is a census — names, rows per month, first
+and last seen — refreshed daily (`refresh_interval_minutes = 1440`), never
+BigQuery's 30-minute default: each refresh over a rebuilt source table is a
+full recompute of two columns' history.
+
+## Factcat-managed tables
+
+With a write project and dataset set, Factcat keeps `fc_column_index`
+there: for a few breakdown columns, every row where the column had a
+value (entity, instant, value, event name), day-partitioned on the
+instant and clustered by column and entity. The expensive Value-at modes
+read it plus the live rows after its bookmark, bounded on the bare
+timestamp column so partitions prune; results are exact regardless of how
+stale the index is.
+
+**Mode** Automatic indexes a sparse column the first time an expensive
+mode uses it. That run reads the column's whole history for every event
+name, which can be several times what the chart alone would scan (74 GB
+against 10 GB on one measured hub) and pays back after a handful of runs;
+where the probe is already cached the estimate chip includes it. The
+running copy says "Indexing `x`… then running", and afterwards one line
+under the chip says what later runs cost. Once the index exists the chip
+prices the cheap query. The build runs under the same scan cap as a chart;
+over the cap it fails cleanly and the chart reads the full history. Automatic refreshes
+it when older than **Refresh when older than**, and drops columns no
+chart has used for **Drop unused after** on a daily sweep. **Late-arrival
+lookback** is how late a row can land after its event time; a refresh
+re-reads that much before each event name's bookmark. Dense columns (the
+value on more than about a quarter of recent rows) are not indexed —
+**Value at: each event** already has them. Columns that are not text are left alone too (the
+index stores text); write `CAST(x AS STRING)` as the breakdown expression to
+index one. Off changes nothing: no build, refresh, rebuild or drop; an
+existing index is still read.
+
+The list shows size and age per table; Drop is the only per-table action
+(building, refreshing and rebuilding are Automatic mode's job). Its
+bookkeeping (fingerprints,
+last use, census snapshot) lives in the table's own description; a
+mapping change rebuilds, a new event name with backfilled history is
+back-filled on the next refresh, a name whose row count shrank is rebuilt.
+Needs `bigquery.tables.create` on the dataset (the rights check above).
+A failed build never blocks a chart: it runs on the full history and the
+run row says why.
+
+The table holds entity ids and column values copied from your events table,
+so check who can read the write dataset before indexing a column that
+carries personal data. Rows deleted from the events table leave the index
+at the next refresh of that column (the census notices the row count fall);
+with Mode: Off, or for a column no chart uses, they stay until the sweep
+drops it. Drop the column for an immediate removal. One gap to know about: if an event name
+that already existed starts carrying a column it never carried before, the
+index does not pick that up on its own — Drop the column and let the next
+chart rebuild it. The index is
+day-partitioned, and BigQuery refuses a single statement that touches more
+than 4,000 partitions, so a column with more than about eleven years of
+history cannot be built in one pass — the build fails cleanly and the chart
+reads the full history.

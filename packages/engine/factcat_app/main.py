@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 
 from factcat.dialects import supports_json_value
 from factcat.warehouses import (
+    is_missing_relation,
     ADAPTERS,
     CAP_DRY_RUN,
     AdapterError,
@@ -45,6 +46,7 @@ from .config import load, mapping_ready, save, warehouse_kind
 from .build import BUILD_ID, build_info
 from .filters import filter_ui
 from .sql_display import apply_sql_keyword_case, sql_chrome, sql_plain
+from . import managed as managed_mod
 from . import prefs as prefs_mod
 from .query import (
     REPORTING_TIMEZONES,
@@ -304,6 +306,10 @@ async def api_write_access(request: Request) -> JSONResponse:
         payload = await run_in_threadpool(write_access_from_form, form)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
+    if payload.get("status") in ("ok", "denied"):
+        # The verdict is what gates an automatic index build on Run
+        # (managed._write_ok); Setup re-checks whenever the destination moves.
+        save({"write_access_status": payload["status"]})
     return JSONResponse({"ok": True, **payload})
 
 
@@ -501,6 +507,39 @@ def _client_error(exc: BaseException, sql: str | None = None) -> str:
     return "\n".join(lines) if lines else "Query failed. See SQL below."
 
 
+MANAGED_KEYS = (
+    "managed_tables",
+    "managed_last_sweep",
+    "write_access_status",
+    "managed_mode",
+    "managed_drop_days",
+    "managed_refresh_days",
+    "managed_lookback_days",
+    # The mapped column types. `is_text_column` and `_time_column_is_date`
+    # both read them, and both were inert on the Run path because the chart
+    # request carries no mapping - a non-text column was INSERTed into a
+    # text fc_value and failed on every run.
+    "columns",
+    # The census gate. `_census` reads it to decide whether the event-name
+    # cache is a v2 census, and the whole self-repair (a new name with
+    # backfilled history filled whole; a name whose rows shrank rebuilt)
+    # is skipped when it is absent. Only the catalog request carried it, so
+    # on the Run path the repair never fired at all.
+    "event_name_cache",
+)
+
+
+def _with_managed(form: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    """Events requests carry the chart, not the bookkeeping: the config file
+    owns the registry mirror, the sweep clock and the Setup knobs. Merge
+    them in for any key the request did not send (Setup's own form does)."""
+    out = dict(form)
+    for key in MANAGED_KEYS:
+        if key not in out or out[key] in (None, ""):
+            out[key] = cfg.get(key)
+    return out
+
+
 def _fail(
     exc: BaseException,
     sql: str | None,
@@ -552,6 +591,7 @@ async def api_sql(request: Request) -> JSONResponse:
 async def api_estimate(request: Request) -> JSONResponse:
     form = await request.json()
     sql = None
+    plan = None
     try:
         form = await run_in_threadpool(ensure_epoch, form)
         kind = form_kind(form)
@@ -567,37 +607,178 @@ async def api_estimate(request: Request) -> JSONResponse:
                 }
             )
         conn = connection_from_form(form)
-        sql = events_sql_from_form(form)
+        form = _with_managed(form, load())
+        # An estimate is a free dry run: the plan reads only cached facts
+        # (no probe, no bookmark query) and nothing is written.
+        plan = managed_mod.build_plan(form, None)
+        sql = events_sql_from_form(form, managed=plan)
         warehouse = await run_in_threadpool(connect, kind, **conn)
-        result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
+        try:
+            result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
+        except AdapterError as exc:
+            # The table went away since the mirror was written. The run path
+            # falls back to the live query; the estimate must price the same
+            # thing rather than showing a hard error for a chart that runs.
+            if not (plan.attachable() and is_missing_relation(exc)):
+                raise
+            for cp in plan.columns:
+                cp.action = "live"
+            sql = events_sql_from_form(form)
+            result = await run_in_threadpool(warehouse.run, sql, dry_run=True)
+        build_bytes = None
+        if plan.builds():
+            try:
+                build_bytes = 0
+                for cp in plan.builds():
+                    stmt = managed_mod.backfill_select_sql(
+                        form, cp.column.key, cp.column.expr
+                    )
+                    probe = await run_in_threadpool(warehouse.run, stmt, dry_run=True)
+                    build_bytes += int(probe.bytes_processed or 0)
+            except AdapterError:
+                # The chart is still estimable; the build just goes unpriced.
+                build_bytes = None
     except BytesCapError as exc:
-        return JSONResponse(
-            _estimate_payload(
-                exc.bytes_processed,
-                _cap_from_error(exc, form),
-                over_cap=True,
-            )
+        payload = _estimate_payload(
+            exc.bytes_processed,
+            _cap_from_error(exc, form),
+            over_cap=True,
         )
+        # Over the cap is exactly when knowing an index would make later runs
+        # cheaper matters most: dropping the note here made it vanish the
+        # moment a chart grew (a second group-by was enough), which read as
+        # the feature being broken.
+        if plan is not None:
+            note = managed_mod.pending_note(plan)
+            if note:
+                payload["managed_note"] = note
+        return JSONResponse(payload)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _fail(exc, sql)
-    return JSONResponse(
-        _estimate_payload(
-            result.bytes_processed, conn.get("maximum_bytes_billed"), over_cap=False
-        )
+    query_bytes = result.bytes_processed
+    total = query_bytes
+    if build_bytes is not None and query_bytes is not None:
+        total = query_bytes + build_bytes
+    payload = _estimate_payload(
+        total, conn.get("maximum_bytes_billed"), over_cap=False
     )
+    if plan.builds():
+        payload["managed_build"] = [cp.column.label for cp in plan.builds()]
+    # One short line before the run: the chip carries the bytes, this carries
+    # what the Run is about to DO. Silence was the trim going one step too far.
+    note = managed_mod.pending_note(plan, bytes_build=build_bytes, bytes_after=query_bytes)
+    if note:
+        payload["managed_note"] = note
+    return JSONResponse(payload)
 
 
 @app.post("/api/run")
 async def api_run(request: Request) -> JSONResponse:
     form = await request.json()
     sql = None
+    managed_note = ""
+    managed_failed = ""
     try:
         form = await run_in_threadpool(ensure_epoch, form)
-        sql = events_sql_from_form(form)
         conn = connection_from_form(form)
+        cfg = load()
         save(form)
+        # The config file owns the registry mirror, the sweep clock and the
+        # Setup knobs; the request carries the chart, not the bookkeeping.
+        form = _with_managed(form, cfg)
         warehouse = await run_in_threadpool(connect, form_kind(form), **conn)
-        result = await run_in_threadpool(warehouse.run, sql)
+        extra_save: dict[str, Any] = {}
+        if managed_mod.index_table(form) is not None:
+            if managed_mod.registry_from_form(form).get("columns"):
+                # The table's own description is the authority: a dropped
+                # table or a new destination must not inherit the mirror's
+                # bookmarks - and the sweep below must plan from it too, or a
+                # workstation that has not charted for the TTL would drop a
+                # column another one uses every day.
+                reconciled = await run_in_threadpool(managed_mod.reconcile_registry, form)
+                form = {**form, "managed_tables": reconciled}
+                extra_save["managed_tables"] = reconciled
+            registry, _dropped, ran = await run_in_threadpool(
+                managed_mod.sweep, form, warehouse.run
+            )
+            if ran:
+                form = {**form, "managed_tables": registry}
+                extra_save["managed_tables"] = registry
+                extra_save["managed_last_sweep"] = managed_mod.now_iso()
+        plan = await run_in_threadpool(
+            managed_mod.build_plan,
+            form,
+            warehouse.run,
+            allow_probe=True,
+        )
+        if plan.builds():
+            registry = await run_in_threadpool(managed_mod.apply_plan, plan, form, warehouse.run)
+            extra_save["managed_tables"] = registry
+            # Persist now. The chart query below can fail (a cap rejection is
+            # the ordinary case), and batching this behind it would lose the
+            # record of an index that already exists - so the next run would
+            # build it again, appending a second copy of the whole history.
+            save({"managed_tables": registry})
+            managed_failed = managed_mod.failure_note(plan)
+        sql = events_sql_from_form(form, managed=plan)
+        fell_back = False
+        try:
+            result = await run_in_threadpool(warehouse.run, sql)
+        except AdapterError as exc:
+            if not (plan.attachable() and is_missing_relation(exc)):
+                raise
+            # The prepared table vanished between the plan and the query:
+            # answer from the full history, forget the stale bookmarks, and
+            # say only that — no usage bump, no "prepared" note.
+            fell_back = True
+            for cp in plan.columns:
+                cp.action = "live"
+            sql = events_sql_from_form(form)
+            result = await run_in_threadpool(warehouse.run, sql)
+            managed_note = ""
+            managed_failed = (
+                "The indexed table was not found, so this run read the full "
+                "history; the chart is correct. It is rebuilt on the next run."
+            )
+            extra_save["managed_tables"] = {"probes": plan.registry.get("probes") or {}}
+        if not fell_back:
+            if plan.built:
+                # The one line after a run that indexed: what later runs cost,
+                # from a free dry run of the query that just ran (the index
+                # now exists, so this is the real figure), where there is one.
+                after = None
+                if CAP_DRY_RUN in capabilities(form_kind(form)):
+                    try:
+                        priced = await run_in_threadpool(warehouse.run, sql, dry_run=True)
+                        after = priced.bytes_processed
+                    except AdapterError:
+                        # BytesCapError is an AdapterError: a cap rejection here
+                        # (the cap moved between run and price) only costs the
+                        # figure, never the rows already fetched.
+                        after = None
+                managed_note = managed_mod.built_note(plan, bytes_after=after)
+            registry = await run_in_threadpool(managed_mod.bump_usage, plan, form, warehouse.run)
+            if plan.attachable():
+                extra_save["managed_tables"] = registry
+        # A density probe costs real bytes (PROBE_DAYS of one column) and is
+        # cached for PROBE_TTL_DAYS - but only if it is saved. A column the
+        # gate REFUSES produces no build and nothing attachable, so without
+        # this merge its probe was thrown away and re-run on every chart,
+        # forever. Merge rather than assign: the reconcile and the usage bump
+        # above own the rest of the document.
+        probes = plan.registry.get("probes") if isinstance(plan.registry, dict) else None
+        if probes and not fell_back:
+            base = extra_save.get("managed_tables")
+            if not isinstance(base, dict):
+                # plan.registry, never the request's pre-run copy: a build
+                # already persisted mid-run would be overwritten by the older
+                # document and rebuilt - and re-appended - on the next run.
+                base = plan.registry if isinstance(plan.registry, dict) else {}
+            extra_save["managed_tables"] = {
+                **base, "probes": {**(base.get("probes") or {}), **probes}
+            }
+        if extra_save:
+            save(extra_save)
     except BytesCapError as exc:
         # Distinguishable from any other 400 so the report can offer the
         # override instead of showing a raw warehouse rejection.
@@ -620,13 +801,68 @@ async def api_run(request: Request) -> JSONResponse:
         raw_rows.append(item)
     rows = fill_cyclic_buckets(annotate_incomplete(raw_rows, form), form)
     limit = query_row_limit(form)
-    return JSONResponse({
+    body: dict[str, Any] = {
         "ok": True,
         "sql": sql,
         "rows": rows,
         "truncated": len(rows) >= limit,
         "limit": limit,
-    })
+    }
+    if managed_failed:
+        body["managed_failed"] = managed_failed
+    if managed_note:
+        body["managed_note"] = managed_note
+    return JSONResponse(body)
+
+
+@app.post("/api/managed")
+async def api_managed(request: Request) -> JSONResponse:
+    """The Managed tables section: settings, rows, sizes. Metadata calls
+    only; the registry mirror in the config file is refreshed from the
+    warehouse copy, which is the authority."""
+    form = await request.json()
+    cfg = load()
+    form = {**cfg, **form}
+    try:
+        payload = await run_in_threadpool(managed_mod.list_payload, form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc, form)
+    if payload.get("registry") is not None:
+        save({"managed_tables": payload["registry"]})
+    return JSONResponse({"ok": True, **payload})
+
+
+@app.post("/api/managed/action")
+async def api_managed_action(request: Request) -> JSONResponse:
+    """Drop one indexed column (and the table when it was the last one)."""
+    form = await request.json()
+    cfg = load()
+    action = str(form.get("action") or "").strip().lower()
+    merged = {**cfg, **{k: v for k, v in form.items() if k not in ("action", "key")}}
+    try:
+        conn = connection_from_form(merged)
+        warehouse = await run_in_threadpool(connect, form_kind(merged), **conn)
+        registry = await run_in_threadpool(
+            managed_mod.apply_action, merged, warehouse.run, action=action, key=str(form.get("key") or "")
+        )
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        if isinstance(exc, ImportError):
+            return _catalog_error(exc, merged)
+        # Situation, then consequence (the #66 callout grammar): the reason,
+        # and the state of the world after it.
+        why = str(exc).rstrip(".")
+        # A ValueError is raised before any statement, so the table really is
+        # untouched. An AdapterError means the DELETE failed - and the
+        # registry is written first, so the column is already out of the
+        # record and only its rows remain. Saying "unchanged" there is false.
+        after = (
+            "The table is unchanged."
+            if isinstance(exc, (ValueError, LookupError))
+            else "The column is no longer listed; its rows go on the next build."
+        )
+        return JSONResponse({"ok": False, "error": f"Drop did not run: {why}. {after}"}, status_code=400)
+    save({"managed_tables": registry})
+    return JSONResponse({"ok": True, "registry": registry})
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

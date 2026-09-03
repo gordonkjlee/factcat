@@ -357,6 +357,54 @@ a fingerprint of the mapped table and event-name column (JSON comment
 on the relation, plus `.factcat.json`) so a remapping rebuilds it. A table
 fallback is a snapshot — Refresh rebuilds it. Lookback and the Refresh chevron are
 hidden while that dest is set. Catalog jobs do not use the scan cap.
+`fc_event_names` is a census (names, rows per month, first and last seen),
+refreshed daily where the warehouse keeps it as a materialized view.
+
+With a destination set, Factcat also keeps **`fc_column_index`**: for a
+few breakdown columns, every row where that column had a value — entity,
+instant, value, event name. The expensive Value-at modes (fill from
+earlier values, range start / end, first / latest ever) read that small
+table plus the live rows newer than its bookmark instead of the events
+table's full history, so results are exact and later runs cost about
+what a plain chart costs (measured on a month-partitioned hub: 10 GB →
+0.26 GB for one carried breakdown). It fills itself: the first Run that
+uses an expensive mode on a sparse column builds the index first, then
+queries through it. That first run reads the column's whole history for
+every event name, which can be **several times** what the chart alone
+would have scanned (on one measured hub, 74 GB against 10 GB), and it pays
+back after a handful of runs. While it runs the copy says "Indexing `x`…
+then running", and afterwards one line under the chip says what later runs
+cost. Once the index exists the chip prices the cheap query; where the warehouse
+can price a job before running it **and** the column has already been
+measured, the chip covers a pending build too. Dense columns (the value is on most rows)
+are left alone; **Value at: each event** already reads them for free. Columns that are not text are left alone too (the
+index stores text); write `CAST(x AS STRING)` as the breakdown expression to
+index one.
+Builds are automatic on every warehouse; **Mode** is the consent. A
+column no chart has used for
+**Drop unused after** (60 days) is dropped on a daily sweep and rebuilt
+on next use; **Refresh when older than** (7 days) decides when newer rows
+are folded in; **Late-arrival lookback** (3 days) is how late a row can
+land after its event time. Setup's **Factcat-managed tables** section
+lists every table with size and age; Drop is the only per-table action —
+building, refreshing and rebuilding are Automatic mode's job. **Mode:
+Off** changes nothing: no build, refresh, rebuild or drop; an existing
+index is still read. If a build fails (rights, cap), the chart runs on
+the full history and the run row says so. Every managed table is derived
+and safe to drop; nothing lives only there.
+
+`fc_column_index` holds entity ids and column values copied out of your
+events table, so check the grants on your write destination before indexing
+a column that carries personal data — it is a second home for it. Rows
+deleted from the events table leave the index at the next refresh of that
+column (**Refresh when older than**, 7 days by default), detected through
+the event-name census; with **Mode: Off**, or for a column no chart uses,
+they stay until the daily sweep drops it (**Drop unused after**, 60 days).
+If an erasure has to be immediate, Drop the column on Setup or drop the
+table. Two changes the index cannot see are a value rewritten in place with
+no change in row count, and an identity remap; Drop is the remedy for both.
+The table is charged as ordinary storage in your own warehouse, and it is
+only swept while someone is using Factcat.
 On Events, each **event series** is a card: event name, **measure** (and Of
 when the measure is a property), and filters. Filter operators follow the
 column type (boolean, number, date, time, timestamp, string). String rows
@@ -405,7 +453,9 @@ grain) or relative (from 12 to 3 weeks ago; 0 = this period). Sugar on
 `event_time`, not a period enum. If a write destination is set, **Refresh event names**
 reads `fc_event_names` (created on first miss as a materialized
 view, or a table if the source cannot back a view). Lookback does not apply
-while that cache is in use. Week start and reporting
+while that cache is in use. When a run indexes a column for faster breakdowns, the running copy says
+so ("Indexing `x`… then running") and one line under the chip afterwards
+says what later runs cost. Week start and reporting
 timezone are **Preferences**: they change SQL, but they belong to whoever builds
 the report rather than to the project, so a colleague keeps their own. Thousand/decimal separators, wording
 (business user / SQL analyst, with uppercase or lowercase SQL and `<>` or `!=`

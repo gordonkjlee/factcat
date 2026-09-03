@@ -447,7 +447,8 @@ def test_event_name_cache_fingerprint_match():
         write_dataset="analytics",
     )
     wanted = event_name_cache_fingerprint(form)
-    assert wanted["v"] == 1
+    assert wanted["v"] == 2
+    assert wanted["event_time"] == form["event_time"]
     assert event_name_cache_matches(wanted, wanted)
     assert not event_name_cache_matches({}, wanted)
     assert not event_name_cache_matches(
@@ -464,9 +465,10 @@ def test_catalog_event_values_dest_paths():
         write_project="dest-proj",
         write_dataset="analytics",
         event_name_cache={
-            "v": 1,
+            "v": 2,
             "table": "analytics.events",
             "event_column": "event_name",
+            "event_time": "occurred_at",
             "kind": "materialized_view",
         },
     )
@@ -500,9 +502,10 @@ def test_catalog_event_values_dest_paths():
         write_project="dest-proj",
         write_dataset="analytics",
         event_name_cache={
-            "v": 1,
+            "v": 2,
             "table": "old.events",
             "event_column": "event_name",
+            "event_time": "occurred_at",
             "kind": "materialized_view",
         },
     )

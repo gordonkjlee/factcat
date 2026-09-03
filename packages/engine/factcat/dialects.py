@@ -502,6 +502,26 @@ def timestamp_at_date(
     return f"TIMESTAMP({date_sql}, '{tz}')"
 
 
+def _comment_literal(comment: str | None) -> str | None:
+    """A note as the body of a single-quoted SQL literal, escaped so the
+    warehouse hands back exactly the bytes we wrote.
+
+    Both shipped kinds process backslash escapes inside a single-quoted
+    string, so escaping the quote alone is not enough. A registry document
+    is JSON; JSON writes an embedded quote as backslash-quote; the warehouse
+    then eats that backslash and stores a bare quote, the document stops
+    parsing, the registry reads back empty, and every run rebuilds an index
+    that is already there. Escape the backslash first, then the quote, both
+    in backslash form - documented on BigQuery and on Snowflake, where
+    doubling the quote is not a valid escape inside a GoogleSQL literal.
+    """
+    note = (comment or "").strip()
+    if not note:
+        return None
+    backslash = "\\"
+    return note.replace(backslash, backslash * 2).replace("'", backslash + "'")
+
+
 def create_or_replace_relation(
     dest: str,
     select_sql: str,
@@ -509,24 +529,83 @@ def create_or_replace_relation(
     *,
     materialized: bool,
     comment: str | None = None,
+    refresh_minutes: int | None = None,
 ) -> str:
     """CREATE OR REPLACE a cache relation whose body is ``select_sql``.
 
     BigQuery and Snowflake share the CREATE spelling. ``materialized`` is a
     materialized view the warehouse can refresh; otherwise a table.
     ``comment`` is the cache fingerprint (JSON), stored as a BigQuery
-    description or a Snowflake COMMENT.
+    description or a Snowflake COMMENT. ``refresh_minutes`` pins a
+    BigQuery materialized view's auto-refresh cadence: the warehouse
+    default is 30 minutes, and every refresh of a view over a
+    replace-daily base is a full recompute — a census read a few times a
+    day must not be recomputed 48 times a day. Snowflake materialized
+    views refresh on their own schedule; there is no cadence to pin.
     """
     kind = "MATERIALIZED VIEW" if materialized else "TABLE"
     head = f"CREATE OR REPLACE {kind} {dest}"
-    note = (comment or "").strip()
-    if note:
-        safe = note.replace("'", "''")
-        if dialect == "snowflake":
+    safe = _comment_literal(comment)
+    if dialect == "snowflake":
+        if safe:
             head += f" COMMENT = '{safe}'"
-        else:
-            head += f" OPTIONS(description='{safe}')"
+    else:
+        options: list[str] = []
+        if safe:
+            options.append(f"description='{safe}'")
+        if materialized and refresh_minutes is not None:
+            options.append("enable_refresh=true")
+            options.append(f"refresh_interval_minutes={int(refresh_minutes)}")
+        if options:
+            head += " OPTIONS(" + ", ".join(options) + ")"
     return f"{head} AS {select_sql}"
+
+
+def create_table_as(
+    dest: str,
+    select_sql: str,
+    dialect: str,
+    *,
+    partition_day: str | None = None,
+    partition_is_date: bool = False,
+    cluster: tuple[str, ...] = (),
+    comment: str | None = None,
+) -> str:
+    """CREATE TABLE IF NOT EXISTS ``dest`` shaped by ``select_sql``.
+
+    The caller states layout INTENT (day-partition on ``partition_day``,
+    cluster on ``cluster``); the spelling per warehouse lives here.
+    BigQuery: ``PARTITION BY DATE(col)`` (or the bare column when it is
+    already a DATE) and ``CLUSTER BY a, b``. Snowflake: no layout clause at
+    all — micro-partitions already prune, and a ``CLUSTER BY`` key would
+    switch on Automatic Clustering, a standing serverless credit charge the
+    caller never asked for. Every other dialect gets the plain form.
+    sqlglot has no cross-dialect model for table partitioning options,
+    which is the bar this file sets for a hand-written construct.
+    """
+    head = f"CREATE TABLE IF NOT EXISTS {dest}"
+    safe = _comment_literal(comment)
+    if dialect == "bigquery":
+        if partition_day:
+            expr = partition_day if partition_is_date else f"DATE({partition_day})"
+            head += f" PARTITION BY {expr}"
+        if cluster:
+            head += " CLUSTER BY " + ", ".join(cluster)
+        if safe:
+            head += f" OPTIONS(description='{safe}')"
+    elif dialect == "snowflake":
+        if safe:
+            head += f" COMMENT = '{safe}'"
+    return f"{head} AS {select_sql}"
+
+
+def set_relation_comment(dest: str, comment: str, dialect: str) -> str:
+    """Replace a table's description / comment. A metadata statement on
+    both shipped kinds: no rows scanned, no data touched."""
+    safe = _comment_literal(comment) or ""
+    if dialect == "bigquery":
+        return f"ALTER TABLE {dest} SET OPTIONS(description='{safe}')"
+    return f"COMMENT ON TABLE {dest} IS '{safe}'"
 
 
 def _civil_datetime(expr: str, dialect: str, timezone: str, time_kind: str) -> str:

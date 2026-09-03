@@ -1863,9 +1863,10 @@ def _catalog_write_body():
 def test_event_values_write_cache_reads_existing(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     meta = {
-        "v": 1,
+        "v": 2,
         "table": "analytics.events",
         "event_column": "event_name",
+        "event_time": "occurred_at",
         "kind": "materialized_view",
     }
     (tmp_path / "cfg.json").write_text(
@@ -1945,9 +1946,10 @@ def test_event_values_write_cache_falls_back_to_table(monkeypatch, tmp_path):
 def test_event_values_write_cache_permission_does_not_create(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     meta = {
-        "v": 1,
+        "v": 2,
         "table": "analytics.events",
         "event_column": "event_name",
+        "event_time": "occurred_at",
         "kind": "materialized_view",
     }
     (tmp_path / "cfg.json").write_text(
@@ -1998,9 +2000,10 @@ def test_event_values_lookback_fallback_keeps_stored_meta(monkeypatch, tmp_path)
     """
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     meta = {
-        "v": 1,
+        "v": 2,
         "table": "analytics.events",
         "event_column": "event_name",
+        "event_time": "occurred_at",
         "kind": "table",
     }
     (tmp_path / "cfg.json").write_text(
@@ -2036,9 +2039,10 @@ def test_event_values_empty_client_meta_uses_stored(monkeypatch, tmp_path):
     must still count as a match - no rebuild, one cheap read."""
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     meta = {
-        "v": 1,
+        "v": 2,
         "table": "analytics.events",
         "event_column": "event_name",
+        "event_time": "occurred_at",
         "kind": "materialized_view",
     }
     (tmp_path / "cfg.json").write_text(
@@ -2426,10 +2430,708 @@ def test_blocking_endpoints_use_threadpool():
         main_mod.api_install_extra,
         main_mod.api_sql,
         main_mod.api_estimate,
+        main_mod.api_managed,
+        main_mod.api_managed_action,
         main_mod.api_run,
     )
     for fn in blocking:
         assert "run_in_threadpool" in inspect.getsource(fn), fn.__name__
+
+
+# ---------------------------------------------------------------------------
+# Factcat-managed tables (item 12): build on Run, estimate stays a dry run,
+# the Setup list and actions, and the chrome both pages carry.
+
+
+def _managed_body(**extra):
+    body = {
+        "project": "p",
+        "location": "EU",
+        "table": "analytics.events",
+        "entity": "account_id",
+        "event_time": "occurred_at",
+        "event_column": "event_name",
+        "event_values": ["login"],
+        "measure": "total",
+        "grain": "day",
+        "lookback_days": 30,
+        "write_project": "dest-proj",
+        "write_dataset": "analytics_fc",
+        "breakdowns": [
+            {
+                "breakdown_column": "plan",
+                "value_at": "event",
+                "if_missing": "fill",
+                "fill_from_event": "subscription_started",
+            }
+        ],
+        "top_n": 8,
+        "include_other": True,
+    }
+    body.update(extra)
+    return body
+
+
+class _ManagedWarehouse:
+    """Answers the probe (sparse), bookmarks, and every other statement."""
+
+    def __init__(self, *, fail_on=()):
+        self.calls: list[tuple[str, bool]] = []
+        self.fail_on = fail_on
+
+    def run(self, sql: str, *, dry_run: bool = False) -> QueryResult:
+        self.calls.append((sql, dry_run))
+        up = sql.upper()
+        for needle in self.fail_on:
+            if needle.upper() in up and not dry_run:
+                raise AdapterError(f"boom: {needle}")
+        if dry_run:
+            return QueryResult(rows=[], bytes_processed=1024 ** 3)
+        if "FC_PRESENT" in up:
+            return QueryResult(rows=[{"fc_rows": 1000, "fc_present": 10}])
+        if "FC_BOOKMARK" in up:
+            from datetime import datetime, timezone
+            return QueryResult(rows=[{"fc_event_name": "subscription_started", "fc_bookmark": datetime(2026, 9, 1, tzinfo=timezone.utc), "fc_rows": 5}])
+        if up.startswith("SELECT") and "FC_COLUMN_INDEX" not in up:
+            return QueryResult(rows=[{"bucket": "2026-01-05", "plan": "pro", "value": 2}])
+        return QueryResult(rows=[])
+
+
+def test_run_builds_the_index_first_then_queries_through_it(monkeypatch, tmp_path):
+    """First Run on a sparse column: probe, CREATE, INSERT, bookmarks,
+    comment, then the chart query reads fc_column_index. Sequential, one
+    warehouse. Mutation: query before build → the chart SQL comes first."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    ups = [c[0].upper() for c in wh.calls if not c[1]]
+    order = [
+        next(i for i, u in enumerate(ups) if "FC_PRESENT" in u),
+        next(i for i, u in enumerate(ups) if u.startswith("CREATE TABLE IF NOT EXISTS")),
+        next(i for i, u in enumerate(ups) if u.startswith("INSERT INTO")),
+        next(i for i, u in enumerate(ups) if "MAX(FC_AT)" in u),
+        next(i for i, u in enumerate(ups) if "FC_VALUES" in u and "FC_COLUMN_INDEX" in u),
+    ]
+    assert order == sorted(order), ups
+    assert "fc_column_index" in body["sql"]
+    assert body.get("managed_note", "").startswith("Indexed `plan` \u00b7 later runs ~ ")
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert "plan" in saved["managed_tables"]["columns"]
+    assert saved["managed_last_sweep"]
+
+
+def test_run_falls_back_live_when_the_build_fails(monkeypatch, tmp_path):
+    """A failed INSERT turns the column live for this run: the chart still
+    answers from the full history and the run row says why."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    wh = _ManagedWarehouse(fail_on=("INSERT INTO",))
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "fc_column_index" not in body["sql"]
+    assert body["managed_failed"].startswith("Could not index `plan`")
+    assert "chart is correct" in body["managed_failed"]
+
+
+def test_run_respects_mode_off_and_no_destination(monkeypatch, tmp_path):
+    """Mode lives in the config file (Setup writes it); the Events request
+    never carries it. Off must still close the gate on Run."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_mode": "off"}), encoding="utf-8")
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=_managed_body())
+    assert res.status_code == 200
+    assert not any(c[0].upper().startswith("CREATE TABLE") for c in wh.calls)
+    assert not any("FC_PRESENT" in c[0].upper() for c in wh.calls)
+    wh2 = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh2)
+    res2 = client.post("/api/run", json=_managed_body(write_project="", write_dataset=""))
+    assert res2.status_code == 200
+    assert not any("FC_PRESENT" in c[0].upper() for c in wh2.calls)
+
+
+def test_estimate_never_probes_or_writes(monkeypatch, tmp_path):
+    """The estimate is a free dry run: no probe, no CREATE, no INSERT; with
+    no cached probe the column simply estimates live."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/estimate", json=_managed_body())
+    assert res.status_code == 200, res.text
+    assert all(c[1] for c in wh.calls)  # every call was a dry run
+    assert not any("FC_PRESENT" in c[0].upper() for c in wh.calls)
+    # unprobed: the chip already covers a possible build; the line says "may"
+    # unmeasured, so the estimate cannot promise a build - but it must not be
+    # silent either: one short line saying the Run may also index the column
+    assert res.json()["managed_note"] == "May also index `plan`, which makes later runs cheaper"
+    assert "managed_build" not in res.json()
+
+
+def test_estimate_prices_the_build_once_the_probe_is_cached(monkeypatch, tmp_path):
+    """The registry mirror lives in the config file; the estimate must read
+    it from there (the request never carries it)."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    mirror = {"v": 1, "columns": {}, "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}}}
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": mirror}), encoding="utf-8")
+    res = client.post("/api/estimate", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["managed_build"] == ["plan"]  # also feeds the running copy
+    # the probe is cached, so the build is priced and the line carries figures
+    assert body["managed_note"].startswith("Also indexes `plan` · one-time ~ ")
+    assert "later runs ~ " in body["managed_note"]
+    assert body["bytes"] == 2 * 1024 ** 3  # query + build, both dry-run
+    assert all(c[1] for c in wh.calls)
+
+
+def test_managed_list_and_actions(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    registry = {
+        "v": 1, "fp": managed_mod.config_fingerprint(_managed_body()),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 2, "pinned": False, "overrides": {}}},
+    }
+    monkeypatch.setattr(
+        managed_mod, "_stats",
+        lambda form, table: {"name": table, "kind": "table", "bytes": 84 * 1024 ** 2, "rows": 1000,
+                             "description": json.dumps(registry) if table == "fc_column_index" else ""},
+    )
+    client = TestClient(app)
+    res = client.post("/api/managed", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert [c["key"] for c in body["columns"]] == ["plan"]
+    assert body["columns"][0]["stale"] is False
+    assert any(t["name"] == "fc_column_index" and t["bytes"] == 84 * 1024 ** 2 for t in body["tables"])
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    gone = client.post("/api/managed/action", json={**_managed_body(), "action": "pin", "key": "plan", "value": True})
+    assert gone.status_code == 400
+    assert gone.json()["error"] == "Drop did not run: action must be drop. The table is unchanged."
+    drop = client.post("/api/managed/action", json={**_managed_body(), "action": "drop", "key": "plan"})
+    assert drop.status_code == 200, drop.text
+    assert "plan" not in drop.json()["registry"]["columns"]
+    # it was the only column, so the table goes whole: no per-column DELETE
+    assert any(c[0].upper().startswith("DROP TABLE") for c in wh.calls)
+    assert not any(c[0].upper().startswith("DELETE FROM") for c in wh.calls)
+    bad = client.post("/api/managed/action", json={**_managed_body(), "action": "explode", "key": "plan"})
+    assert bad.status_code == 400
+
+
+def test_setup_and_events_carry_the_managed_chrome(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    setup = client.get("/setup").text
+    for needle in ("id=\"managed-wrap\"", "name=\"managed_mode\"", "managed_drop_days", "managed_refresh_days", "managed_lookback_days", "id=\"managed-list\""):
+        assert needle in setup, needle
+    # withdrawn at the owner's review: manual index, pins, overrides, per-row refresh/rebuild
+    for gone in ("Index a column now", "managed-add", "data-act=\"pin\"", "data-ovr", "data-act=\"rebuild\"", "data-act=\"refresh\""):
+        assert gone not in setup, gone
+    # the stale row's consequence is Mode-dependent: both sentences exist and the
+    # Off one names what to do
+    assert "until the next run that uses it rebuilds it." in setup
+    assert "set Mode to Automatic and the next run that uses it rebuilds it." in setup
+    assert "physical" not in setup.lower()  # withdrawn field stays out
+    events = client.get("/events").text
+    assert "id=\"run-note\"" in events
+    # the owner's word on Events is "Indexing"; the mechanism words stay out
+    running = events.split("function runningPrefix")[1][:400]
+    assert '"Indexing "' in running
+    for word in ("relation", "watermark", "prepar"):
+        assert word not in running.lower()
+    # the line sits on its own toolbar line, right-aligned and capped
+    assert "#run-note { flex: 1 1 100%; display: flex; justify-content: flex-end;" in events
+    assert "#run-note > span { max-width: 32rem; text-align: right;" in events
+    # One convention for backticked labels: the note and both running-copy
+    # branches render through the same helper (never literal backticks).
+    assert events.count("appendMarked(") >= 3
+    # A read failure pauses the row actions until the registry reads again;
+    # an action failure states its verdict and leaves them live.
+    status_js = setup.split("function managedSetStatus")[1][:900]
+    assert "pause !== false" in status_js
+    # The section shows the moment the destination is set; only the list waits
+    # for /api/managed. Hidden until the round trip returned read as "missing".
+    load_js = setup.split("async function loadManaged")[1]
+    load_js = load_js[:load_js.index("await post(\"/api/managed\"")]
+    assert load_js.rstrip().endswith("try {") or "renderManaged();" in load_js.split("managedSetLoading(true);")[1]
+    assert "renderManaged();" in load_js.split("managedSetLoading(true);")[1]
+    assert "if (managedListLoading) return;" in setup.split("function renderManaged")[1]
+    assert 'managedSetStatus((err && err.message) || "The action did not run.", true, false)' in setup
+    assert "appendMarked(box, text" in events.split("function setRunNote")[1][:260]
+    assert events.split("function setRunningCopy")[1][:700].count("appendMarked(copy") == 2
+
+
+def test_estimate_prices_the_build_as_a_select_and_survives_a_missing_table(monkeypatch, tmp_path):
+    """The build price is a dry run of the SELECT, never an INSERT into a
+    table that may not exist; and if pricing fails the chart is still
+    estimated."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+
+    class _W(_ManagedWarehouse):
+        def run(self, sql, *, dry_run=False):
+            if dry_run and sql.upper().startswith("INSERT"):
+                raise AdapterError("Not found: Table fc_column_index")
+            return super().run(sql, dry_run=dry_run)
+
+    wh = _W()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    mirror = {"v": 1, "columns": {}, "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}}}
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": mirror}), encoding="utf-8")
+    res = client.post("/api/estimate", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["managed_build"] == ["plan"]
+    assert not any(c[0].upper().startswith("INSERT") for c in wh.calls)
+    assert body["bytes"] == 2 * 1024 ** 3
+
+
+def test_run_reconciles_the_mirror_with_the_table(monkeypatch, tmp_path):
+    """A mirror that says 'attach' while the table is gone must not attach:
+    the run plans from the table's own registry (absent here), probes, and
+    builds instead of reading an empty relation."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    stale_mirror = {
+        "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1, "pinned": False, "overrides": {}}},
+    }
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": stale_mirror}), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: ({}, None))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    ups = [c[0].upper() for c in wh.calls if not c[1]]
+    assert any(u.startswith("CREATE TABLE IF NOT EXISTS") for u in ups)  # rebuilt, not attached blind
+    assert "fc_column_index" in res.json()["sql"]
+
+
+def test_run_falls_back_live_when_the_attached_table_vanishes(monkeypatch, tmp_path):
+    """The plan attaches, the query hits a missing relation: rerun live,
+    report it once, forget the bookmarks, no usage write, no built note."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    reg = {
+        "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1, "pinned": False, "overrides": {}}},
+        "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}},
+    }
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
+    # the description still says the column is there (stale metadata), but the query finds no table
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+
+    class _W(_ManagedWarehouse):
+        def run(self, sql, *, dry_run=False):
+            if not dry_run and "fc_column_index" in sql and sql.upper().startswith("SELECT"):
+                self.calls.append((sql, dry_run))
+                raise AdapterError("Not found: Table dest-proj:analytics_fc.fc_column_index")
+            return super().run(sql, dry_run=dry_run)
+
+    wh = _W()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    out = res.json()
+    assert "fc_column_index" not in out["sql"]
+    assert out["managed_failed"].startswith("The indexed table was not found")
+    assert "managed_note" not in out
+    ups = [c[0].upper() for c in wh.calls if not c[1]]
+    assert not any(u.startswith("ALTER TABLE") or u.startswith("COMMENT ON") for u in ups)
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert "columns" not in saved["managed_tables"]
+    assert saved["managed_tables"]["probes"]["plan"]["density"] == 0.01
+
+
+def test_estimate_attaches_an_existing_index_from_the_config_mirror(monkeypatch, tmp_path):
+    """With an index on file the estimate prices the spliced query, not the
+    full history — otherwise the cost gate blocks a run that is now cheap."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    reg = {
+        "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1, "pinned": False, "overrides": {}}},
+    }
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/estimate", json=body)
+    assert res.status_code == 200, res.text
+    dry = [c[0] for c in wh.calls if c[1]]
+    assert any("fc_column_index" in s for s in dry)
+    assert "managed_note" not in res.json()
+
+
+def test_sweep_plans_from_the_table_registry_not_the_mirror(monkeypatch, tmp_path):
+    """Two workstations, one index. A's mirror says the column is 90 days
+    unused; the table's own description (B charts daily) says an hour ago.
+    A's Run must drop nothing. Mutation: sweep before reconcile."""
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    now = datetime.now(timezone.utc)
+
+    def registry(last_used):
+        return {
+            "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+            "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": (now - timedelta(days=100)).isoformat(),
+                                 "refreshed_at": (now - timedelta(hours=1)).isoformat(), "last_used_at": last_used.isoformat(),
+                                 "bookmark": (now - timedelta(hours=1)).isoformat(), "use_count": 9, "pinned": False, "overrides": {}}},
+            "probes": {"plan": {"density": 0.01, "at": now.isoformat()}},
+        }
+
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": registry(now - timedelta(days=90))}), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (registry(now - timedelta(hours=1)), {"bytes": 1}))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    ups = [c[0].upper() for c in wh.calls if not c[1]]
+    assert not any(u.startswith("DELETE FROM") or u.startswith("DROP TABLE") for u in ups)
+    # control: when the table's own registry agrees the column is unused, the sweep does drop it
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": registry(now - timedelta(days=90))}), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (registry(now - timedelta(days=90)), {"bytes": 1}))
+    wh2 = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh2)
+    res2 = client.post("/api/run", json=body)
+    assert res2.status_code == 200, res2.text
+    assert any(c[0].upper().startswith("DELETE FROM") for c in wh2.calls if not c[1])
+
+
+def test_write_access_verdict_is_saved_for_the_run_gate(monkeypatch, tmp_path):
+    """The Setup check's verdict is what stops an automatic build on a denied
+    destination (managed._write_ok); it must be persisted, not just painted."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setattr("factcat_app.main.write_access_from_form", lambda form: {"status": "denied", "granted": []})
+    client = TestClient(app)
+    res = client.post("/api/write_access", json={"kind": "bigquery", "project": "p", "write_project": "p", "write_dataset": "d"})
+    assert res.status_code == 200, res.text
+    assert json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))["write_access_status"] == "denied"
+    monkeypatch.setattr("factcat_app.main.write_access_from_form", lambda form: {"status": "skipped"})
+    client.post("/api/write_access", json={"kind": "bigquery"})
+    assert json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))["write_access_status"] == "denied"
+    monkeypatch.setattr("factcat_app.main.write_access_from_form", lambda form: {"status": "ok", "granted": ["bigquery.tables.create"]})
+    client.post("/api/write_access", json={"kind": "bigquery", "project": "p", "write_project": "p", "write_dataset": "d"})
+    assert json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))["write_access_status"] == "ok"
+
+
+def test_managed_drop_runs_under_the_scan_cap(monkeypatch, tmp_path):
+    """Drop is a billed DELETE on BigQuery: the action connection keeps the
+    scan cap. Mutation: connection_from_form(merged, apply_scan_cap=False)."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body(bytes_cap_gb=2)
+    reg = {
+        "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1}},
+    }
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    seen = {}
+
+    def fake_connect(kind, **kw):
+        seen.update(kw)
+        return _ManagedWarehouse()
+
+    monkeypatch.setattr("factcat_app.main.connect", fake_connect)
+    client = TestClient(app)
+    res = client.post("/api/managed/action", json={**body, "action": "drop", "key": "plan"})
+    assert res.status_code == 200, res.text
+    assert seen.get("maximum_bytes_billed") == 2 * 1024 ** 3
+
+
+class _CensusWarehouse(_ManagedWarehouse):
+    """Answers the name-grain census with `rows` per event name."""
+
+    def __init__(self, rows, **kw):
+        super().__init__(**kw)
+        self.census_rows = rows
+
+    def run(self, sql, *, dry_run: bool = False):
+        if "SUM(fc_rows)" in sql or "SUM(FC_ROWS)" in sql.upper():
+            self.calls.append((sql, dry_run))
+            return QueryResult(rows=[
+                {"fc_value": name, "fc_rows": n, "fc_first": "2026-01-01T00:00:00+00:00",
+                 "fc_last": "2026-09-01T00:00:00+00:00"}
+                for name, n in self.census_rows.items()
+            ])
+        return super().run(sql, dry_run=dry_run)
+
+
+def _census_registry(body, *, refreshed_days_ago, snapshot_rows):
+    from datetime import datetime, timedelta, timezone
+    from factcat_app import managed as managed_mod
+
+    now = datetime.now(timezone.utc)
+    then = (now - timedelta(days=refreshed_days_ago)).isoformat()
+    return {
+        "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
+        "columns": {"plan": {
+            "expr": "plan", "label": "plan", "built_at": then, "refreshed_at": then,
+            "last_used_at": (now - timedelta(hours=1)).isoformat(), "bookmark": then,
+            "use_count": 5,
+            "names": {"subscription_started": {"rows": snapshot_rows,
+                                               "first": "2026-01-01T00:00:00+00:00",
+                                               "last": "2026-09-01T00:00:00+00:00"}},
+        }},
+        "probes": {"plan": {"density": 0.01, "at": now.isoformat()}},
+    }
+
+
+def test_run_reads_the_census_and_repairs_a_name_whose_rows_shrank(monkeypatch, tmp_path):
+    """The self-repair answers "what if history changed": a name whose row
+    count fell is deleted from the index and backfilled whole. It is gated on
+    the event-name census, whose fingerprint lives in the config file — the
+    Events request never carries it, so the run path must merge it.
+    Mutation: drop "event_name_cache" from MANAGED_KEYS and no census is read
+    and no repair fires (the state this test was written to catch)."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    reg = _census_registry(body, refreshed_days_ago=8, snapshot_rows=1000)
+    (tmp_path / "cfg.json").write_text(json.dumps({
+        "managed_tables": reg,
+        "event_name_cache": {"v": 2, "kind": "view", "fp": "x"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    wh = _CensusWarehouse({"subscription_started": 400})
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    ups = [c[0] for c in wh.calls if not c[1]]
+    assert any("SUM(fc_rows)" in s or "SUM(FC_ROWS)" in s.upper() for s in ups), "census never read"
+    deletes = [s for s in ups if s.upper().strip().startswith("DELETE FROM")]
+    assert deletes, "a shrunk name was not repaired"
+    assert "subscription_started" in deletes[0]
+    assert any(s.upper().startswith("INSERT") for s in ups)
+
+
+def test_run_leaves_the_index_alone_when_the_census_matches(monkeypatch, tmp_path):
+    """Control for the repair: same age, same wiring, unchanged row count —
+    the refresh appends and never deletes."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    reg = _census_registry(body, refreshed_days_ago=8, snapshot_rows=1000)
+    (tmp_path / "cfg.json").write_text(json.dumps({
+        "managed_tables": reg,
+        "event_name_cache": {"v": 2, "kind": "view", "fp": "x"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    wh = _CensusWarehouse({"subscription_started": 1000})
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    ups = [c[0] for c in wh.calls if not c[1]]
+    assert any("SUM(fc_rows)" in s or "SUM(FC_ROWS)" in s.upper() for s in ups)
+    assert not [s for s in ups if s.upper().strip().startswith("DELETE FROM")]
+
+
+def test_run_backfills_a_new_event_name_whole(monkeypatch, tmp_path):
+    """The silent-wrong-answer case. A name whose history is backfilled into
+    the source lands BEHIND the watermark: the live tail starts after the
+    bookmark, and refresh_sql deliberately skips names the index has never
+    seen, so neither side of the splice carries it. Only the census's
+    new-name backfill closes that, and it is gated on the same config key.
+    Mutation: drop "event_name_cache" from MANAGED_KEYS."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    reg = _census_registry(body, refreshed_days_ago=8, snapshot_rows=1000)
+    (tmp_path / "cfg.json").write_text(json.dumps({
+        "managed_tables": reg,
+        "event_name_cache": {"v": 2, "kind": "view", "fp": "x"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    # the census knows a name the index has never seen, with history
+    wh = _CensusWarehouse({"subscription_started": 1000, "plan_backfilled": 5000})
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=body)
+    assert res.status_code == 200, res.text
+    ups = [c[0] for c in wh.calls if not c[1]]
+    inserts = [s for s in ups if s.upper().startswith("INSERT")]
+    assert any("plan_backfilled" in s for s in inserts), "a new name was never backfilled whole"
+    # and it is a whole-history backfill, not a bookmarked append
+    whole = [s for s in inserts if "plan_backfilled" in s]
+    assert not any("fc_bookmark" in s.lower() for s in whole)
+
+
+def test_a_refused_column_saves_its_probe(monkeypatch, tmp_path):
+    """A density probe costs PROBE_DAYS of one column. A column the gate
+    refuses produces no build and nothing attachable, so its probe used to
+    be thrown away and re-run on every chart, forever. Mutation: drop the
+    probe-persistence branch in api_run."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+
+    class _Dense(_ManagedWarehouse):
+        def run(self, sql, *, dry_run: bool = False):
+            if "FC_PRESENT" in sql.upper():
+                self.calls.append((sql, dry_run))
+                return QueryResult(rows=[{"fc_rows": 1000, "fc_present": 900}])
+            return super().run(sql, dry_run=dry_run)
+
+    wh = _Dense()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=_managed_body())
+    assert res.status_code == 200, res.text
+    assert not any(c[0].upper().startswith("CREATE TABLE") for c in wh.calls)  # refused
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    probe = (saved.get("managed_tables") or {}).get("probes", {}).get("plan")
+    assert probe and abs(probe["density"] - 0.9) < 1e-9, "the probe was not saved"
+    # a second run reads the cache instead of probing again
+    wh2 = _Dense()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh2)
+    res2 = client.post("/api/run", json=_managed_body())
+    assert res2.status_code == 200, res2.text
+    assert not any("FC_PRESENT" in c[0].upper() for c in wh2.calls), "re-probed a refused column"
+
+
+def test_drop_writes_the_registry_before_it_deletes_the_rows(monkeypatch, tmp_path):
+    """The description is the authority: if it still lists a column whose
+    rows are gone, a later run attaches to an empty column and reads only
+    the live tail - silently wrong. So the registry is written first, and a
+    failed DELETE leaves a recoverable state, not a lying one.
+    Mutation: put the DELETE back before the comment write."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app import managed as managed_mod
+
+    body = _managed_body()
+    fp = managed_mod.config_fingerprint({**body, "kind": "bigquery"})
+    entry = {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
+             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
+             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1}
+    reg = {"v": 1, "fp": fp, "columns": {"plan": dict(entry), "tier": {**entry, "expr": "tier", "label": "tier"}}}
+    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/managed/action", json={**body, "action": "drop", "key": "plan"})
+    assert res.status_code == 200, res.text
+    order = [c[0].upper().strip() for c in wh.calls if not c[1]]
+    comment = next(i for i, s_ in enumerate(order) if s_.startswith("ALTER TABLE") or s_.startswith("COMMENT ON"))
+    delete = next(i for i, s_ in enumerate(order) if s_.startswith("DELETE FROM"))
+    assert comment < delete, "rows were deleted before the registry that describes them"
+    assert "plan" not in res.json()["registry"]["columns"]
+    assert "tier" in res.json()["registry"]["columns"]
+
+
+def test_the_mapped_column_types_reach_the_run(monkeypatch, tmp_path):
+    """is_text_column reads the mapping, which lives in the config file; the
+    chart request carries none. Without the merge the guard was inert and a
+    non-text column was INSERTed into a text fc_value on every run.
+    Mutation: drop "columns" from MANAGED_KEYS."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    (tmp_path / "cfg.json").write_text(json.dumps({
+        "columns": [{"name": "plan", "type": "INT64"}],
+    }), encoding="utf-8")
+    wh = _ManagedWarehouse()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=_managed_body())
+    assert res.status_code == 200, res.text
+    ups = [c[0].upper() for c in wh.calls if not c[1]]
+    assert not any(u.startswith("CREATE TABLE") or u.startswith("INSERT") for u in ups), \
+        "a non-text column was indexed anyway"
+    assert not any("FC_PRESENT" in u for u in ups), "spent a probe on a column it cannot index"
+
+
+def test_a_build_is_recorded_even_when_the_chart_then_fails(monkeypatch, tmp_path):
+    """The registry is persisted the moment it changes. Batched behind the
+    chart query, a cap rejection would lose the record of an index that
+    exists, and the next run would append a second copy of the history.
+    Mutation: remove the save() after apply_plan."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat.warehouses import BytesCapError
+
+    class _ChartFails(_ManagedWarehouse):
+        def run(self, sql, *, dry_run: bool = False):
+            up = sql.upper().lstrip()
+            # the chart is a WITH ... SELECT, not a bare SELECT
+            is_chart = (
+                "FC_COLUMN_INDEX" in up
+                and "FC_BOOKMARK" not in up
+                and not up.startswith(("CREATE", "INSERT", "DELETE", "ALTER", "DROP"))
+            )
+            if not dry_run and is_chart:
+                self.calls.append((sql, dry_run))
+                raise BytesCapError("over the cap", bytes_processed=99, maximum_bytes_billed=1)
+            return super().run(sql, dry_run=dry_run)
+
+    wh = _ChartFails()
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
+    client = TestClient(app)
+    res = client.post("/api/run", json=_managed_body())
+    assert res.status_code == 400 and res.json()["over_cap"] is True
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    cols = (saved.get("managed_tables") or {}).get("columns") or {}
+    assert "plan" in cols, "the index was built and then forgotten"
+
+
+def test_an_over_cap_estimate_still_says_the_index_would_help(monkeypatch, tmp_path):
+    """Over the cap is exactly when knowing that later runs get cheaper
+    matters most. Dropping the note there made it vanish the moment a chart
+    grew - a second group-by was enough - which read as the feature being
+    broken. Mutation: return the cap payload without the note."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat.warehouses import BytesCapError
+
+    class _OverCap(_ManagedWarehouse):
+        def run(self, sql, *, dry_run: bool = False):
+            if dry_run:
+                raise BytesCapError("too big", bytes_processed=40 * 1024 ** 3,
+                                    maximum_bytes_billed=10 * 1024 ** 3)
+            return super().run(sql, dry_run=dry_run)
+
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: _OverCap())
+    client = TestClient(app)
+    res = client.post("/api/estimate", json=_managed_body())
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["over_cap"] is True
+    assert body["managed_note"] == "May also index `plan`, which makes later runs cheaper"
 
 
 def test_every_page_states_the_build_it_came_from(monkeypatch, tmp_path):

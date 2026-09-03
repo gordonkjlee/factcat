@@ -115,4 +115,64 @@ source cannot back a view). Later Refresh reads the view, or rebuilds the
 table snapshot. The object stores a fingerprint of the mapped table and
 event-name column. Lookback does not apply (and is hidden here) while that
 dest is set. Catalog jobs do not use the scan cap. Events then filters
-`event_name = '…'`.
+`event_name = '…'`. The object is a census — names, rows per month, first
+and last seen. Snowflake materialized views refresh on their own schedule
+and need Enterprise edition; otherwise it is a table snapshot, and every
+Refresh of that table is a full recompute of the event-name and timestamp
+columns' history.
+
+## Factcat-managed tables
+
+With a write database and schema set, Factcat keeps `fc_column_index`
+there: for a few breakdown columns, every row where the column had a
+value (entity, instant, value, event name). No clustering key is set: one
+would switch on Automatic Clustering, a standing serverless credit charge
+you did not ask for; micro-partitions prune on the time bounds as they do
+for your events table, and you can add a key yourself if the table grows
+large. The expensive Value-at modes read it plus the live rows after its
+bookmark, bounded on the bare timestamp column; results are exact
+regardless of how stale the index is.
+
+**Mode** Automatic indexes a sparse column the first time an expensive
+mode uses it, on Snowflake as on BigQuery. Be deliberate about it here:
+Snowflake has no cost preview and no byte ceiling, so unlike BigQuery
+there is no scan cap standing behind the build, and that first run reads
+the column's whole history for every event name — several times what the
+chart alone would read. Snowflake also bills warehouse time rather than
+bytes, so the saving shows up as a shorter query, not a smaller bill, and a
+warm warehouse may show little. Set Mode to Off if that is not a trade you
+want. Because there is no cost preview there is no estimate chip, and so no
+"Indexing…" copy while it runs; one line under the Run button afterwards
+says the index is in place. **Refresh when older than**
+decides when newer rows are folded in, **Drop unused after** drops columns
+no chart has used (daily sweep), **Late-arrival lookback** is how late a
+row can land after its event time. Off changes nothing: no build, refresh,
+rebuild or drop; an existing index is still read.
+
+Columns that are not text are left alone (the index stores text); write
+`CAST(x AS STRING)` as the breakdown expression to index one.
+
+The table holds entity ids and column values copied from your events table,
+so check who can read the write schema before indexing a column that
+carries personal data. Rows deleted from the events table leave the index
+at the next refresh of that column, which depends on the event-name census
+noticing the row count fall — and without Enterprise materialized views
+that census is a table snapshot that only refreshes when someone clicks
+**Refresh event names**, so on standard edition the check is as fresh as
+your last refresh. Drop the column for an immediate removal. One gap to know about: if an event name
+that already existed starts carrying a column it never carried before, the
+index does not pick that up on its own — Drop the column and let the next
+chart rebuild it. The build
+statements for Snowflake are verified by compiling them against Snowflake's
+grammar in the test suite; no live Snowflake account ran them for this
+release. If a build fails, the chart reads the full history and the Setup
+list says why.
+
+The list shows size and age per table (from `SHOW TABLES`); Drop is the
+only per-table action (building, refreshing and rebuilding are Automatic
+mode's job). Its bookkeeping
+lives in the table's comment; a mapping change rebuilds, a new event name
+with backfilled history is back-filled on the next refresh, a name whose
+row count shrank is rebuilt. Needs CREATE TABLE on the schema (the rights
+check above). A failed build never blocks a chart: it runs on the full
+history and the run row says why.

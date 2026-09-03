@@ -181,6 +181,11 @@ def _attr_cte(
     conds = [
         f"({bd.expr}) IS NOT NULL",
         f"({spec.entity}) IS NOT NULL",
+        # A row with no instant has no position in time, so it can be neither
+        # the first nor the last value. Without this it could win at="first"
+        # under a NULLS FIRST ordering while being absent from a values_table
+        # (whose rows must carry an instant) - cached and live would differ.
+        f"({spec.event_time}) IS NOT NULL",
     ]
     if bd.fill_from:
         conds.append(f"({bd.fill_from})")

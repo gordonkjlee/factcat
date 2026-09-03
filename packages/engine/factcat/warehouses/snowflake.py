@@ -696,6 +696,77 @@ def list_columns(
     return {"columns": columns, "relation": relation}
 
 
+def table_stats(
+    *,
+    account: str,
+    user: str,
+    warehouse: str = "",
+    database: str,
+    schema: str,
+    table: str,
+    private_key_path: str,
+    role: str | None = None,
+    private_key_passphrase: str | None = None,
+    authenticator: str = "key_pair",
+) -> dict[str, Any]:
+    """Size, row count and comment of one table via ``SHOW TABLES`` — no
+    running warehouse needed. Raises ``AdapterError('... does not exist')``
+    when absent so ``is_missing_relation`` recognises it."""
+    database = _require_ident(database, "database")
+    schema = _require_ident(schema, "schema")
+    table = _require_ident(table, "table")
+    ctx = None
+    cur = None
+    try:
+        ctx = _catalog_connect(
+            account=account,
+            user=user,
+            warehouse=warehouse,
+            database=database,
+            schema=schema,
+            private_key_path=private_key_path,
+            role=role,
+            private_key_passphrase=private_key_passphrase,
+            authenticator=authenticator,
+        )
+        cur = ctx.cursor()
+        cur.execute(
+            f"SHOW TABLES LIKE '{_sql_like(table)}' IN SCHEMA "
+            f"{_quote_ident(database)}.{_quote_ident(schema)}"
+        )
+        rows = [
+            row
+            for row in _fetch_maps(cur)
+            if str(_row_get(row, "name", "table_name") or "").upper() == table.upper()
+        ]
+    except (AdapterError, ImportError, ValueError):
+        raise
+    except Exception as exc:
+        raise AdapterError(str(exc) or "could not describe table") from exc
+    finally:
+        if cur is not None:
+            cur.close()
+        if ctx is not None:
+            ctx.close()
+    if not rows:
+        raise AdapterError(f"Table {database}.{schema}.{table} does not exist")
+    row = rows[0]
+
+    def _num(value: Any) -> int | None:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "name": table,
+        "kind": _object_kind(_row_get(row, "kind", "table_type")),
+        "bytes": _num(_row_get(row, "bytes")),
+        "rows": _num(_row_get(row, "rows")),
+        "description": str(_row_get(row, "comment") or ""),
+    }
+
+
 def _schema_privileges_from_grants(
     rows: list[dict[str, Any]] | tuple, *, role: str
 ) -> set[str]:

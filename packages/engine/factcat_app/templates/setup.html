@@ -104,6 +104,34 @@
       font-weight: 400;
       color: var(--fc-ochre-deep);
     }
+    /* Managed tables (item 12). #managed-wrap owns the section; .mt owns
+       the list geometry; .mt-acts owns action spacing. */
+    #managed-wrap[hidden] { display: none !important; }
+    #managed-knobs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.5rem; }
+    #managed-knobs > div { min-width: 0; }
+    #managed-knobs input[type=number] { width: 5rem; display: inline-block; }
+    .mt-unit { font-size: 0.8rem; color: var(--fc-slate); margin-left: 0.35rem; }
+    /* The Setup column is ~24rem: one stacked row per table, never a wide
+       table (the first render overflowed the column). .mt owns the list,
+       .mt-row the row rhythm, .mt-acts the action spacing (there is no
+       td.acts any more). Failures are ochre callouts (#66 grammar), never
+       red text; while the registry is unreadable the actions are disabled. */
+    .mt { margin-top: 0.5rem; font-size: 0.82rem; border-top: 1px solid var(--fc-line); }
+    .mt-row { padding: 0.55rem 0; border-bottom: 1px solid var(--fc-line); }
+    .mt-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.25rem 0.75rem; flex-wrap: wrap; }
+    .mt-head code { font-size: 0.8rem; }
+    .mt-meta { color: var(--fc-slate); font-size: 0.75rem; white-space: nowrap; }
+    .mt-serves { margin-top: 0.15rem; }
+    .mt .sub { color: var(--fc-slate); font-size: 0.75rem; display: block; }
+    .mt-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.15rem 0.75rem; margin-top: 0.3rem; min-height: 1.15rem; }
+    .mt-acts .linkish { margin: 0; padding: 0; }
+    .mt-acts .loading { margin-left: 0; }
+    .mt-acts .layout-checking { margin-left: 0.25rem; }
+    .mt .callout { margin: 0.35rem 0 0.1rem; }
+    .mt-empty { padding: 0.55rem 0; border-bottom: 1px solid var(--fc-line); }
+    #managed-status { font-size: 0.75rem; color: var(--fc-slate); margin: 0.4rem 0 0; }
+    #managed-status:empty { display: none; }
+    #managed-status.callout { font-size: 0.85rem; color: var(--fc-ink); margin: 0.6rem 0 0; }
     @media (max-width: 56rem) {
       .setup-page { overflow-y: auto; }
       .setup-cols {
@@ -304,6 +332,37 @@
     </select>
   </div>
 
+  <div id="managed-wrap" hidden>
+    <div id="managed-knobs">
+      <div>
+        <label for="managed_mode">Mode</label>
+        <select id="managed_mode" name="managed_mode">
+          <option value="auto"{% if (config.managed_mode or 'auto') == 'auto' %} selected{% endif %}>Automatic</option>
+          <option value="off"{% if config.managed_mode == 'off' %} selected{% endif %}>Off</option>
+        </select>
+        <span class="hint">Automatic indexes a sparse column the first time an expensive breakdown mode uses it, refreshes it when stale, and drops it when unused. Off keeps existing tables and changes nothing.</span>
+      </div>
+      <div>
+        <label for="managed_drop_days">Drop unused after</label>
+        <input id="managed_drop_days" name="managed_drop_days" type="number" min="1" step="1" value="{{ config.managed_drop_days if config.managed_drop_days is not none else 60 }}"><span class="mt-unit">days</span>
+        <span class="hint">A column no chart has used for this long is dropped on the next daily sweep.</span>
+      </div>
+      <div>
+        <label for="managed_refresh_days">Refresh when older than</label>
+        <input id="managed_refresh_days" name="managed_refresh_days" type="number" min="0" step="1" value="{{ config.managed_refresh_days if config.managed_refresh_days is not none else 7 }}"><span class="mt-unit">days</span>
+        <span class="hint">Runs always read the table plus everything newer, so results stay exact; this only decides when the newer rows get folded in.</span>
+      </div>
+      <div>
+        <label for="managed_lookback_days">Late-arrival lookback</label>
+        <input id="managed_lookback_days" name="managed_lookback_days" type="number" min="0" step="1" value="{{ config.managed_lookback_days if config.managed_lookback_days is not none else 3 }}"><span class="mt-unit">days</span>
+        <span class="hint">How late a row can arrive after its event time. A refresh re-reads this much before each bookmark.</span>
+      </div>
+    </div>
+    <label>Tables Factcat keeps here <span id="managed-list-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish" id="managed-refresh-list">Refresh list</button></label>
+    <div class="mt" id="managed-list" role="list" aria-label="Factcat-managed tables"></div>
+    <div id="managed-status" role="status"></div>
+  </div>
+
   <p id="error"></p>
   <div id="status" class="save-toast" role="status" aria-live="polite" hidden></div>
 
@@ -332,6 +391,7 @@ const saved = {
   role: {{ config.role|tojson }},
   warehouse: {{ config.warehouse|tojson }},
   write_project: {{ config.write_project|tojson }},
+  managed_tables: {{ (config.managed_tables or {})|tojson }},
   write_dataset: {{ config.write_dataset|tojson }},
   write_database: {{ config.write_database|tojson }},
   write_schema: {{ config.write_schema|tojson }},
@@ -1591,6 +1651,206 @@ function seedEntityName() {
 labelChoiceEl.addEventListener("change", () => { syncEntityName(); scheduleSave(); });
 labelOtherEl.addEventListener("input", () => { syncEntityName(); scheduleSave(); });
 seedEntityName();
+
+// ---- Managed tables (item 12) ----------------------------------------
+// Render from the config mirror first; fetch (metadata calls only) when the
+// mirror is empty for a set destination, or on Refresh list. Row actions
+// POST /api/managed/action and re-render from the registry that returns.
+const managedWrap = document.getElementById("managed-wrap");
+const managedBody = document.getElementById("managed-list");
+const managedStatus = document.getElementById("managed-status");
+let managedPayload = null;
+let managedBusy = {};
+let managedUnreadable = false;
+function managedDestSet() {
+  if (currentKind() === "snowflake") {
+    return !!(document.getElementById("write_database").value.trim()
+      && document.getElementById("write_schema").value.trim());
+  }
+  return !!(document.getElementById("write_project").value.trim()
+    && document.getElementById("write_dataset").value.trim());
+}
+function managedBodyFor() {
+  const body = Object.fromEntries(new FormData(form).entries());
+  body.kind = currentKind();
+  return body;
+}
+function fmtBytesShort(n) {
+  if (n == null) return "";
+  const gb = n / (1024 ** 3);
+  if (gb >= 10) return Math.round(gb) + " GB";
+  if (gb >= 1) return gb.toFixed(1) + " GB";
+  const mb = n / (1024 ** 2);
+  if (mb >= 1) return Math.round(mb) + " MB";
+  return Math.max(1, Math.round(n / 1024)) + " KB";
+}
+function fmtAgo(iso) {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (mins < 60) return mins + " min ago";
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return hours + " h ago";
+  return Math.round(hours / 24) + " d ago";
+}
+function managedSetStatus(text, fail, pause) {
+  // Failure is the #66 callout shape: the situation, then the consequence.
+  // A read failure pauses the actions (disabled, visible) until the registry
+  // reads again; an action failure states its verdict and leaves them live.
+  const failing = !!fail && !!text;
+  managedUnreadable = failing && pause !== false;
+  managedStatus.classList.toggle("callout", failing);
+  managedStatus.textContent = "";
+  if (!text) return;
+  if (!failing) { managedStatus.textContent = text; return; }
+  const p = document.createElement("p");
+  p.textContent = managedUnreadable
+    ? "Could not read the managed tables: " + text + " The list shows the last known state; actions are paused until it reads."
+    : text;
+  managedStatus.appendChild(p);
+}
+let managedListLoading = false;
+function managedSetLoading(on) {
+  managedListLoading = !!on;
+  document.getElementById("managed-list-loading").hidden = !on;
+  document.getElementById("managed-refresh-list").hidden = !!on;
+}
+function managedRegistryColumns(payload) {
+  if (payload && Array.isArray(payload.columns)) return payload.columns;
+  const reg = (payload && payload.registry) || saved.managed_tables || {};
+  const cols = reg.columns || {};
+  return Object.keys(cols).map((key) => ({key, label: cols[key].label || key, ...cols[key], stale: false}));
+}
+function renderManaged() {
+  managedWrap.hidden = !managedDestSet();
+  if (managedWrap.hidden) return;
+  const payload = managedPayload;
+  const tables = (payload && payload.tables) || [];
+  const byName = {};
+  tables.forEach((t) => { byName[t.name] = t; });
+  managedBody.innerHTML = "";
+  function metaText(parts) { return parts.filter(Boolean).join(" \u00b7 "); }
+  const names = byName.fc_event_names;
+  if (names) {
+    const row = document.createElement("div");
+    row.className = "mt-row"; row.setAttribute("role", "listitem");
+    row.innerHTML = "<div class=\"mt-head\"><span><code>fc_event_names</code></span><span class=\"mt-meta\">" + metaText([fmtBytesShort(names.bytes)]) + "</span></div>"
+      + "<div class=\"mt-serves\">Event picker" + (names.census ? " and the freshness census" : "") + "<span class=\"sub\">"
+      + (names.census ? "names, rows per month, first and last seen" : "names only; Refresh event names on Events upgrades it") + "</span></div>";
+    managedBody.appendChild(row);
+  }
+  const cols = managedRegistryColumns(payload);
+  const idx = byName.fc_column_index;
+  cols.forEach((c) => {
+    const row = document.createElement("div");
+    row.className = "mt-row"; row.setAttribute("role", "listitem");
+    row.dataset.key = c.key;
+    const busy = managedBusy[c.key];
+    const label = c.label || c.key;
+    const head = "<div class=\"mt-head\"><span><code>fc_column_index</code> \u203a <code>" + label + "</code></span>"
+      + "<span class=\"mt-meta\">" + metaText([idx && cols.length === 1 ? fmtBytesShort(idx.bytes) : "", c.stale ? "" : fmtAgo(c.refreshed_at || c.built_at)]) + "</span></div>";
+    if (c.stale) {
+      // Under Automatic the next run that uses it rebuilds it; under Off a
+      // moved mapping stays live until Mode changes - say the true one.
+      const auto = (document.getElementById("managed_mode").value || "auto") === "auto";
+      const consequence = auto
+        ? "Charts read the full history until the next run that uses it rebuilds it."
+        : "Charts read the full history; set Mode to Automatic and the next run that uses it rebuilds it.";
+      row.innerHTML = head
+        + "<div class=\"callout\"><p>The mapping changed since this was built. " + consequence + "</p></div>"
+        + "<div class=\"mt-acts\"><button type=\"button\" class=\"linkish\" data-act=\"drop\">Drop</button></div>";
+      managedBody.appendChild(row);
+      return;
+    }
+    let serves = "<div class=\"mt-serves\">Carried and as-of breakdowns<span class=\"sub\">";
+    serves += metaText([c.last_used_at ? "last used " + fmtAgo(c.last_used_at) : "", c.bookmark ? "bookmark " + String(c.bookmark).slice(0, 16).replace("T", " ") : ""]);
+    serves += "</span></div>";
+    // Drop is the only row action: Automatic mode builds, refreshes and
+    // rebuilds on its own; the owner withdrew Refresh / Rebuild / Pin /
+    // Overrides as noise for the people who use Setup.
+    let acts = "<div class=\"mt-acts\">";
+    if (busy) {
+      acts += "<span class=\"loading\" aria-label=\"" + busy + "\"></span><span class=\"layout-checking\">" + busy + "\u2026</span>";
+    } else {
+      acts += "<button type=\"button\" class=\"linkish\" data-act=\"drop\">Drop</button>";
+    }
+    acts += "</div>";
+    row.innerHTML = head + serves + acts;
+    managedBody.appendChild(row);
+  });
+  if (managedUnreadable) {
+    managedBody.querySelectorAll("button, input").forEach((el) => { el.disabled = true; });
+  }
+  if (!names && !cols.length) {
+    const row = document.createElement("div");
+    // While the first read is in flight the label-line spinner says so;
+    // "Nothing here yet" is a verdict, not a placeholder.
+    if (managedListLoading) return;
+    row.className = "mt-empty";
+    row.innerHTML = "<span class=\"hint\" style=\"margin:0\">Nothing here yet. Factcat creates tables when a chart needs one.</span>";
+    managedBody.appendChild(row);
+  }
+}
+async function loadManaged(force) {
+  if (!managedDestSet()) { renderManaged(); return; }
+  if (!force && managedPayload) { renderManaged(); return; }
+  if (!force && saved.managed_tables && Object.keys(saved.managed_tables.columns || {}).length) {
+    managedPayload = {registry: saved.managed_tables, tables: []};
+    renderManaged();
+    return;
+  }
+  // Show the section now: the knobs are server-rendered and the destination
+  // is set; only the list waits for the warehouse (spinner on the label line).
+  // Hidden-until-the-round-trip-returns read as "the section is missing".
+  managedSetLoading(true);
+  renderManaged();
+  try {
+    const data = await post("/api/managed", managedBodyFor());
+    managedPayload = data;
+    if (data.registry) saved.managed_tables = data.registry;
+    managedSetStatus("");
+  } catch (err) {
+    managedSetStatus((err && err.message) || "the warehouse did not answer.", true);
+  } finally {
+    managedSetLoading(false);
+  }
+  renderManaged();
+}
+async function managedAction(key, act, extra) {
+  managedBusy[key] = {drop: "Dropping"}[act] || "Working";
+  renderManaged();
+  managedSetStatus("");
+  try {
+    const data = await post("/api/managed/action", {...managedBodyFor(), action: act, key: key, ...(extra || {})});
+    saved.managed_tables = data.registry || {};
+    delete managedBusy[key];
+    await loadManaged(true);
+  } catch (err) {
+    delete managedBusy[key];
+    managedSetStatus((err && err.message) || "The action did not run.", true, false);
+    renderManaged();
+  }
+}
+managedBody.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const tr = btn.closest(".mt-row");
+  if (!tr || !tr.dataset.key) return;
+  managedAction(tr.dataset.key, btn.dataset.act);
+});
+document.getElementById("managed-refresh-list").addEventListener("click", () => loadManaged(true));
+form.addEventListener("change", (e) => {
+  // Only the destination decides whether the section shows; any other
+  // Setup change must not rebuild the list (a row mid-action would lose
+  // its spinner).
+  const id = (e.target && e.target.id) || "";
+  if (!/^write_(project|dataset|database|schema)$/.test(id)) return;
+  const was = managedWrap.hidden;
+  renderManaged();
+  if (was && !managedWrap.hidden) loadManaged(false);
+});
+loadManaged(false);
 
 const autosave = fcAutosave({
   save: async (init) => {

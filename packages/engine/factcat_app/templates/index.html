@@ -335,6 +335,18 @@
     #run-estimate-wrap.warn #run-estimate-fill { background: var(--fc-ochre); }
     #run-estimate-wrap.hot #run-estimate-fill, #run-estimate-wrap.over-cap #run-estimate-fill { background: var(--fc-alert); }
     #run-estimate-wrap.over-cap #run-estimate { color: var(--fc-alert); font-weight: 600; }
+    /* Managed tables (item 12): cost, reason, next-run cost — in plain words.
+       A child of the (wrapping) toolbar, NOT of #run-row: inside the run row
+       its text width inflated the row's intrinsic size and wrapped the whole
+       row under the date controls, moving Run. As the toolbar's last child
+       with a 100% basis it takes its own line and moves nothing. */
+    /* One short line after a run that indexed (or failed to): its own
+       toolbar line, right-aligned under the chip and Run, capped so long
+       text wraps from the right and never spans the toolbar. */
+    #run-note { flex: 1 1 100%; display: flex; justify-content: flex-end; margin: 0; }
+    #run-note > span { max-width: 32rem; text-align: right; font-size: 0.75rem; color: var(--fc-slate); }
+    #run-note.ochre > span { color: var(--fc-ochre-deep); }
+    #run-note[hidden] { display: none !important; }
     .format-pop { position: relative; font-size: 0.7rem; }
     .format-pop > summary {
       cursor: pointer; list-style: none; padding: 0.2rem 0.5rem;
@@ -1036,6 +1048,7 @@
         </div>
         <button type="submit" id="run"{% if not mapping_ready %} disabled{% endif %}>Run</button>
       </div>
+      <p id="run-note" hidden><span></span></p>
     </div>
     <section class="pane pane-chart{% if not config.pane_chart_open %} closed{% endif %}">
       <div class="pane-head">
@@ -3908,6 +3921,7 @@ async function runEstimate() {
   try {
     const data = await post("/api/estimate", body);
     if (gen !== estimateGen) return;
+    setEstimatePending(false);
     if (!data.ok || data.bytes == null) {
       wrap.hidden = true;
       return;
@@ -3915,6 +3929,10 @@ async function runEstimate() {
     lastEstimateKey = key;
     lastEstimate = {key: key, bytes: data.bytes};
     paintEstimate(data.bytes, data.cap, !!data.over_cap);
+    // One short line before the run, in the same right-aligned slot the
+    // post-run line uses; the labels feed the running copy as well.
+    setRunNote(data.managed_note || "", false);
+    managedBuildLabels = Array.isArray(data.managed_build) ? data.managed_build : [];
     // The server's verdict wins where it has one: only it saw the warehouse.
     // An uncapped estimate carries no verdict about the capped query, so it
     // must not retire one - that cleared the block and flickered the controls.
@@ -4630,14 +4648,50 @@ function stepRunDots(gen, n) {
   dots.forEach((d, i) => d.classList.toggle("on", i < n));
   catLater(gen, 550, () => stepRunDots(gen, n >= 3 ? 1 : n + 1));
 }
+// Managed tables (item 12): what the next run would prepare (from the
+// estimate) and the line under the run row. Business register only:
+// cost, reason, next-run cost; never the mechanism.
+let managedBuildLabels = [];
+// Server copy marks column labels with backticks (the house SQL-chrome
+// convention); render them as code.fc-sql, never as literal backticks.
+function appendMarked(el, text) {
+  String(text || "").split(/(`[^`]+`)/g).forEach((part) => {
+    if (part.startsWith("`") && part.endsWith("`") && part.length > 2) {
+      const code = document.createElement("code");
+      code.className = "fc-sql";
+      code.textContent = part.slice(1, -1);
+      el.appendChild(code);
+    } else if (part) {
+      el.appendChild(document.createTextNode(part));
+    }
+  });
+}
+function setRunNote(text, ochre) {
+  const el = document.getElementById("run-note");
+  if (!el) return;
+  const box = el.firstElementChild;
+  box.textContent = "";
+  appendMarked(box, text || "");
+  el.classList.toggle("ochre", !!ochre && !!text);
+  el.hidden = !text;
+}
+function runningPrefix() {
+  // Same backtick convention as the note; setRunningCopy renders it.
+  if (!managedBuildLabels.length) return "";
+  const names = managedBuildLabels.map((l) => "`" + l + "`").join(", ");
+  return "Indexing " + names + "\u2026 then r";
+}
 function setRunningCopy(copy) {
+  const prefix = runningPrefix();
   if (!catReduceMotion()) {
-    copy.textContent = "Running…";
+    copy.textContent = "";
+    appendMarked(copy, prefix ? prefix + "unning…" : "Running…");
     return;
   }
   // Reduced motion: the cat freezes, so the dots carry liveness instead.
   if (copy.querySelector(".run-dots")) return;
-  copy.textContent = "Running";
+  copy.textContent = "";
+  appendMarked(copy, prefix ? prefix + "unning" : "Running");
   copy.appendChild(buildRunDots());
 }
 let runBtnTimer = 0;
@@ -5020,6 +5074,14 @@ form.addEventListener("submit", async (e) => {
     }
     capBlock = null;
     failCopy = null;
+    managedBuildLabels = [];
+    if (data.managed_failed) {
+      setRunNote(data.managed_failed, true);
+    } else if (data.managed_note) {
+      setRunNote(data.managed_note, false);
+    } else {
+      setRunNote("", false);
+    }
     if (titleLockedEl.value !== "true") titleEl.value = body.chart_title || defaultTitle();
     const tableEmpty = document.getElementById("table-empty");
     tableEmpty.hidden = true;

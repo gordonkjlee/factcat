@@ -948,3 +948,29 @@ def test_values_table_validation():
             table="t", entity="e", event_time="ts", measure="total",
             event_time_column=" ",
         )
+
+
+def test_a_row_with_no_instant_never_wins_an_anchor(subs):
+    """The live side of an anchor must ignore a row with no instant, exactly
+    as the cached side does (`fc_t IS NOT NULL`).
+
+    A row with no instant has no position in time, so it can be neither the
+    first nor the last value; and under BigQuery's default NULLS FIRST on
+    ASC it would win at="first" live while being absent from any
+    values_table, so cached and live would disagree — the equivalence this
+    whole feature rests on. DuckDB orders NULLS LAST by default, so the
+    emitted-shape assertion carries the BigQuery half of the proof.
+
+    Mutation: drop the event_time IS NOT NULL condition from _attr_cte's
+    live conds and the shape assertion goes red.
+    """
+    subs.execute(
+        "INSERT INTO subs VALUES ('S1', NULL, 'plan_changed', 'ghost')"
+    )
+    for at in ("first", "last"):
+        spec = _subs_spec(Breakdown("plan_tier", at=at))
+        sql = events_sql(spec)
+        assert "IS NOT NULL" in sql
+        assert sql.count("occurred_at) IS NOT NULL") >= 1, at
+        got = {(d, t): v for d, t, v in _rows(subs, spec)}
+        assert not any(label == "ghost" for (_d, label) in got), at
