@@ -239,7 +239,10 @@
        page keeps running the code it loaded. This bar is the page telling
        on itself, checked on focus so it costs nothing while you work. */
     .stale-build {
-      position: sticky; top: 0; z-index: 40;
+      /* In flow, not sticky. The document does not scroll here - the results
+         column does - so a bar at the top stays visible anyway, and a second
+         sticky element at top: 0 would collide with the results toolbar,
+         which pins to a different scroll container at the same offset. */
       padding: 0.45rem 0.9rem; font-size: 0.8rem;
       color: var(--fc-ink); background: var(--fc-ochre-wash, #fbf3e4);
       border-bottom: 1px solid var(--fc-ochre);

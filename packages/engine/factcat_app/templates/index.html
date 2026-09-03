@@ -3905,7 +3905,6 @@ async function runEstimate() {
   try {
     const data = await post("/api/estimate", body);
     if (gen !== estimateGen) return;
-    setEstimatePending(false);
     if (!data.ok || data.bytes == null) {
       wrap.hidden = true;
       return;
