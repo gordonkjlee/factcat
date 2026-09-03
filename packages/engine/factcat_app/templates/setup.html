@@ -104,7 +104,7 @@
       font-weight: 400;
       color: var(--fc-ochre-deep);
     }
-    /* Managed tables (item 12). #managed-wrap owns the section; .mt owns
+    /* Managed tables. #managed-wrap owns the section; .mt owns
        the list geometry; .mt-acts owns action spacing. */
     #managed-wrap[hidden] { display: none !important; }
     #managed-knobs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.5rem; }
@@ -279,12 +279,9 @@
   </select>
   <span class="hint">String column of event names. Events <strong>Refresh list</strong> loads names from the lookback below.</span>
   <div id="event-column-layout"></div>
-  <div class="callout" id="calendar-moved">
-    <p><strong>Week starts on</strong> and <strong>Reporting timezone</strong> are on
-    <a href="/preferences" id="calendar-moved-link">Preferences</a>. They change the query, so they
-    still shape this project's charts — they just belong to whoever builds the report.</p>
-  </div>
-  <!-- Read by dateFingerprint() and sent with /api/layout: the date-prune cache
+  <!-- Week start and reporting timezone live on Preferences now (no pointer
+       here - Setup does not narrate every page a setting isn't on). Read by
+       dateFingerprint() and sent with /api/layout: the date-prune cache
        depends on them, and layout.py fingerprints them server-side too. They
        carry no `name`, so the Setup autosave cannot write them back into the
        project file - which is the whole point of the move. -->
@@ -1652,7 +1649,7 @@ labelChoiceEl.addEventListener("change", () => { syncEntityName(); scheduleSave(
 labelOtherEl.addEventListener("input", () => { syncEntityName(); scheduleSave(); });
 seedEntityName();
 
-// ---- Managed tables (item 12) ----------------------------------------
+// ---- Managed tables ---------------------------------------------------
 // Render from the config mirror first; fetch (metadata calls only) when the
 // mirror is empty for a set destination, or on Refresh list. Row actions
 // POST /api/managed/action and re-render from the registry that returns.
@@ -1872,15 +1869,6 @@ const autosave = fcAutosave({
   suppressed: () => suppressChange,
 });
 
-// The only link inside this autosaving form. A click during the debounce
-// window would navigate away and drop the pending save, so flush first and
-// let the navigation follow.
-const calendarLink = document.getElementById("calendar-moved-link");
-if (calendarLink) {
-  calendarLink.addEventListener("click", () => {
-    if (autosave && typeof autosave.flush === "function") autosave.flush();
-  });
-}
 function scheduleSave() {
   autosave.schedule();
 }

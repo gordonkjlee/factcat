@@ -335,7 +335,7 @@
     #run-estimate-wrap.warn #run-estimate-fill { background: var(--fc-ochre); }
     #run-estimate-wrap.hot #run-estimate-fill, #run-estimate-wrap.over-cap #run-estimate-fill { background: var(--fc-alert); }
     #run-estimate-wrap.over-cap #run-estimate { color: var(--fc-alert); font-weight: 600; }
-    /* Managed tables (item 12): cost, reason, next-run cost — in plain words.
+    /* Managed tables: cost, reason, next-run cost — in plain words.
        A child of the (wrapping) toolbar, NOT of #run-row: inside the run row
        its text width inflated the row's intrinsic size and wrapped the whole
        row under the date controls, moving Run. As the toolbar's last child
@@ -4648,7 +4648,7 @@ function stepRunDots(gen, n) {
   dots.forEach((d, i) => d.classList.toggle("on", i < n));
   catLater(gen, 550, () => stepRunDots(gen, n >= 3 ? 1 : n + 1));
 }
-// Managed tables (item 12): what the next run would prepare (from the
+// Managed tables: what the next run would prepare (from the
 // estimate) and the line under the run row. Business register only:
 // cost, reason, next-run cost; never the mechanism.
 let managedBuildLabels = [];

@@ -788,7 +788,7 @@ def test_distinct_measure_with_breakdown_executes(subs):
 
 
 # ---------------------------------------------------------------------------
-# values_table: a column's recorded values read from a relation (item 12).
+# values_table: a column's recorded values read from a relation.
 # The keystone is equivalence — every mode, cached vs live, identical on the
 # fixture. VALUES_THROUGH splits it so the live tail matters: S6's silver
 # (Jan 10) and gold (Feb 5), S7's pair (Jan 15), S8's edge (Feb 1) and S9's
