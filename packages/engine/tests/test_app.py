@@ -2419,3 +2419,48 @@ def test_blocking_endpoints_use_threadpool():
     )
     for fn in blocking:
         assert "run_in_threadpool" in inspect.getsource(fn), fn.__name__
+
+
+def test_every_page_states_the_build_it_came_from(monkeypatch, tmp_path):
+    """A tab left open across a restart keeps running the code it loaded, and
+    nothing on the page used to say so - an owner tested a fix for an hour
+    against a page that predated it, while headless captures of the same URL
+    (always a fresh load) showed it working. The page carries its build and
+    checks it against the server on focus. Mutation: drop build_id from the
+    page context, or the /api/build endpoint."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    from factcat_app.build import BUILD_ID
+
+    client = TestClient(app)
+    info = client.get("/api/build")
+    assert info.status_code == 200
+    assert info.json()["build"] == BUILD_ID
+    from factcat_app.build import root_id_for
+    from pathlib import Path
+    assert info.json()["root_id"] == root_id_for(Path(__file__).resolve().parents[1])
+    assert "root" not in info.json() and "pid" not in info.json()  # no layout, no process id
+    # every page that extends the base, not just the two that pass a context:
+    # Preferences builds its own and silently had no check at all
+    for page in ("/events", "/setup", "/preferences"):
+        html = client.get(page).text
+        assert f'window.FACTCAT_BUILD = "{BUILD_ID}"' in html, page
+        assert 'id="stale-build"' in html, page
+        assert "/api/build" in html, page
+
+
+def test_the_cap_override_is_offered_while_an_estimate_is_in_flight(monkeypatch, tmp_path):
+    """Until the answer lands we do not know the query is under the cap, and
+    someone who knows it is not should be able to pre-authorise rather than
+    wait for a refusal round trip. The tickbox used to appear only on an
+    over-cap verdict; the pending state now feeds the same single writer.
+    Mutation: drop estimatePending from syncCostGate."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    client = TestClient(app)
+    events = client.get("/events").text
+    gate = events.split("function syncCostGate")[1][:600]
+    assert "estimatePending" in gate, "the gate does not consider a pending estimate"
+    assert events.count("function setEstimatePending") == 1
+    assert "setEstimatePending(true)" in events
+    assert "if (gen === estimateGen) setEstimatePending(false);" in events
+    cancel = events.split("function cancelEstimate")[1][:260]
+    assert "setEstimatePending(false)" in cancel

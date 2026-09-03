@@ -3783,6 +3783,16 @@ function formatBytes(n) {
   return "~" + x.toFixed(digits) + "\u00a0" + units[i];
 }
 let estimateGen = 0;
+// True from the moment an estimate is sent until it settles. The cap
+// override is offered while it is true: until the answer lands we do not
+// know the query is under the cap, and an owner who knows it is not should
+// be able to pre-authorise instead of waiting for a refusal round trip.
+let estimatePending = false;
+function setEstimatePending(on) {
+  if (estimatePending === !!on) return;
+  estimatePending = !!on;
+  syncCostGate();
+}
 let estimateTimer = 0;
 function estimateKey(body) {
   return [
@@ -3824,7 +3834,9 @@ function syncCostGate() {
   const blocked = capBlocked();
   document.getElementById("cap-override").hidden =
     !CAPABILITIES.has("scan_cap")
-    || (!blocked && !document.getElementById("override_cap").checked);
+    || (!blocked
+        && !estimatePending
+        && !document.getElementById("override_cap").checked);
   document.getElementById("run").disabled =
     !MAPPING_READY || runInFlight || blocked;
 }
@@ -3889,6 +3901,7 @@ async function runEstimate() {
   wrap.classList.remove("over-cap", "warn", "hot");
   document.getElementById("run-estimate-bar").hidden = false;
   fill.style.width = "0";
+  setEstimatePending(true);
   try {
     const data = await post("/api/estimate", body);
     if (gen !== estimateGen) return;
@@ -3911,6 +3924,11 @@ async function runEstimate() {
   } catch (err) {
     if (gen !== estimateGen) return;
     wrap.hidden = true;
+  } finally {
+    // Only the newest attempt may retire the flag: an older one settling
+    // late must not clear a pending answer, and a thrown request must not
+    // leave the override on screen for ever.
+    if (gen === estimateGen) setEstimatePending(false);
   }
 }
 function setExportEnabled(copyId, popId, on) {
@@ -4639,6 +4657,7 @@ function stopRunButtonDots() {
 function cancelEstimate() {
   clearTimeout(estimateTimer);
   estimateGen += 1;
+  setEstimatePending(false);
   const el = document.getElementById("run-estimate");
   if (el.textContent === "Estimating…") {
     document.getElementById("run-estimate-wrap").hidden = true;
