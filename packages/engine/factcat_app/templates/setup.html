@@ -240,7 +240,9 @@
       {% endfor %}
     </select>
     <input type="hidden" name="event_time_tz" id="event_time_tz" value="{{ config.event_time_tz or 'utc' }}">
-    <span class="hint" id="event-time-tz-hint">This column has no timezone. Pick the zone the numbers were recorded in. Reporting timezone (below) is whose midnight is a day.</span>
+    <!-- syncEventTimeKind() rewrites this on every kind change, so the server
+         copy renders the SAME two branches. Edit both, or the edit is dead source. -->
+    <span class="hint" id="event-time-tz-hint">{% if config.kind == "snowflake" %}TIMESTAMP_NTZ / DATETIME have no zone on the column. TIMESTAMP_TZ and TIMESTAMP_LTZ are instants and do not need this.{% else %}DATETIME has no zone on the column. TIMESTAMP is a UTC instant and does not need this.{% endif %}</span>
   </div>
   <label for="event_column">Event name column (optional) <span id="event_column-loading" class="loading" hidden aria-label="Loading"></span> <span id="event-column-checking" class="layout-checking" hidden>Checking whether event-name filters prune…</span></label>
   <select id="event_column" name="event_column" disabled>
@@ -249,20 +251,17 @@
   </select>
   <span class="hint">String column of event names. Events <strong>Refresh list</strong> loads names from the lookback below.</span>
   <div id="event-column-layout"></div>
-  <h2>Time</h2>
-  <label for="week_start">Week starts on</label>
-  <select id="week_start" name="week_start">
-    <option value="monday" {% if config.week_start != "sunday" %}selected{% endif %}>Monday</option>
-    <option value="sunday" {% if config.week_start == "sunday" %}selected{% endif %}>Sunday</option>
-  </select>
-  <span class="hint">Applied after the instant is converted to the reporting calendar.</span>
-  <label for="reporting_timezone">Reporting timezone</label>
-  <select id="reporting_timezone" name="reporting_timezone">
-    {% for tz in reporting_timezones %}
-    <option value="{{ tz }}" {% if (config.reporting_timezone or "UTC") == tz %}selected{% endif %}>{{ tz }}</option>
-    {% endfor %}
-  </select>
-  <span class="hint">Whose midnight is a day, and whose Monday is a week. Not the warehouse default.</span>
+  <div class="callout" id="calendar-moved">
+    <p><strong>Week starts on</strong> and <strong>Reporting timezone</strong> are on
+    <a href="/preferences" id="calendar-moved-link">Preferences</a>. They change the query, so they
+    still shape this project's charts — they just belong to whoever builds the report.</p>
+  </div>
+  <!-- Read by dateFingerprint() and sent with /api/layout: the date-prune cache
+       depends on them, and layout.py fingerprints them server-side too. They
+       carry no `name`, so the Setup autosave cannot write them back into the
+       project file - which is the whole point of the move. -->
+  <input type="hidden" id="week_start" value="{{ prefs.week_start or 'monday' }}">
+  <input type="hidden" id="reporting_timezone" value="{{ prefs.reporting_timezone or 'UTC' }}">
   <h2>Limits</h2>
   <div id="scan-cap-wrap">
     <label for="bytes_cap_gb">Job scan cap (GB)</label>
@@ -1594,7 +1593,7 @@ labelOtherEl.addEventListener("input", () => { syncEntityName(); scheduleSave();
 seedEntityName();
 
 const autosave = fcAutosave({
-  save: async () => {
+  save: async (init) => {
     syncEntityName();
     syncEventTimeStored();
     tableEl.value = combinedTable();
@@ -1603,7 +1602,7 @@ const autosave = fcAutosave({
     if (Object.prototype.hasOwnProperty.call(body, "event_column") && !body.event_column) {
       body.event_names = [];
     }
-    return post("/api/save", body);
+    return post("/api/save", body, init);
   },
   onSaved: () => {
     setError("");
@@ -1612,6 +1611,16 @@ const autosave = fcAutosave({
   onFail: (msg) => setError(msg || "Could not save mapping"),
   suppressed: () => suppressChange,
 });
+
+// The only link inside this autosaving form. A click during the debounce
+// window would navigate away and drop the pending save, so flush first and
+// let the navigation follow.
+const calendarLink = document.getElementById("calendar-moved-link");
+if (calendarLink) {
+  calendarLink.addEventListener("click", () => {
+    if (autosave && typeof autosave.flush === "function") autosave.flush();
+  });
+}
 function scheduleSave() {
   autosave.schedule();
 }

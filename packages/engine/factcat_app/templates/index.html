@@ -800,8 +800,11 @@
     <input type="hidden" name="entity_label_plural" id="entity_label_plural" value="{{ config.entity_label_plural or 'Users' }}">
     <input type="hidden" name="event_time" id="event_time" value="{{ config.event_time }}">
     <input type="hidden" name="event_column" id="event_column" value="{{ config.event_column }}">
-    <input type="hidden" name="week_start" id="week_start" value="{{ config.week_start or 'monday' }}">
-    <input type="hidden" name="reporting_timezone" id="reporting_timezone" value="{{ config.reporting_timezone or 'UTC' }}">
+    <!-- The report builder's own calendar, from Preferences: these change the
+         SQL, so they ride every request rather than being read from the
+         project file. -->
+    <input type="hidden" name="week_start" id="week_start" value="{{ prefs.week_start or 'monday' }}">
+    <input type="hidden" name="reporting_timezone" id="reporting_timezone" value="{{ prefs.reporting_timezone or 'UTC' }}">
     <input type="hidden" name="event_time_tz" id="event_time_tz" value="{{ config.event_time_tz or 'utc' }}">
     <input type="hidden" name="event_time_epoch" id="event_time_epoch" value="{{ config.event_time_epoch or '' }}">
     <input type="hidden" name="thousand_sep" id="thousand_sep" value="{{ prefs.thousand_sep or 'comma' }}">

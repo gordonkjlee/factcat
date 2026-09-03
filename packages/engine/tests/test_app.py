@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -107,7 +108,17 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "layout-checking" in res.text
     assert "Plural" in res.text
     assert "Event name column" in res.text
-    assert "Week starts on" in res.text
+    # Week start and reporting timezone moved to Preferences: they change the
+    # SQL, but they belong to whoever builds the report, not to the project.
+    # The CONTROLS are gone; the pointer names them, so match on the control.
+    assert 'name="week_start"' not in res.text
+    assert 'name="reporting_timezone"' not in res.text
+    assert 'id="calendar-moved"' in res.text  # Setup says where they went
+    # …but their VALUES stay on the page, unnamed: dateFingerprint() and
+    # /api/layout still need them, and an unnamed input is not autosaved back
+    # into the project file.
+    assert 'id="week_start" value=' in res.text
+    assert 'id="reporting_timezone" value=' in res.text
     assert "Formatting" not in res.text
     assert "Thousand separator" not in res.text
     assert "Decimal separator" not in res.text
@@ -2464,3 +2475,198 @@ def test_the_cap_override_is_offered_while_an_estimate_is_in_flight(monkeypatch,
     assert "if (gen === estimateGen) setEstimatePending(false);" in events
     cancel = events.split("function cancelEstimate")[1][:260]
     assert "setEstimatePending(false)" in cancel
+
+
+def test_the_calendar_settings_live_on_preferences_and_reach_the_query(monkeypatch, tmp_path):
+    """Week start and reporting timezone change the SQL, but they belong to
+    whoever builds the report, not to the project: two people must be able to
+    hold different ones. They render on Preferences, not Setup, and the
+    Events page carries the USER's values into every request.
+
+    Mutation: render them from `config` on Events, or put them back on Setup.
+    """
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "prefs.json"))
+    from factcat_app import prefs as prefs_mod
+
+    prefs_mod.save({"week_start": "sunday", "reporting_timezone": "Europe/Berlin"})
+    client = TestClient(app)
+
+    prefs_page = client.get("/preferences").text
+    assert 'name="week_start"' in prefs_page
+    assert 'name="reporting_timezone"' in prefs_page
+    assert 'value="sunday" selected' in prefs_page.replace(" selected", " selected")
+
+    setup = client.get("/setup").text
+    assert 'name="week_start"' not in setup
+    assert 'name="reporting_timezone"' not in setup
+
+    events = client.get("/events").text
+    assert 'id="week_start" value="sunday"' in events
+    assert 'id="reporting_timezone" value="Europe/Berlin"' in events
+
+
+def test_the_calendar_settings_are_adopted_off_the_project_file_once(monkeypatch, tmp_path):
+    """They used to live on the project file, and they moved after most
+    people already had a user file - so the first-run migration could never
+    carry them, and falling back to the defaults would silently move every
+    bucket. Adopt them on any load, prefer anything the user file already
+    says, and strip the project copy so it happens once.
+
+    Mutation: drop the _adopt_from_project call in load().
+    """
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "prefs.json"))
+    from factcat_app import prefs as prefs_mod
+
+    (tmp_path / "cfg.json").write_text(
+        json.dumps({"table": "a.b", "week_start": "sunday", "reporting_timezone": "Europe/Berlin"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "prefs.json").write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
+
+    got = prefs_mod.load()
+    assert got["week_start"] == "sunday"
+    assert got["reporting_timezone"] == "Europe/Berlin"
+    assert got["theme"] == "dark"  # the rest of the user file survives
+
+    left = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert "week_start" not in left and "reporting_timezone" not in left
+    assert left["table"] == "a.b"  # only those two are taken
+
+    # a second load has nothing to adopt and must not regress to the defaults
+    assert prefs_mod.load()["week_start"] == "sunday"
+
+
+def test_the_user_file_wins_and_an_unadopted_project_copy_is_left_alone():
+    """If both say something, the user's own choice counts — and the project
+    copy is NOT deleted on their behalf. Adoption strips only what it took,
+    so nothing the user never adopted is destroyed and the move stays
+    reversible. Nothing re-reads it either: the user file has both keys, so
+    later loads never open the project file at all."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg, prefs_file = Path(tmp) / "cfg.json", Path(tmp) / "prefs.json"
+        os.environ["FACTCAT_CONFIG"], os.environ["FACTCAT_PREFS"] = str(cfg), str(prefs_file)
+        try:
+            cfg.write_text(json.dumps({"week_start": "sunday", "reporting_timezone": "Europe/Berlin"}), encoding="utf-8")
+            prefs_file.write_text(json.dumps({"week_start": "monday", "reporting_timezone": "UTC"}), encoding="utf-8")
+            from factcat_app import prefs as prefs_mod
+
+            got = prefs_mod.load()
+            assert got["week_start"] == "monday" and got["reporting_timezone"] == "UTC"
+            left = json.loads(cfg.read_text(encoding="utf-8"))
+            assert left["week_start"] == "sunday", "an unadopted project value was destroyed"
+        finally:
+            os.environ.pop("FACTCAT_CONFIG", None)
+            os.environ.pop("FACTCAT_PREFS", None)
+
+
+def test_a_first_run_with_no_user_file_still_adopts_the_calendar():
+    """The path the review caught: with no user file at all, load() goes to
+    the first-run migration, which carries only the separator keys. Without
+    adoption on that branch too, a project week_start of sunday silently
+    became monday — every bucket moved.
+
+    Mutation: drop the _adopt_from_project call on the no-user-file branch.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg, prefs_file = Path(tmp) / "cfg.json", Path(tmp) / "prefs.json"
+        os.environ["FACTCAT_CONFIG"], os.environ["FACTCAT_PREFS"] = str(cfg), str(prefs_file)
+        try:
+            cfg.write_text(json.dumps({"table": "a.b", "week_start": "sunday",
+                                       "reporting_timezone": "Europe/Berlin"}), encoding="utf-8")
+            assert not prefs_file.exists()
+            from factcat_app import prefs as prefs_mod
+
+            got = prefs_mod.load()
+            assert got["week_start"] == "sunday"
+            assert got["reporting_timezone"] == "Europe/Berlin"
+            left = json.loads(cfg.read_text(encoding="utf-8"))
+            assert "week_start" not in left and left["table"] == "a.b"
+        finally:
+            os.environ.pop("FACTCAT_CONFIG", None)
+            os.environ.pop("FACTCAT_PREFS", None)
+
+
+def test_a_broken_preference_value_falls_back_instead_of_breaking_every_query():
+    """_validate writes into the dict it RETURNS. It did not, so a garbage
+    timezone in the user file reached the query builder and every Events
+    request died with "must be an IANA name from Preferences".
+
+    Mutation: validate into `data` instead of `out`.
+    """
+    from factcat_app import prefs as prefs_mod
+
+    got = prefs_mod._validate({"reporting_timezone": "Mars/Olympus", "week_start": "caturday"})
+    assert got["reporting_timezone"] == "UTC"
+    assert got["week_start"] == "monday"
+    incoming = {"reporting_timezone": "Mars/Olympus"}
+    prefs_mod._validate(incoming)
+    assert incoming == {"reporting_timezone": "Mars/Olympus"}, "validate mutated its argument"
+
+
+def test_the_autosave_flush_survives_the_navigation_that_triggers_it():
+    """`flush()` exists for exactly one caller: the Preferences link inside
+    Setup's autosaving form. A click during the debounce window navigates
+    away, and a plain `fetch` is aborted with the document - so an ordinary
+    flush only narrows the race it was written to close. `keepalive` is what
+    makes the POST outlive the page, and both autosaving forms have to
+    forward the init through to `post()` or it never reaches the request.
+
+    Mutation: drop `{keepalive: true}`, or stop forwarding `init` on either
+    page.
+    """
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parents[1] / "factcat_app"
+    save_js = (app_dir / "static" / "save.js").read_text(encoding="utf-8")
+    assert "run({keepalive: true})" in save_js, "an abortable flush can still lose the save"
+    assert "async function post(url, body, init)" in save_js
+    assert "...(init || {})" in save_js, "post() takes the init but never applies it"
+    assert "async function run(init)" in save_js
+    assert "opts.save(init)" in save_js, "run() has the init but the page's save() never sees it"
+
+    for page in ("setup.html", "preferences.html"):
+        src = (app_dir / "templates" / page).read_text(encoding="utf-8")
+        assert "save: async (init) =>" in src, page + ": save() drops the init"
+        assert ", init);" in src, page + ": save() never forwards the init to post()"
+
+
+def test_the_timestamp_hint_says_the_same_thing_server_side_and_in_js(monkeypatch, tmp_path):
+    """`syncEventTimeKind()` rewrites #event-time-tz-hint on load and on every
+    kind change, so whatever the server rendered there is gone before anyone
+    reads it. Copy edited on one side only is dead source - which is how a
+    pointer to Preferences came to be written into a sentence that could
+    never appear on screen. The server renders the same two branches; this
+    proves it for both kinds.
+
+    Mutation: edit either string without the other.
+    """
+    import re
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parents[1] / "factcat_app"
+    src = (app_dir / "templates" / "setup.html").read_text(encoding="utf-8")
+    js = re.search(
+        r'hint\.textContent = currentKind\(\) === "snowflake"\s*\?\s*"([^"]+)"\s*:\s*"([^"]+)"',
+        src,
+    )
+    assert js, "the JS branch moved; this guard needs updating with it"
+    owned = {"snowflake": js.group(1), "bigquery": js.group(2)}
+
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "prefs.json"))
+    for kind, expected in owned.items():
+        (tmp_path / "cfg.json").write_text(json.dumps({"kind": kind}), encoding="utf-8")
+        page = TestClient(app).get("/setup").text
+        rendered = re.search(r'id="event-time-tz-hint">(.*?)</span>', page, re.S)
+        assert rendered, kind + ": the hint is not on the page"
+        assert rendered.group(1).strip() == expected, (
+            kind + ": the server copy and the JS copy have diverged; one is dead source"
+        )
