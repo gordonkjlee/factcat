@@ -104,7 +104,7 @@
       font-weight: 400;
       color: var(--fc-ochre-deep);
     }
-    /* Managed tables (item 12). #managed-wrap owns the section; .mt owns
+    /* Managed tables. #managed-wrap owns the section; .mt owns
        the list geometry; .mt-acts owns action spacing. */
     #managed-wrap[hidden] { display: none !important; }
     #managed-knobs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.5rem; }
@@ -1649,7 +1649,7 @@ labelChoiceEl.addEventListener("change", () => { syncEntityName(); scheduleSave(
 labelOtherEl.addEventListener("input", () => { syncEntityName(); scheduleSave(); });
 seedEntityName();
 
-// ---- Managed tables (item 12) ----------------------------------------
+// ---- Managed tables ---------------------------------------------------
 // Render from the config mirror first; fetch (metadata calls only) when the
 // mirror is empty for a set destination, or on Refresh list. Row actions
 // POST /api/managed/action and re-render from the registry that returns.
