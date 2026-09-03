@@ -155,7 +155,7 @@ REPORTING_TIMEZONES = (
 def _reporting_timezone(form: dict[str, Any]) -> str:
     raw = str(form.get("reporting_timezone") or "UTC").strip() or "UTC"
     if raw not in REPORTING_TIMEZONES:
-        raise ValueError("reporting_timezone must be an IANA name from Setup")
+        raise ValueError("reporting_timezone must be an IANA name from Preferences")
     return raw
 
 

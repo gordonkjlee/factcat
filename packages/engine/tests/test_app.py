@@ -107,7 +107,11 @@ def test_setup_renders(monkeypatch, tmp_path):
     assert "layout-checking" in res.text
     assert "Plural" in res.text
     assert "Event name column" in res.text
-    assert "Week starts on" in res.text
+    # Week start and reporting timezone moved to Preferences: they change the
+    # SQL, but they belong to whoever builds the report, not to the project.
+    assert "Week starts on" not in res.text
+    assert 'name="reporting_timezone"' not in res.text  # the control, not the pointer to it
+    assert "on Preferences" in res.text  # Setup says where it went
     assert "Formatting" not in res.text
     assert "Thousand separator" not in res.text
     assert "Decimal separator" not in res.text
@@ -2464,3 +2468,82 @@ def test_the_cap_override_is_offered_while_an_estimate_is_in_flight(monkeypatch,
     assert "if (gen === estimateGen) setEstimatePending(false);" in events
     cancel = events.split("function cancelEstimate")[1][:260]
     assert "setEstimatePending(false)" in cancel
+
+
+def test_the_calendar_settings_live_on_preferences_and_reach_the_query(monkeypatch, tmp_path):
+    """Week start and reporting timezone change the SQL, but they belong to
+    whoever builds the report, not to the project: two people must be able to
+    hold different ones. They render on Preferences, not Setup, and the
+    Events page carries the USER's values into every request.
+
+    Mutation: render them from `config` on Events, or put them back on Setup.
+    """
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "prefs.json"))
+    from factcat_app import prefs as prefs_mod
+
+    prefs_mod.save({"week_start": "sunday", "reporting_timezone": "Europe/Berlin"})
+    client = TestClient(app)
+
+    prefs_page = client.get("/preferences").text
+    assert 'name="week_start"' in prefs_page
+    assert 'name="reporting_timezone"' in prefs_page
+    assert 'value="sunday" selected' in prefs_page.replace(" selected", " selected")
+
+    setup = client.get("/setup").text
+    assert 'name="week_start"' not in setup
+    assert 'name="reporting_timezone"' not in setup
+
+    events = client.get("/events").text
+    assert 'id="week_start" value="sunday"' in events
+    assert 'id="reporting_timezone" value="Europe/Berlin"' in events
+
+
+def test_the_calendar_settings_are_adopted_off_the_project_file_once(monkeypatch, tmp_path):
+    """They used to live on the project file, and they moved after most
+    people already had a user file - so the first-run migration could never
+    carry them, and falling back to the defaults would silently move every
+    bucket. Adopt them on any load, prefer anything the user file already
+    says, and strip the project copy so it happens once.
+
+    Mutation: drop the _adopt_from_project call in load().
+    """
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "prefs.json"))
+    from factcat_app import prefs as prefs_mod
+
+    (tmp_path / "cfg.json").write_text(
+        json.dumps({"table": "a.b", "week_start": "sunday", "reporting_timezone": "Europe/Berlin"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "prefs.json").write_text(json.dumps({"theme": "dark"}), encoding="utf-8")
+
+    got = prefs_mod.load()
+    assert got["week_start"] == "sunday"
+    assert got["reporting_timezone"] == "Europe/Berlin"
+    assert got["theme"] == "dark"  # the rest of the user file survives
+
+    left = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert "week_start" not in left and "reporting_timezone" not in left
+    assert left["table"] == "a.b"  # only those two are taken
+
+    # a second load has nothing to adopt and must not regress to the defaults
+    assert prefs_mod.load()["week_start"] == "sunday"
+
+
+def test_the_user_file_wins_over_a_stale_project_copy(monkeypatch, tmp_path):
+    """If both say something, the user's own choice is the one that counts."""
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "prefs.json"))
+    from factcat_app import prefs as prefs_mod
+
+    (tmp_path / "cfg.json").write_text(
+        json.dumps({"week_start": "sunday", "reporting_timezone": "Europe/Berlin"}), encoding="utf-8"
+    )
+    (tmp_path / "prefs.json").write_text(
+        json.dumps({"week_start": "monday", "reporting_timezone": "UTC"}), encoding="utf-8"
+    )
+    got = prefs_mod.load()
+    assert got["week_start"] == "monday" and got["reporting_timezone"] == "UTC"
+    left = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert "week_start" not in left  # stripped either way, so this runs once

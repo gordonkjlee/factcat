@@ -202,6 +202,21 @@
   </select>
   <span class="hint" id="num-example">Example: 1,234.56</span>
 
+  <h2>Calendar</h2>
+  <span class="hint">Unlike everything else here, these two change the query: they decide which day
+  and which week each event falls in. They are yours, and they travel with the reports you build.</span>
+  <label for="week_start">Week starts on</label>
+  <select id="week_start" name="week_start">
+    <option value="monday" {% if prefs.week_start != "sunday" %}selected{% endif %}>Monday</option>
+    <option value="sunday" {% if prefs.week_start == "sunday" %}selected{% endif %}>Sunday</option>
+  </select>
+  <label for="reporting_timezone">Reporting timezone</label>
+  <select id="reporting_timezone" name="reporting_timezone">
+    {% for tz in reporting_timezones %}
+    <option value="{{ tz }}" {% if (prefs.reporting_timezone or "UTC") == tz %}selected{% endif %}>{{ tz }}</option>
+    {% endfor %}
+  </select>
+  <span class="hint">Applied after the stored instant is converted; not the warehouse default.</span>
   <h2>Dates</h2>
   <label for="weekday_style">Weekday</label>
   <select id="weekday_style" name="weekday_style">
