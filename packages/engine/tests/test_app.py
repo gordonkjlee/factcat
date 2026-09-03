@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -2531,19 +2532,76 @@ def test_the_calendar_settings_are_adopted_off_the_project_file_once(monkeypatch
     assert prefs_mod.load()["week_start"] == "sunday"
 
 
-def test_the_user_file_wins_over_a_stale_project_copy(monkeypatch, tmp_path):
-    """If both say something, the user's own choice is the one that counts."""
-    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
-    monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "prefs.json"))
+def test_the_user_file_wins_and_an_unadopted_project_copy_is_left_alone():
+    """If both say something, the user's own choice counts — and the project
+    copy is NOT deleted on their behalf. Adoption strips only what it took,
+    so nothing the user never adopted is destroyed and the move stays
+    reversible. Nothing re-reads it either: the user file has both keys, so
+    later loads never open the project file at all."""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg, prefs_file = Path(tmp) / "cfg.json", Path(tmp) / "prefs.json"
+        os.environ["FACTCAT_CONFIG"], os.environ["FACTCAT_PREFS"] = str(cfg), str(prefs_file)
+        try:
+            cfg.write_text(json.dumps({"week_start": "sunday", "reporting_timezone": "Europe/Berlin"}), encoding="utf-8")
+            prefs_file.write_text(json.dumps({"week_start": "monday", "reporting_timezone": "UTC"}), encoding="utf-8")
+            from factcat_app import prefs as prefs_mod
+
+            got = prefs_mod.load()
+            assert got["week_start"] == "monday" and got["reporting_timezone"] == "UTC"
+            left = json.loads(cfg.read_text(encoding="utf-8"))
+            assert left["week_start"] == "sunday", "an unadopted project value was destroyed"
+        finally:
+            os.environ.pop("FACTCAT_CONFIG", None)
+            os.environ.pop("FACTCAT_PREFS", None)
+
+
+def test_a_first_run_with_no_user_file_still_adopts_the_calendar():
+    """The path the review caught: with no user file at all, load() goes to
+    the first-run migration, which carries only the separator keys. Without
+    adoption on that branch too, a project week_start of sunday silently
+    became monday — every bucket moved.
+
+    Mutation: drop the _adopt_from_project call on the no-user-file branch.
+    """
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg, prefs_file = Path(tmp) / "cfg.json", Path(tmp) / "prefs.json"
+        os.environ["FACTCAT_CONFIG"], os.environ["FACTCAT_PREFS"] = str(cfg), str(prefs_file)
+        try:
+            cfg.write_text(json.dumps({"table": "a.b", "week_start": "sunday",
+                                       "reporting_timezone": "Europe/Berlin"}), encoding="utf-8")
+            assert not prefs_file.exists()
+            from factcat_app import prefs as prefs_mod
+
+            got = prefs_mod.load()
+            assert got["week_start"] == "sunday"
+            assert got["reporting_timezone"] == "Europe/Berlin"
+            left = json.loads(cfg.read_text(encoding="utf-8"))
+            assert "week_start" not in left and left["table"] == "a.b"
+        finally:
+            os.environ.pop("FACTCAT_CONFIG", None)
+            os.environ.pop("FACTCAT_PREFS", None)
+
+
+def test_a_broken_preference_value_falls_back_instead_of_breaking_every_query():
+    """_validate writes into the dict it RETURNS. It did not, so a garbage
+    timezone in the user file reached the query builder and every Events
+    request died with "must be an IANA name from Preferences".
+
+    Mutation: validate into `data` instead of `out`.
+    """
     from factcat_app import prefs as prefs_mod
 
-    (tmp_path / "cfg.json").write_text(
-        json.dumps({"week_start": "sunday", "reporting_timezone": "Europe/Berlin"}), encoding="utf-8"
-    )
-    (tmp_path / "prefs.json").write_text(
-        json.dumps({"week_start": "monday", "reporting_timezone": "UTC"}), encoding="utf-8"
-    )
-    got = prefs_mod.load()
-    assert got["week_start"] == "monday" and got["reporting_timezone"] == "UTC"
-    left = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
-    assert "week_start" not in left  # stripped either way, so this runs once
+    got = prefs_mod._validate({"reporting_timezone": "Mars/Olympus", "week_start": "caturday"})
+    assert got["reporting_timezone"] == "UTC"
+    assert got["week_start"] == "monday"
+    incoming = {"reporting_timezone": "Mars/Olympus"}
+    prefs_mod._validate(incoming)
+    assert incoming == {"reporting_timezone": "Mars/Olympus"}, "validate mutated its argument"
+
+

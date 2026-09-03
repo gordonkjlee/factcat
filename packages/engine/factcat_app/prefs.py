@@ -198,12 +198,13 @@ def _validate(data: dict[str, Any]) -> dict[str, Any]:
         else:
             style = _canonical_hour_style(style)
     out["hour_style"] = style if style in HOUR_STYLES else "3"
-    week = str(data.get("week_start") or "monday").strip().lower()
-    data["week_start"] = week if week in {"monday", "sunday"} else "monday"
+    week = str(out.get("week_start") or "monday").strip().lower()
+    out["week_start"] = week if week in {"monday", "sunday"} else "monday"
+    # Function-local: query imports prefs, so a module-level import here is a cycle.
     from .query import REPORTING_TIMEZONES
 
-    tz = str(data.get("reporting_timezone") or "UTC").strip() or "UTC"
-    data["reporting_timezone"] = tz if tz in REPORTING_TIMEZONES else "UTC"
+    tz = str(out.get("reporting_timezone") or "UTC").strip() or "UTC"
+    out["reporting_timezone"] = tz if tz in REPORTING_TIMEZONES else "UTC"
 
     return {key: out[key] for key in DEFAULTS}
 
@@ -240,23 +241,29 @@ def _strip_project_seps() -> None:
 def _adopt_from_project(data: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
     """Carry the calendar settings off the project file, once.
 
-    The first-run migration cannot do it: these moved after most people
-    already had a user file, so that branch never runs for them, and a
-    silent fall back to the defaults would move every bucket. Anything the
-    user file already states wins; the project copy is stripped either way,
-    so this is a one-shot and the next load sees nothing to adopt.
+    The first-run migration cannot be the only path: these moved after most
+    people already had a user file, so that branch never runs for them, and
+    a silent fall back to the defaults would move every bucket. This runs on
+    both load paths.
+
+    It reads the project file ONLY while the user file is still missing one
+    of the keys, so the steady state costs nothing; it takes only what the
+    user file does not already state, so a personal choice always wins; and
+    it strips only what it actually took, so nothing the user never adopted
+    is destroyed on their behalf.
     """
+    missing = [k for k in ADOPTED_KEYS if k not in raw]
+    if not missing:
+        return data
     from .config import config_path
 
     blob = _read_object(config_path()) or {}
-    present = [k for k in ADOPTED_KEYS if k in blob]
-    if not present:
+    taken = {k: blob[k] for k in missing if blob.get(k) not in (None, "")}
+    if not taken:
         return data
-    taken = {k: blob[k] for k in present if k not in raw and blob[k] not in (None, "")}
-    if taken:
-        data = _validate({**data, **taken})
-        save(data)
-    _strip_project_keys(present)
+    data = _validate({**data, **taken})
+    save(data)
+    _strip_project_keys(list(taken))
     return data
 
 
@@ -285,7 +292,8 @@ def load() -> dict[str, Any]:
     if had:
         save(data)
         _strip_project_seps()
-    return data
+    # No user file either, so the calendar has to be adopted here too.
+    return _adopt_from_project(data, {})
 
 
 def save(data: dict[str, Any]) -> None:
