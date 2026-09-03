@@ -43,6 +43,7 @@ from .layout import (
 )
 from .extras import extra_commands, install_command, run_install
 from .config import load, mapping_ready, save, warehouse_kind
+from .build import BUILD_ID, build_info
 from .filters import filter_ui
 from .sql_display import apply_sql_keyword_case, sql_chrome, sql_plain
 from . import managed as managed_mod
@@ -81,6 +82,9 @@ STATIC_DIR = APP_DIR / "static"
 DOCS_DIR = APP_DIR / "guides"
 SETUP_DOCS = {kind: DOCS_DIR / f"setup-{kind}.md" for kind in ADAPTERS}
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+# Every page carries the build, and no route can forget it: Preferences did,
+# so its staleness check silently never ran. A global, not a per-route key.
+templates.env.globals["build_id"] = BUILD_ID
 templates.env.filters["sql_chrome"] = sql_chrome
 templates.env.filters["sql_plain"] = sql_plain
 
@@ -191,6 +195,14 @@ def _catalog_error(exc: Exception, form: dict | None = None) -> JSONResponse:
             payload["missing_extra"] = kind
             payload["command"] = install_command(kind)
     return JSONResponse(payload, status_code=400)
+
+
+@app.get("/api/build")
+async def api_build() -> JSONResponse:
+    """What this process is serving. The page compares it with its own copy
+    so a tab left open across a restart says so instead of quietly showing
+    yesterday's code."""
+    return JSONResponse(build_info())
 
 
 @app.post("/api/roles")

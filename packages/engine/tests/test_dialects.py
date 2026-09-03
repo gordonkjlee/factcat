@@ -944,7 +944,6 @@ def test_missing_with_clause_is_loud_not_silent():
         transpile_with_grid("SELECT 1 AS x", "duckdb", 2)
 
 
-
 def _literal_body(stmt: str) -> str:
     """The body of the first single-quoted literal, read the way a warehouse
     reads it: the literal ends at the first quote that is not backslash
@@ -1005,3 +1004,44 @@ def test_a_relation_comment_survives_the_warehouses_own_unescaping(dialect, note
     stored = _as_the_warehouse_stores_it(body)
     assert stored == note
     assert json.loads(stored)
+
+
+def test_a_numeric_breakdown_folds_into_other_without_a_type_clash():
+    """`(other)` is a text label, so the value branches of the fold CASE are
+    cast to text. A CASE has one type: a numeric or date breakdown column
+    against '(other)' is rejected by BigQuery outright ("all THEN/ELSE
+    arguments must be coercible to a common type"), which is what an owner
+    hit on a real chart. DuckDB coerces silently, so the equivalence
+    fixtures cannot see this, and sqlglot does not type-check, so a
+    compile-only walk cannot either - the shape is the guard.
+
+    Mutation: drop the CAST from either value branch of the fold.
+    """
+    for dialect in sorted(SUPPORTED):
+        spec = EventsSpec(
+            table="events",
+            entity="entity_id",
+            event_time="occurred_at",
+            measure="total",
+            breakdowns=("amount_cents",),
+            include_other=True,
+            top_n=8,
+        )
+        sql = events_sql(spec, dialect=dialect)
+        end = sql.index("fc_fold_0")
+        fold = sql[sql.rindex("CASE", 0, end):end]
+        # Both value branches must be cast, not "at least two casts nearby":
+        # the IS NULL branch reads as redundant and is the only thing giving
+        # that arm a type, so it is the one a later edit would drop.
+        assert fold.count("THEN CAST(") == 2, (dialect, fold)
+        assert "IS NULL THEN CAST(" in " ".join(fold.split()), (dialect, fold)
+        assert "(other)" in fold, dialect
+        assert "fc_bd_0" in fold, dialect
+    # and with the fold off there is nothing to reconcile, so no cast is forced
+    plain = events_sql(
+        EventsSpec(
+            table="events", entity="entity_id", event_time="occurred_at",
+            measure="total", breakdowns=("amount_cents",), include_other=False, top_n=8,
+        )
+    )
+    assert "(other)" not in plain
