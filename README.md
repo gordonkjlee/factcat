@@ -393,8 +393,11 @@ lists every table with size and age; Drop is the only per-table action —
 building, refreshing and rebuilding are Automatic mode's job. **Mode:
 Off** stops Factcat using the indexes: charts read the full history and
 scan more, which is what turning indexing off means. It also stops every
-build, refresh, rebuild and drop, and it deletes nothing — the tables are
-left as they are and are used again when it goes back on. If a build fails (rights, cap), the chart runs on
+build, refresh, rebuild and drop, and it deletes nothing while it is off.
+Time spent off still counts toward **Drop unused after**, so switching back
+on resumes the ordinary clean-up: a column no chart has used for longer
+than that is dropped on the next Run, the same as if indexing had never
+been off. Charts you are actually running keep their indexes either way. If a build fails (rights, cap), the chart runs on
 the full history and the run row says so. Every managed table is derived
 and safe to drop; nothing lives only there.
 
@@ -416,7 +419,7 @@ and how far back from the table's own rows, matching them by name to what
 the current mapping wants — trusting that the entity, table and timestamp
 mapping have not changed underneath it, the same trust an identity remap
 already breaks. The table is charged as ordinary storage in your own
-warehouse, and it is only swept while someone is using Factcat.
+warehouse, and it is only cleaned up while someone is using Factcat.
 On Events, each **event series** is a card: event name, **measure** (and Of
 when the measure is a property), and filters. Filter operators follow the
 column type (boolean, number, date, time, timestamp, string). String rows

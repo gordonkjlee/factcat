@@ -151,7 +151,10 @@ value on more than about a quarter of recent rows) are not indexed —
 index stores text); write `CAST(x AS STRING)` as the breakdown expression to
 index one. Off stops Factcat using the indexes: charts read the full
 history and scan more. It also stops every build, refresh, rebuild and
-drop, and deletes nothing — the tables are waiting when it goes back on.
+drop, and deletes nothing while it is off. Time spent off still counts
+toward **Drop unused after**, so switching back on resumes the ordinary
+clean-up — a column no chart has used for longer than that is dropped on
+the next Run. The chart you are running keeps its index either way.
 
 The list shows size and age per table; Drop is the only per-table action
 (building, refreshing and rebuilding are Automatic mode's job). Its

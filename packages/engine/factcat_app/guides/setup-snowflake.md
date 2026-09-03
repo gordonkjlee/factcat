@@ -141,7 +141,8 @@ the column's whole history for every event name — several times what the
 chart alone would read. Snowflake also bills warehouse time rather than
 bytes, so the saving shows up as a shorter query, not a smaller bill, and a
 warm warehouse may show little. Set Mode to Off if that is not a trade you
-want. Because there is no cost preview there is no estimate chip, and so no
+want — it stops the builds and the reads together, so charts go back to
+scanning the full history. Because there is no cost preview there is no estimate chip, and so no
 "Indexing…" copy while it runs; one line under the Run button afterwards
 says the index is in place. **Refresh when older than**
 decides when newer rows are folded in, **Drop unused after** drops columns
@@ -150,8 +151,11 @@ in the background, and never for a column the current chart asks for.
 **Late-arrival lookback** is how late a
 row can land after its event time. Off stops Factcat using the indexes:
 charts read the full history and scan more. It also stops every build,
-refresh,
-rebuild or drop; an existing index is still read.
+refresh, rebuild and drop, and deletes nothing while it is off. Time spent
+off still counts toward **Drop unused after**, so switching back on
+resumes the ordinary clean-up — a column no chart has used for longer than
+that is dropped on the next Run. The chart you are running keeps its index
+either way.
 
 Columns that are not text are left alone (the index stores text); write
 `CAST(x AS STRING)` as the breakdown expression to index one.

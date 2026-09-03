@@ -1008,6 +1008,68 @@ def test_the_sweep_still_evicts_a_column_no_chart_wants():
     assert ran and dropped == ["utm"]
 
 
+def test_an_expression_slot_earns_no_shelter_from_the_sweep():
+    """Demand only counts when it is SERVABLE. `build_plan` routes a slot
+    filled from a SQL expression to live before it ever looks at the
+    registry, so sheltering that column would keep a cache alive on demand
+    the Run can never satisfy - the opposite of demand-shaped.
+
+    Mutation: drop the `fill != "expr"` filter from `wanted`.
+    """
+    form = _form()
+    form["breakdowns"] = [{**form["breakdowns"][0],
+                           "fill_from_event": "",
+                           "fill_from_expr": "plan IS NOT NULL"}]
+    # the chart really does name this column, and it really is past the TTL
+    reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat())
+    assert build_plan({**form, "managed_tables": reg}, _Run(), now=NOW).columns[0].action == "live"
+    _r, dropped, ran = sweep({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert ran and dropped == ["plan"], "an unservable slot sheltered the column"
+
+
+def test_a_backfill_that_landed_no_rows_is_not_reported_as_indexed():
+    """`built` is what the run row prints. A backfill that recorded nothing
+    leaves the chart on the live path, so saying "Indexed `plan`" there is
+    false - the note must describe what happened, not what was attempted.
+
+    Mutation: append to `built` before the attach/live decision.
+    """
+    form = _form()
+    plan = build_plan(form, _Run(), now=NOW, allow_probe=True)
+    assert plan.columns[0].action == "build"
+    # bookmark=None: the backfill inserted nothing, so there is no index to read
+    apply_plan(plan, form, _Run(bookmark=None), now=NOW)
+    assert plan.columns[0].action == "live"
+    assert plan.built == [], "a run that fell back to live claimed it had indexed"
+    assert built_note(plan) == ""
+
+
+def test_a_rebuilt_column_says_rebuilt_not_indexed():
+    """A repaired column was ALREADY indexed and the user is paying for a
+    full-history backfill they did not ask for, so the verb differs. Same
+    grammar, same backticked label - not a second sentence family.
+
+    Mutation: render `repaired` labels with the "Indexed" verb.
+    """
+    form = _form()
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 500}
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    apply_plan(plan, {**form, "managed_tables": reg},
+               _Run(bookmark=NOW - timedelta(days=1), rows=9), now=NOW)
+    assert plan.repaired == ["plan"] and plan.built == ["plan"]
+    note = built_note(plan)
+    assert note == "Rebuilt `plan` · later runs read less", note
+    assert "Indexed" not in note
+    # a first build still says Indexed, and a run with both says both
+    first = Plan([], None, None, {}, settings(form))
+    first.built = ["utm"]
+    assert built_note(first) == "Indexed `utm` · later runs read less"
+    both = Plan([], None, None, {}, settings(form))
+    both.built, both.repaired = ["utm", "plan"], ["plan"]
+    assert built_note(both) == "Indexed `utm` · Rebuilt `plan` · later runs read less"
+
+
 def test_a_stale_mapping_does_not_shelter_a_column_from_the_sweep():
     """Demand only counts when it is servable. If the mapping moved, the
     entry would be rebuilt rather than attached, so it earns no shelter.
@@ -1033,7 +1095,7 @@ def test_rows_deleted_behind_us_rebuild_instead_of_appending_a_tail():
     """
     form = _form()
     reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
-    reg["columns"]["plan"]["row_counts"] = {"subscription_started": 500}
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 500}
     plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
     assert plan.columns[0].action == "refresh"
     # the index now reports far fewer rows than we recorded: something deleted them
@@ -1045,7 +1107,7 @@ def test_rows_deleted_behind_us_rebuild_instead_of_appending_a_tail():
     inserts = [u for u in ups if u.startswith("INSERT")]
     assert inserts and "FC_BOOKMARK" not in inserts[0], "it appended a tail instead of rebuilding whole"
     # and the fresh counts are stamped for next time
-    assert registry["columns"]["plan"]["row_counts"] == {"subscription_started": 9}
+    assert registry["columns"]["plan"]["row_counts"] == {managed._count_key("subscription_started"): 9}
 
 
 def test_an_ordinary_refresh_does_not_read_as_tampering():
@@ -1058,14 +1120,14 @@ def test_an_ordinary_refresh_does_not_read_as_tampering():
     """
     form = _form()
     reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
-    reg["columns"]["plan"]["row_counts"] = {"subscription_started": 5}
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 5}
     plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
     run = _Run(bookmark=NOW - timedelta(days=1), rows=5, rows_after=12)
     registry = apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
     assert plan.repaired == [], "an ordinary refresh was treated as tampering"
     ups = [c.upper().strip() for c in run.calls]
     assert not any(u.startswith("DELETE FROM") for u in ups), "it rebuilt a healthy column"
-    assert registry["columns"]["plan"]["row_counts"] == {"subscription_started": 12}
+    assert registry["columns"]["plan"]["row_counts"] == {managed._count_key("subscription_started"): 12}
 
 
 def test_an_event_name_that_vanished_entirely_counts_as_deletion():
@@ -1080,13 +1142,86 @@ def test_an_event_name_that_vanished_entirely_counts_as_deletion():
     reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
     # `subscription_started` is untouched and still reports 5; `trial_started`
     # is gone from the table altogether.
-    reg["columns"]["plan"]["row_counts"] = {"subscription_started": 5, "trial_started": 40}
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 5,
+                                            managed._count_key("trial_started"): 40}
     plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
     assert plan.columns[0].action == "refresh"
     run = _Run(bookmark=NOW - timedelta(days=1), rows=5)
     apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
     assert plan.repaired == ["plan"], "a whole event name disappeared and went unnoticed"
     assert any(c.upper().strip().startswith("DELETE FROM") for c in run.calls)
+
+
+def test_a_null_event_name_and_an_empty_one_are_different_buckets():
+    """A caller's event column can hold BOTH NULL and the empty string, and
+    both warehouses distinguish them. Folding NULL to "" put two GROUP BY
+    rows in one bucket - last row wins, and GROUP BY order is not
+    guaranteed - so the same index read as 900 rows or as 3 depending on the
+    order the warehouse happened to return. False negative in one direction
+    (800 rows vanish unnoticed, defeating the whole detector), false
+    positive in the other (a healthy column rebuilt from full history on
+    every refresh).
+
+    Mutation: key NULL as "" instead of through `_count_key`.
+    """
+    assert managed._count_key(None) != managed._count_key("")
+    both = {}
+    for name, n in [(None, 900), ("", 3)]:
+        both[managed._count_key(name)] = n
+    assert both == {"-": 900, "=": 3}, both
+    # order must not change the result
+    other = {}
+    for name, n in [("", 3), (None, 900)]:
+        other[managed._count_key(name)] = n
+    assert other == both
+
+    # and the two are compared independently: NULL rows lost, empty ones intact
+    fresh = {managed._count_key(None): 100, managed._count_key(""): 3}
+    assert managed._rows_went_missing(both, fresh) is True
+    assert managed._rows_went_missing(both, dict(both)) is False
+
+
+def test_an_unreadable_count_says_nothing_rather_than_crying_deletion():
+    """Dropping one unparseable name from the read would make it look
+    deleted on the next comparison and cost a full-history rebuild of a
+    healthy column. One bad count makes the whole read unusable, and the
+    safe answer is silence - no repair now, nothing stamped, compare again
+    next time.
+
+    Mutation: swallow the bad value and keep the partial dict.
+    """
+    class _Bad(_Run):
+        def __call__(self, sql, *, dry_run=False):
+            res = super().__call__(sql, dry_run=dry_run)
+            if "FC_BOOKMARK" in sql.upper() and res.rows:
+                res.rows[0]["fc_rows"] = "not a number"
+            return res
+
+    form = _form()
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 500}
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    run = _Bad(bookmark=NOW - timedelta(days=1))
+    registry = apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
+    assert plan.repaired == [], "an unreadable count was treated as a deletion"
+    assert registry["columns"]["plan"]["row_counts"] == {}, "a partial picture was stamped"
+
+
+def test_a_column_with_no_bookmark_earns_no_shelter_from_the_sweep():
+    """The other half of servable demand. An entry with no bookmark has
+    nothing to attach to, so the chart asking for it does not make it
+    servable - sheltering it keeps a cache alive that can never be read.
+
+    Mutation: drop the `entry.get("bookmark")` conjunct from the guard.
+    """
+    form = _form()
+    reg = _registry(form, last_used_at=(NOW - timedelta(days=61)).isoformat(),
+                    bookmark=None)
+    # the chart does name this column, and the mapping matches
+    assert "plan" in {c.key for c in expensive_columns(form)}
+    assert reg["fp"] == config_fingerprint(form)
+    _r, dropped, ran = sweep({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert ran and dropped == ["plan"], "a column with nothing to attach to was sheltered"
 
 
 def test_a_column_with_no_recorded_counts_is_not_treated_as_tampered():
