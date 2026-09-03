@@ -403,8 +403,13 @@ they stay until the daily sweep drops it (**Drop unused after**, 60 days).
 If an erasure has to be immediate, Drop the column on Setup or drop the
 table. Two changes the index cannot see are a value rewritten in place with
 no change in row count, and an identity remap; Drop is the remedy for both.
-The table is charged as ordinary storage in your own warehouse, and it is
-only swept while someone is using Factcat.
+Bookkeeping is local to this machine (`.factcat.json`): if it is ever lost
+while the table already holds real data, Factcat re-derives which columns
+and how far back from the table's own rows, matching them by name to what
+the current mapping wants — trusting that the entity, table and timestamp
+mapping have not changed underneath it, the same trust an identity remap
+already breaks. The table is charged as ordinary storage in your own
+warehouse, and it is only swept while someone is using Factcat.
 On Events, each **event series** is a card: event name, **measure** (and Of
 when the measure is a property), and filters. Filter operators follow the
 column type (boolean, number, date, time, timestamp, string). String rows

@@ -77,9 +77,12 @@ DEFAULTS: dict[str, Any] = {
     "write_dataset": "",
     "write_database": "",
     "write_schema": "",
-    # Factcat-managed tables (item 12): the column index and its knobs.
-    # ``managed_tables`` is a status MIRROR of the registry the index table
-    # carries in its own description; the warehouse copy is the authority.
+    # Factcat-managed tables: the column index and its knobs.
+    # ``managed_tables`` IS the registry - columns,
+    # bookmarks, pin state, use counts, the config fingerprint - written
+    # the moment each column's build finishes. Single-install scope, on
+    # purpose: nothing in the warehouse describes this beyond the rows
+    # themselves any more.
     "managed_mode": "auto",
     "managed_drop_days": 60,
     "managed_refresh_days": 7,

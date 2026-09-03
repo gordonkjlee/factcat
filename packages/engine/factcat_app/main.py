@@ -690,16 +690,31 @@ async def api_run(request: Request) -> JSONResponse:
         extra_save: dict[str, Any] = {}
         if managed_mod.index_table(form) is not None:
             if managed_mod.registry_from_form(form).get("columns"):
-                # The table's own description is the authority: a dropped
-                # table or a new destination must not inherit the mirror's
-                # bookmarks - and the sweep below must plan from it too, or a
+                # The mirror is trusted directly - reconcile
+                # only protects against a destination change or the table
+                # having been dropped out of band, both cheap checks - and
+                # the sweep below must plan from its result too, or a
                 # workstation that has not charted for the TTL would drop a
                 # column another one uses every day.
-                reconciled = await run_in_threadpool(managed_mod.reconcile_registry, form)
+                #
+                # Left as-is (not "always reconcile even on an empty
+                # mirror"): that would make recovery reachable from the
+                # primary Run path too, not just Setup's list view - real
+                # value - but it adds a warehouse
+                # round trip to EVERY Run with a destination set, including
+                # ones that have never indexed anything, and doing that
+                # revealed a matching gap in this test suite: several
+                # /api/run tests set a destination without mocking `_stats`,
+                # so the suite went from ~20s to ~85s hitting real network
+                # calls that happened to fail gracefully - exactly the class
+                # of bug this session spent hours chasing elsewhere. Not
+                # worth reintroducing for a documented, non-blocking gap.
+                reconciled = await run_in_threadpool(managed_mod.reconcile_registry, form, warehouse.run)
                 form = {**form, "managed_tables": reconciled}
                 extra_save["managed_tables"] = reconciled
             registry, _dropped, ran = await run_in_threadpool(
-                managed_mod.sweep, form, warehouse.run
+                managed_mod.sweep, form, warehouse.run,
+                persist=lambda reg: save({"managed_tables": reg}),
             )
             if ran:
                 form = {**form, "managed_tables": registry}
@@ -712,13 +727,17 @@ async def api_run(request: Request) -> JSONResponse:
             allow_probe=True,
         )
         if plan.builds():
-            registry = await run_in_threadpool(managed_mod.apply_plan, plan, form, warehouse.run)
+            # `persist` writes `.factcat.json` after EACH column's own rows
+            # land, inside apply_plan's loop - not batched behind the whole
+            # plan, and not batched behind the chart query below either
+            # (a cap rejection is the ordinary way that fails). Batching
+            # this is exactly the bug that lost a finished backfill's
+            # record: the rows land while the record of them never does.
+            registry = await run_in_threadpool(
+                managed_mod.apply_plan, plan, form, warehouse.run,
+                persist=lambda reg: save({"managed_tables": reg}),
+            )
             extra_save["managed_tables"] = registry
-            # Persist now. The chart query below can fail (a cap rejection is
-            # the ordinary case), and batching this behind it would lose the
-            # record of an index that already exists - so the next run would
-            # build it again, appending a second copy of the whole history.
-            save({"managed_tables": registry})
             managed_failed = managed_mod.failure_note(plan)
         sql = events_sql_from_form(form, managed=plan)
         fell_back = False
@@ -757,7 +776,7 @@ async def api_run(request: Request) -> JSONResponse:
                         # figure, never the rows already fetched.
                         after = None
                 managed_note = managed_mod.built_note(plan, bytes_after=after)
-            registry = await run_in_threadpool(managed_mod.bump_usage, plan, form, warehouse.run)
+            registry = await run_in_threadpool(managed_mod.bump_usage, plan)
             if plan.attachable():
                 extra_save["managed_tables"] = registry
         # A density probe costs real bytes (PROBE_DAYS of one column) and is
@@ -817,14 +836,18 @@ async def api_run(request: Request) -> JSONResponse:
 
 @app.post("/api/managed")
 async def api_managed(request: Request) -> JSONResponse:
-    """The Managed tables section: settings, rows, sizes. Metadata calls
-    only; the registry mirror in the config file is refreshed from the
-    warehouse copy, which is the authority."""
+    """The Managed tables section: settings, rows, sizes. The registry
+    mirror in the config file is trusted directly; a warehouse
+    round trip only happens when reconciliation actually needs one - a
+    destination change, or the table gone out of band - both cheap, plus
+    the one metadata call this endpoint always makes for the size display."""
     form = await request.json()
     cfg = load()
     form = {**cfg, **form}
     try:
-        payload = await run_in_threadpool(managed_mod.list_payload, form)
+        conn = connection_from_form(form)
+        warehouse = await run_in_threadpool(connect, form_kind(form), **conn)
+        payload = await run_in_threadpool(managed_mod.list_payload, form, warehouse.run)
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         return _catalog_error(exc, form)
     if payload.get("registry") is not None:
@@ -843,7 +866,9 @@ async def api_managed_action(request: Request) -> JSONResponse:
         conn = connection_from_form(merged)
         warehouse = await run_in_threadpool(connect, form_kind(merged), **conn)
         registry = await run_in_threadpool(
-            managed_mod.apply_action, merged, warehouse.run, action=action, key=str(form.get("key") or "")
+            managed_mod.apply_action, merged, warehouse.run,
+            action=action, key=str(form.get("key") or ""),
+            persist=lambda reg: save({"managed_tables": reg}),
         )
     except (ValueError, AdapterError, LookupError, ImportError) as exc:
         if isinstance(exc, ImportError):
@@ -853,8 +878,9 @@ async def api_managed_action(request: Request) -> JSONResponse:
         why = str(exc).rstrip(".")
         # A ValueError is raised before any statement, so the table really is
         # untouched. An AdapterError means the DELETE failed - and the
-        # registry is written first, so the column is already out of the
-        # record and only its rows remain. Saying "unchanged" there is false.
+        # mirror is written first (locally, via `persist`), so the column
+        # is already out of the record and only its rows remain. Saying
+        # "unchanged" there is false.
         after = (
             "The table is unchanged."
             if isinstance(exc, (ValueError, LookupError))

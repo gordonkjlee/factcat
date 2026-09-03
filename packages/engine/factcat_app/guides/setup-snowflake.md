@@ -171,8 +171,12 @@ list says why.
 The list shows size and age per table (from `SHOW TABLES`); Drop is the
 only per-table action (building, refreshing and rebuilding are Automatic
 mode's job). Its bookkeeping
-lives in the table's comment; a mapping change rebuilds, a new event name
-with backfilled history is back-filled on the next refresh, a name whose
-row count shrank is rebuilt. Needs CREATE TABLE on the schema (the rights
-check above). A failed build never blocks a chart: it runs on the full
+lives in `.factcat.json` on this machine, written the moment each column's
+build finishes; a mapping change rebuilds, a new event name with
+backfilled history is back-filled on the next refresh, a name whose row
+count shrank is rebuilt. If that file is ever lost while the table already
+holds real data, Factcat re-derives which columns and how far back from
+the table's own rows, matched by name — trusting the entity, table and
+timestamp mapping have not changed underneath it, single-install only.
+Needs CREATE TABLE on the schema (the rights check above). A failed build never blocks a chart: it runs on the full
 history and the run row says why.
