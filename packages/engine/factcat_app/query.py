@@ -450,12 +450,14 @@ def _window_time_lhs(event_time: str, form: dict[str, Any]) -> str:
     return event_time
 
 
-def _ps(expr: str, unit: str, form: dict[str, Any], n: int) -> str:
+def _ps(expr: str, unit: str, form: dict[str, Any], n: int, kind: str = "") -> str:
+    """``kind`` overrides the column's own time kind. Pass it for anything
+    built on ``fc_event_ts``, which is already the canonical instant."""
     return (
         f"factcat_period_start_shifted({expr}, '{unit}', "
         f"'{_week_start(form)}', {n}, "
         f"{_sql_string(_reporting_timezone(form))}, "
-        f"'{_event_time_kind(form)}')"
+        f"'{kind or _event_time_kind(form)}')"
     )
 
 
@@ -1865,14 +1867,22 @@ def spec_from_form(
 
     tz = _sql_string(_reporting_timezone(form))
     kind = _event_time_kind(form)
+    # fc_event_ts is ALREADY the canonical instant: `as_instant` applied the
+    # column's own zone (or its epoch unit) one CTE earlier. Handing the same
+    # kind to the bucket converts a second time - `TIMESTAMP(TIMESTAMP, tz)`
+    # or `TIMESTAMP_SECONDS(TIMESTAMP)` - which BigQuery rejects outright, so
+    # a DATETIME mapped with a named zone, or any Unix-epoch column, could not
+    # chart at all. "reporting" is the one kind that keeps its name here: that
+    # branch reads wall-clock numbers, which the cast to an instant preserves.
+    bucket_kind = kind if kind == "reporting" else "instant"
     if grain == "hour":
-        bucket = f"factcat_hour_trunc(fc_event_ts, {tz}, '{kind}')"
+        bucket = f"factcat_hour_trunc(fc_event_ts, {tz}, '{bucket_kind}')"
     elif grain == "hour_of_day":
-        bucket = f"factcat_hour_of_day(fc_event_ts, {tz}, '{kind}')"
+        bucket = f"factcat_hour_of_day(fc_event_ts, {tz}, '{bucket_kind}')"
     elif grain == "day_of_week":
-        bucket = f"factcat_dow(fc_event_ts, {tz}, '{kind}')"
+        bucket = f"factcat_dow(fc_event_ts, {tz}, '{bucket_kind}')"
     else:
-        bucket = f"CAST({_ps('fc_event_ts', grain, form, 0)} AS DATE)"
+        bucket = f"CAST({_ps('fc_event_ts', grain, form, 0, bucket_kind)} AS DATE)"
     return EventsSpec(
         table=table,
         entity=entity,
