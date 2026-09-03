@@ -21,6 +21,7 @@ from factcat.warehouses.bigquery import DEFAULT_MAXIMUM_BYTES_BILLED
 from factcat.warehouses.snowflake import passphrase_from_env
 from factcat._emit import transpile
 from factcat.dialects import (
+    UNIX_KINDS,
     as_text,
     create_or_replace_relation,
     json_value_sql,
@@ -450,14 +451,16 @@ def _window_time_lhs(event_time: str, form: dict[str, Any]) -> str:
     return event_time
 
 
-def _ps(expr: str, unit: str, form: dict[str, Any], n: int, kind: str = "") -> str:
-    """``kind`` overrides the column's own time kind. Pass it for anything
-    built on ``fc_event_ts``, which is already the canonical instant."""
+def _ps(
+    expr: str, unit: str, form: dict[str, Any], n: int, kind: str | None = None
+) -> str:
+    """``kind`` overrides the column's own time kind. None means "use the
+    column's"; an empty string is a caller error, not a fallback."""
     return (
         f"factcat_period_start_shifted({expr}, '{unit}', "
         f"'{_week_start(form)}', {n}, "
         f"{_sql_string(_reporting_timezone(form))}, "
-        f"'{kind or _event_time_kind(form)}')"
+        f"'{_event_time_kind(form) if kind is None else kind}')"
     )
 
 
@@ -1867,14 +1870,21 @@ def spec_from_form(
 
     tz = _sql_string(_reporting_timezone(form))
     kind = _event_time_kind(form)
-    # fc_event_ts is ALREADY the canonical instant: `as_instant` applied the
-    # column's own zone (or its epoch unit) one CTE earlier. Handing the same
-    # kind to the bucket converts a second time - `TIMESTAMP(TIMESTAMP, tz)`
-    # or `TIMESTAMP_SECONDS(TIMESTAMP)` - which BigQuery rejects outright, so
-    # a DATETIME mapped with a named zone, or any Unix-epoch column, could not
-    # chart at all. "reporting" is the one kind that keeps its name here: that
-    # branch reads wall-clock numbers, which the cast to an instant preserves.
-    bucket_kind = kind if kind == "reporting" else "instant"
+    # `as_instant` has already applied the column's own zone or epoch one CTE
+    # earlier, so for those two kinds the bucket must not apply it again:
+    # BigQuery rejects `TIMESTAMP(TIMESTAMP, STRING)` outright, and a DATETIME
+    # with a named zone could not chart at all. The replacement is "utc", NOT
+    # "instant", and that is a dialect fact: on BigQuery `as_instant` yields a
+    # real TIMESTAMP, but on Snowflake it yields TIMESTAMP_NTZ holding UTC
+    # wall clock. "utc" describes both - a no-op cast on BigQuery, and
+    # Snowflake's explicit CONVERT_TIMEZONE('UTC', tz, x) - whereas "instant"
+    # would send Snowflake down the single-target form that reads NTZ as
+    # SESSION-local: silently wrong numbers rather than an error.
+    # Every other kind keeps its name. "reporting" denotes wall clock the cast
+    # preserves, and "instant" is a column that was already an instant, whose
+    # single-target CONVERT_TIMEZONE is deliberate and separately tested.
+    converted = kind in UNIX_KINDS or "/" in kind
+    bucket_kind = "utc" if converted else kind
     if grain == "hour":
         bucket = f"factcat_hour_trunc(fc_event_ts, {tz}, '{bucket_kind}')"
     elif grain == "hour_of_day":

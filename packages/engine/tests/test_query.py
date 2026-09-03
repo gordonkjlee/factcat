@@ -71,7 +71,7 @@ def test_does_not_default_entity_to_user_id():
 
 def test_week_bucket_uses_explicit_week_start():
     spec = spec_from_form(_form(grain="week"))
-    assert _shifted("fc_event_ts", "week", kind="instant") in spec.bucket
+    assert _shifted("fc_event_ts", "week") in spec.bucket
     sql = events_sql(spec, dialect="bigquery")
     assert "WEEK(MONDAY)" in sql.upper().replace(" ", "")
     assert "factcat_period_start_shifted" not in sql
@@ -110,7 +110,7 @@ def test_today_is_current_calendar_day():
 def test_this_week_by_day_keeps_week_window():
     spec = spec_from_form(_form(grain="day", range_mode="this", range_unit="week"))
     assert _shifted("current_date", "week") in spec.where
-    assert spec.bucket == f"CAST({_shifted('fc_event_ts', 'day', kind='instant')} AS DATE)"
+    assert spec.bucket == f"CAST({_shifted('fc_event_ts', 'day')} AS DATE)"
 
 
 def test_week_grain_this_day_bumps_to_this_week():
@@ -630,12 +630,12 @@ def test_event_value_without_column_is_rejected():
 
 def test_month_bucket_is_date_trunc_sugar():
     spec = spec_from_form(_form(grain="month"))
-    assert spec.bucket == f"CAST({_shifted('fc_event_ts', 'month', kind='instant')} AS DATE)"
+    assert spec.bucket == f"CAST({_shifted('fc_event_ts', 'month')} AS DATE)"
 
 
 def test_day_bucket_casts_to_date():
     spec = spec_from_form(_form(grain="day"))
-    assert spec.bucket == f"CAST({_shifted('fc_event_ts', 'day', kind='instant')} AS DATE)"
+    assert spec.bucket == f"CAST({_shifted('fc_event_ts', 'day')} AS DATE)"
     sql = events_sql(spec, dialect="bigquery")
     assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'UTC')" in sql.replace("`", "")
     assert "DATE_TRUNC" not in sql.upper()
@@ -1930,7 +1930,7 @@ def test_no_breakdown_when_column_blank():
 
 def test_berlin_timestamp_uses_date_in_that_zone():
     spec = spec_from_form(_form(reporting_timezone="Europe/Berlin"))
-    assert _shifted("fc_event_ts", "day", tz="Europe/Berlin", kind="instant") in spec.bucket
+    assert _shifted("fc_event_ts", "day", tz="Europe/Berlin") in spec.bucket
     sql = events_sql(spec, dialect="bigquery")
     assert "DATE(CAST(fc_event_ts AS TIMESTAMP), 'Europe/Berlin')" in sql.replace("`", "")
     assert "CURRENT_DATE('Europe/Berlin')" in sql
@@ -2644,49 +2644,61 @@ def test_breakdown_anchor_kind_matches_event_time_kind():
     assert "'instant'" in inst.until
 
 
-def test_a_zoned_or_epoch_column_is_not_converted_twice_for_the_bucket():
-    """`fc_event_ts` is already the canonical instant, so the bucket must not
-    apply the column's own zone or epoch a second time. On BigQuery the
-    double conversion is a hard error - TIMESTAMP(TIMESTAMP, STRING) and
-    TIMESTAMP_SECONDS(TIMESTAMP) have no matching signature - so a DATETIME
-    mapped with a named zone, or any Unix-epoch column, could not chart at
-    all. Reported from a live 400.
-
-    Mutation: pass `kind` instead of `bucket_kind` in spec_from_form.
-    """
-    for tz_setting, epoch in (("Europe/Berlin", ""), ("utc", "seconds"), ("utc", "milliseconds")):
-        for grain in ("day", "week", "month", "hour", "hour_of_day", "day_of_week"):
-            form = {
-                "kind": "bigquery", "project": "p", "location": "EU",
-                "table": "analytics.events", "entity": "account_id",
-                "event_time": "occurred_at", "event_time_tz": tz_setting,
-                "event_time_epoch": epoch, "reporting_timezone": "UTC",
-                "event_column": "event_name", "event_values": ["login"],
-                "measure": "total", "grain": grain, "lookback_days": 30,
-            }
-            spec = spec_from_form(form)
-            where = f"{tz_setting}/{epoch or 'none'}/{grain}"
-            assert "fc_event_ts" in spec.bucket, where
-            # the bucket names the instant, never re-applies the source kind
-            assert tz_setting not in spec.bucket or tz_setting == "utc", where
-            assert "seconds" not in spec.bucket and "milliseconds" not in spec.bucket, where
-            sql = events_sql_from_form(form)
-            for bad in ("TIMESTAMP(fc_event_ts", "TIMESTAMP_SECONDS(fc_event_ts",
-                        "TIMESTAMP_MILLIS(fc_event_ts"):
-                assert bad not in sql, f"{where}: {bad} - the instant is converted twice"
-
-
-def test_a_reporting_zone_column_still_reads_its_wall_clock():
-    """The one kind that keeps its name on the bucket: `reporting` means the
-    stored wall clock is already in the reporting zone, and the cast to an
-    instant preserves those numbers, so the bucket must still read them as
-    wall clock rather than as an instant."""
+def _tz_form(kind, tz="utc", epoch="", grain="day"):
     form = {
-        "kind": "bigquery", "project": "p", "location": "EU",
-        "table": "analytics.events", "entity": "account_id",
-        "event_time": "occurred_at", "event_time_tz": "reporting",
-        "reporting_timezone": "Europe/London", "event_column": "event_name",
-        "event_values": ["login"], "measure": "total", "grain": "day",
-        "lookback_days": 30,
+        "kind": kind, "project": "p", "location": "EU", "table": "analytics.events",
+        "entity": "account_id", "event_time": "occurred_at", "event_time_tz": tz,
+        "event_time_epoch": epoch, "reporting_timezone": "Europe/Berlin",
+        "event_column": "event_name", "event_values": ["login"], "measure": "total",
+        "grain": grain, "lookback_days": 30,
     }
-    assert "'reporting'" in spec_from_form(form).bucket
+    if kind == "snowflake":
+        form.update(account="a", user="u", warehouse="w", database="ANALYTICS",
+                    schema="MARTS", private_key_path="k", table="ANALYTICS.MARTS.EVENTS")
+    return form
+
+
+def test_a_zoned_or_epoch_column_is_not_converted_twice_for_the_bucket():
+    """`as_instant` already applied the column's zone or epoch one CTE
+    earlier, so the bucket must not apply it again. On BigQuery the second
+    conversion is a hard error - `TIMESTAMP(TIMESTAMP, STRING)` has no
+    matching signature - so a DATETIME mapped with a named zone, and every
+    Unix-epoch column, could not chart at all, at any grain. Reported from a
+    live 400.
+
+    Mutation: drop the `converted` branch in spec_from_form.
+    """
+    for dialect in ("bigquery", "snowflake"):
+        for label, tz, epoch in (("named zone", "Europe/Berlin", ""),
+                                 ("epoch seconds", "utc", "seconds"),
+                                 ("epoch millis", "utc", "milliseconds")):
+            for grain in ("day", "week", "month", "hour", "hour_of_day", "day_of_week"):
+                sql = events_sql_from_form(_tz_form(dialect, tz, epoch, grain))
+                where = f"{dialect}/{label}/{grain}"
+                for bad in ("TIMESTAMP(fc_event_ts,", "TIMESTAMP_SECONDS(fc_event_ts",
+                            "TIMESTAMP_MILLIS(fc_event_ts",
+                            "CONVERT_TIMEZONE('Europe/Berlin', fc_event_ts"):
+                    assert bad not in sql, f"{where}: {bad} converts the instant twice"
+
+
+def test_the_bucket_normalises_only_the_kinds_as_instant_converted():
+    """"utc" is the right downstream kind, not "instant", and that is a
+    dialect fact: on BigQuery `as_instant` yields a real TIMESTAMP, but on
+    Snowflake it yields TIMESTAMP_NTZ holding UTC wall clock. "utc" reads
+    both correctly; "instant" would send Snowflake down the single-target
+    CONVERT_TIMEZONE that treats NTZ as SESSION-local - silently wrong
+    numbers rather than an error.
+
+    The kinds `as_instant` did NOT convert keep their own name: a column that
+    was already an instant still gets the single-target form (pinned by
+    test_snowflake_instant_kind_emits_two_arg_convert), and "reporting" still
+    reads wall clock.
+    """
+    sf_named = events_sql_from_form(_tz_form("snowflake", "Europe/Berlin"))
+    assert "CONVERT_TIMEZONE('UTC', 'Europe/Berlin', fc_event_ts)" in sf_named
+    sf_instant = events_sql_from_form(_tz_form("snowflake", "instant"))
+    assert "CONVERT_TIMEZONE('Europe/Berlin', fc_event_ts)" in sf_instant
+    assert "CONVERT_TIMEZONE('UTC', 'Europe/Berlin', fc_event_ts)" not in sf_instant
+    for dialect in ("bigquery", "snowflake"):
+        reporting = events_sql_from_form(_tz_form(dialect, "reporting"))
+        assert "CAST(fc_event_ts AS DATE)" in reporting, dialect
