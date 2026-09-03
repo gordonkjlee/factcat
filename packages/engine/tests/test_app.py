@@ -2439,7 +2439,9 @@ def test_every_page_states_the_build_it_came_from(monkeypatch, tmp_path):
     from pathlib import Path
     assert info.json()["root_id"] == root_id_for(Path(__file__).resolve().parents[1])
     assert "root" not in info.json() and "pid" not in info.json()  # no layout, no process id
-    for page in ("/events", "/setup"):
+    # every page that extends the base, not just the two that pass a context:
+    # Preferences builds its own and silently had no check at all
+    for page in ("/events", "/setup", "/preferences"):
         html = client.get(page).text
         assert f'window.FACTCAT_BUILD = "{BUILD_ID}"' in html, page
         assert 'id="stale-build"' in html, page

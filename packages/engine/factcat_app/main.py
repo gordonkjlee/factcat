@@ -80,6 +80,9 @@ STATIC_DIR = APP_DIR / "static"
 DOCS_DIR = APP_DIR / "guides"
 SETUP_DOCS = {kind: DOCS_DIR / f"setup-{kind}.md" for kind in ADAPTERS}
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
+# Every page carries the build, and no route can forget it: Preferences did,
+# so its staleness check silently never ran. A global, not a per-route key.
+templates.env.globals["build_id"] = BUILD_ID
 templates.env.filters["sql_chrome"] = sql_chrome
 templates.env.filters["sql_plain"] = sql_plain
 
@@ -124,7 +127,6 @@ def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLRespon
             },
             "filter_ui": filter_ui(user),
             "mapping_ready": mapping_ready(cfg),
-            "build_id": BUILD_ID,
         },
     )
 
@@ -179,7 +181,6 @@ def setup(request: Request) -> HTMLResponse:
             "extra_commands": extra_commands(),
             "catalog_steps_by_kind": catalog_steps_by_kind(),
             "mapping_ready": mapping_ready(cfg),
-            "build_id": BUILD_ID,
         },
     )
 
