@@ -964,10 +964,14 @@ def test_a_numeric_breakdown_folds_into_other_without_a_type_clash():
             top_n=8,
         )
         sql = events_sql(spec, dialect=dialect)
-        fold = sql[sql.index("fc_fold_0") - 400 : sql.index("fc_fold_0")]
+        end = sql.index("fc_fold_0")
+        fold = sql[sql.rindex("CASE", 0, end):end]
+        # Both value branches must be cast, not "at least two casts nearby":
+        # the IS NULL branch reads as redundant and is the only thing giving
+        # that arm a type, so it is the one a later edit would drop.
+        assert fold.count("THEN CAST(") == 2, (dialect, fold)
+        assert "IS NULL THEN CAST(" in " ".join(fold.split()), (dialect, fold)
         assert "(other)" in fold, dialect
-        # both value branches carry a cast to the label's own type
-        assert fold.upper().count("CAST(") >= 2, (dialect, fold)
         assert "fc_bd_0" in fold, dialect
     # and with the fold off there is nothing to reconcile, so no cast is forced
     plain = events_sql(
