@@ -42,6 +42,7 @@ from .layout import (
 )
 from .extras import extra_commands, install_command, run_install
 from .config import load, mapping_ready, save, warehouse_kind
+from .build import BUILD_ID, build_info
 from .filters import filter_ui
 from .sql_display import apply_sql_keyword_case, sql_chrome, sql_plain
 from . import prefs as prefs_mod
@@ -123,6 +124,7 @@ def _page(request: Request, template: str, screen: str, cfg: dict) -> HTMLRespon
             },
             "filter_ui": filter_ui(user),
             "mapping_ready": mapping_ready(cfg),
+            "build_id": BUILD_ID,
         },
     )
 
@@ -177,6 +179,7 @@ def setup(request: Request) -> HTMLResponse:
             "extra_commands": extra_commands(),
             "catalog_steps_by_kind": catalog_steps_by_kind(),
             "mapping_ready": mapping_ready(cfg),
+            "build_id": BUILD_ID,
         },
     )
 
@@ -189,6 +192,14 @@ def _catalog_error(exc: Exception, form: dict | None = None) -> JSONResponse:
             payload["missing_extra"] = kind
             payload["command"] = install_command(kind)
     return JSONResponse(payload, status_code=400)
+
+
+@app.get("/api/build")
+async def api_build() -> JSONResponse:
+    """What this process is serving. The page compares it with its own copy
+    so a tab left open across a restart says so instead of quietly showing
+    yesterday's code."""
+    return JSONResponse(build_info())
 
 
 @app.post("/api/roles")
