@@ -7,11 +7,20 @@ read a small relation plus a short live tail instead of the events table's
 full history. The library side is ``Breakdown.values_table``; this module
 decides when to build, refresh, attach, or drop, and emits the SQL.
 
-Rules that shaped it (spec: item 12):
+Rules that shaped it:
 
-* The registry lives in the index table's own description (the shipped
-  fingerprint-as-comment pattern); ``.factcat.json`` keeps a status
-  mirror. Warehouse-side is the authority when the two disagree.
+* The registry lives in ``.factcat.json`` — columns, bookmarks, pin state,
+  overrides, use counts, the config fingerprint — written the moment each
+  column's build finishes, never batched behind the rest of a run. Nothing
+  in the warehouse describes this beyond the rows themselves: a table
+  comment used to carry a copy and was the single failure point (a real
+  61M-row backfill once landed with the comment write silently lost).
+  Single-install scope, by design — the mirror is not shared
+  between installs pointed at the same destination. Recovery, used only
+  when the mirror cannot answer (missing, or the destination just
+  changed), re-derives columns and bookmarks straight from the index
+  table's own rows and defaults the rest; it never guesses an unmatched
+  column's expression, because a wrong one would corrupt the next refresh.
 * Build on Run, sequentially: the first run of a qualifying column builds
   its index first, then queries through it. Never on an estimate — an
   estimate is a free dry run and must not bill a probe or write a table.
@@ -40,7 +49,6 @@ from typing import Any, Callable
 
 from factcat.dialects import (
     create_table_as,
-    set_relation_comment,
     splice_placeholders,
 )
 from factcat._emit import transpile
@@ -78,9 +86,6 @@ PROBE_DAYS = 30
 PROBE_TTL_DAYS = 7
 SWEEP_HOURS = 24
 USAGE_BUMP_MINUTES = 60
-# BigQuery caps a table description at 16 KB; the census snapshot is the
-# only part that can grow, so it is the part that gets trimmed.
-COMMENT_BUDGET = 12_000
 
 MODES = ("auto", "off")
 DEFAULTS = {
@@ -187,37 +192,6 @@ def registry_from_form(form: dict[str, Any]) -> dict[str, Any]:
     # (probe cache, bookmarks) and a shared default dict would leak across
     # configs — a probe from one run appeared in the next process's plan.
     return copy.deepcopy(raw)
-
-
-def parse_registry(comment: str | None) -> dict[str, Any]:
-    """Registry JSON from a table description; {} when absent or foreign."""
-    text = (comment or "").strip()
-    if not text.startswith("{"):
-        return {}
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(data, dict) or "columns" not in data:
-        return {}
-    return data
-
-
-def registry_comment(registry: dict[str, Any]) -> str:
-    """JSON for the table description, trimmed to the description budget
-    by dropping census snapshots first (they are a cache of a cache)."""
-    body = dict(registry)
-    text = json.dumps(body, separators=(",", ":"), sort_keys=True)
-    if len(text) <= COMMENT_BUDGET:
-        return text
-    cols = {k: dict(v) for k, v in (body.get("columns") or {}).items()}
-    for col in cols.values():
-        col.pop("names", None)
-    body["columns"] = cols
-    # Say so: without the snapshot the census diff cannot repair, and a
-    # silent drop would look like a healthy registry.
-    body["names_dropped"] = True
-    return json.dumps(body, separators=(",", ":"), sort_keys=True)
 
 
 def now_iso(now: datetime | None = None) -> str:
@@ -328,7 +302,7 @@ def _time_column_is_date(form: dict[str, Any]) -> bool:
     return False
 
 
-def ensure_table_sql(form: dict[str, Any], registry: dict[str, Any]) -> str:
+def ensure_table_sql(form: dict[str, Any]) -> str:
     """CREATE TABLE IF NOT EXISTS with the contract columns, empty."""
     dest = index_table(form)
     if dest is None:
@@ -349,7 +323,6 @@ def ensure_table_sql(form: dict[str, Any], registry: dict[str, Any]) -> str:
         partition_day="fc_at",
         partition_is_date=_time_column_is_date(form),
         cluster=("fc_column", "fc_entity"),
-        comment=registry_comment(registry),
     )
 
 
@@ -393,6 +366,24 @@ def bookmarks_sql(form: dict[str, Any], key: str) -> str:
     return _emit(
         f"SELECT fc_event_name, MAX(fc_at) AS fc_bookmark, COUNT(*) AS fc_rows "
         f"FROM {dest} WHERE fc_column = {_sql_string(key)} GROUP BY 1",
+        form_kind(form),
+    )
+
+
+def recovered_columns_sql(form: dict[str, Any]) -> str:
+    """Every ``fc_column`` with real rows, its earliest row and its
+    bookmark - derived straight from the index table's own data. The
+    recovery path when the registry mirror cannot answer; no WHERE, so
+    this reads the whole table, which is why it runs only on a miss, never
+    on an ordinary load. ``fc_first_at`` becomes the recovered entry's
+    ``built_at``: without it a recovered column never refreshes, because
+    the refresh branch requires a non-null ``refreshed_at``."""
+    dest = index_table(form)
+    if dest is None:
+        raise ValueError("write destination is required")
+    return _emit(
+        f"SELECT fc_column, MIN(fc_at) AS fc_first_at, MAX(fc_at) AS fc_bookmark "
+        f"FROM {dest} GROUP BY 1",
         form_kind(form),
     )
 
@@ -481,16 +472,6 @@ def drop_table_sql(form: dict[str, Any]) -> str:
     if dest is None:
         raise ValueError("write destination is required")
     return _emit(f"DROP TABLE IF EXISTS {dest}", form_kind(form))
-
-
-def registry_comment_sql(form: dict[str, Any], registry: dict[str, Any]) -> str:
-    dest = index_table(form)
-    if dest is None:
-        raise ValueError("write destination is required")
-    dialect = form_kind(form)
-    return set_relation_comment(
-        _emit_relation(dest, dialect), registry_comment(registry), dialect
-    )
 
 
 def density_probe_sql(form: dict[str, Any], expr: str, *, today: date) -> str:
@@ -837,13 +818,28 @@ def _census_repairs(
 
 
 def apply_plan(
-    plan: Plan, form: dict[str, Any], run: RunFn, *, now: datetime | None = None
+    plan: Plan,
+    form: dict[str, Any],
+    run: RunFn,
+    *,
+    persist: Callable[[dict[str, Any]], None] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Run the builds / refreshes the plan asked for, sequentially, then
-    write the registry to the table description. A failure turns that
-    column live for this run and is reported, never raised.
+    """Run the builds / refreshes the plan asked for, sequentially. A
+    failure turns that column live for this run and is reported, never
+    raised.
 
-    Returns the registry mirror to persist.
+    ``persist``, when given, is called with the registry right after EACH
+    column's own rows land - not batched behind the rest of the plan. That
+    used to be one write to the table's description, after the whole loop,
+    swallowed on failure: a real backfill could land while the record of it
+    never did. The caller is expected to write ``.factcat.json``
+    from it, synchronously, before this function moves on to the next
+    column - the local file is the one thing this design counts on to be
+    fast and reliable enough not to need batching.
+
+    Returns the registry mirror to persist (the same document `persist` was
+    already called with, for a caller that only wants the final state).
     """
     now = now or datetime.now(timezone.utc)
     registry = plan.registry
@@ -879,7 +875,7 @@ def apply_plan(
         label = cp.column.label
         try:
             if not ensured:
-                run(ensure_table_sql(form, registry))
+                run(ensure_table_sql(form))
                 ensured = True
             if cp.action in ("build", "rebuild"):
                 # A backfill always clears the column first, build included.
@@ -929,26 +925,26 @@ def apply_plan(
             cp.action = "attach" if cp.bookmark is not None else "live"
             if cp.bookmark is None:
                 cp.reason = "no values recorded yet"
+            # Persist now, this column, before the next one's rows are even
+            # requested: a crash after this line still remembers what really
+            # landed. Batching it behind the loop is what lost a
+            # completed backfill's record entirely.
+            if persist is not None:
+                persist(registry)
         except (AdapterError, ValueError) as exc:
             cp.action = "live"
             cp.reason = str(exc)
             plan.failures.append(f"{label}: {exc}")
-    try:
-        run(registry_comment_sql(form, registry))
-    except AdapterError as exc:
-        plan.registry_failures.append(str(exc))
     return registry
 
 
-def bump_usage(
-    plan: Plan, form: dict[str, Any], run: RunFn | None, *, now: datetime | None = None
-) -> dict[str, Any]:
+def bump_usage(plan: Plan, *, now: datetime | None = None) -> dict[str, Any]:
     """Touch ``last_used_at`` for attached columns, at most hourly per
-    column; the description write is a metadata statement, batched."""
+    column. Pure in-memory update; the caller persists the mirror same as
+    everywhere else — there is no separate warehouse write to batch."""
     now = now or datetime.now(timezone.utc)
     registry = plan.registry
     cols = registry.get("columns") if isinstance(registry.get("columns"), dict) else {}
-    dirty = False
     for cp in plan.columns:
         if cp.action != "attach":
             continue
@@ -959,12 +955,6 @@ def bump_usage(
         entry["use_count"] = int(entry.get("use_count") or 0) + 1
         if last is None or now - last >= timedelta(minutes=USAGE_BUMP_MINUTES):
             entry["last_used_at"] = now_iso(now)
-            dirty = True
-    if dirty and run is not None and plan.dest is not None:
-        try:
-            run(registry_comment_sql(form, registry))
-        except AdapterError:
-            pass
     return registry
 
 
@@ -972,10 +962,28 @@ def bump_usage(
 
 
 def sweep(
-    form: dict[str, Any], run: RunFn, *, now: datetime | None = None
+    form: dict[str, Any],
+    run: RunFn,
+    *,
+    persist: Callable[[dict[str, Any]], None] | None = None,
+    now: datetime | None = None,
 ) -> tuple[dict[str, Any], list[str], bool]:
     """Drop unpinned columns unused for the TTL. Returns (registry,
-    dropped labels, ran). At most once per SWEEP_HOURS per config file."""
+    dropped labels, ran). At most once per SWEEP_HOURS per config file.
+
+    ``persist``, when given, is called with EACH column already removed,
+    right BEFORE that column's own DELETE runs - the same order
+    `apply_action`'s drop keeps, for the same reason: the other order
+    leaves the mirror claiming a bookmark for rows already gone if the
+    process dies between a successful DELETE and the local write, and a
+    later run then attaches to an empty column and reads only the live
+    tail, silently wrong. Persist-first trades that for "not indexed, rows
+    possibly still there" on a failure - the same trade `apply_action`
+    already makes, safe because a future build for that key always clears
+    it before backfilling. Not batched behind the rest of the sweep or the
+    chart query that may follow in the same `/api/run` request, either
+    way."""
+
     now = now or datetime.now(timezone.utc)
     registry = registry_from_form(form)
     last = _parse_iso(form.get("managed_last_sweep"))
@@ -1000,19 +1008,27 @@ def sweep(
         used = _parse_iso(entry.get("last_used_at")) or _parse_iso(entry.get("built_at"))
         if used is None or now - used < ttl:
             continue
+        label = str(entry.get("label") or key)
+        del cols[key]
+        if persist is not None:
+            persist(registry)
         try:
             run(delete_column_sql(form, key))
         except AdapterError as exc:
             if not is_missing_relation(exc):
+                # The mirror already says this column is gone; its rows may
+                # not be. Safe either way - a future build for this key
+                # always clears it before backfilling, the same trade
+                # apply_action's drop already makes on the same failure.
+                dropped.append(label)
                 continue
-        dropped.append(str(entry.get("label") or key))
-        del cols[key]
-    if dropped:
+        dropped.append(label)
+    if dropped and not cols:
+        # The last column went: the table is now empty and derived, so drop
+        # it whole rather than leave an empty shell. Already persisted above
+        # (registry is already columns: {} at this point).
         try:
-            if cols:
-                run(registry_comment_sql(form, registry))
-            else:
-                run(drop_table_sql(form))
+            run(drop_table_sql(form))
         except AdapterError:
             pass
     return registry, dropped, True
@@ -1086,11 +1102,14 @@ def failure_note(plan: Plan) -> str:
             f"This run read the full history instead; the chart is correct."
         )
     if plan.registry_failures:
-        # The index is in place and this run used it; only its bookkeeping
-        # failed to save, so the next run may prepare the column again.
+        # This can only fire from the stale-fingerprint branch now (dropping
+        # the PREVIOUS generation's table failed) - the columns THIS plan
+        # built are recorded regardless, via `persist`, per column, as they
+        # land. What is at risk is the old generation's rows, not this run's.
         return (
-            f"Saved no record of the prepared columns: {plan.registry_failures[0]} "
-            f"The chart is correct; a later run may prepare them again."
+            f"Could not clear the previous index generation: {plan.registry_failures[0]} "
+            f"This run's columns are correct and recorded; the earlier generation's rows "
+            f"may still be present until a later run clears them."
         )
     return ""
 
@@ -1134,40 +1153,133 @@ def _stats(form: dict[str, Any], table: str) -> dict[str, Any]:
     )
 
 
-def authoritative_registry(form: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """The registry from the index table's description (the authority),
-    plus its stats; ``({}, None)`` when the table does not exist."""
+def recover_registry_from_rows(
+    form: dict[str, Any], run: RunFn, *, now: datetime | None = None
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Re-derive columns and bookmarks straight from ``fc_column_index``'s
+    own rows. The recovery path when the registry mirror is genuinely
+    empty - never on an ordinary read, and never on a destination change
+    (that resets to empty and lets the ordinary build path re-index
+    instead: rows at a destination this mirror never held a record for
+    have zero local grounding for a mapping-compatibility guess).
+    ``({}, None)`` when the table does not exist.
+
+    A recovered key attaches only when it matches a column the CURRENT
+    mapping would produce (by its ``column_key``) - never with a guessed
+    expression. An unmatched key is left out rather than attached wrong:
+    unindexed-and-rebuilt is safe, a wrong expr silently writing bad values
+    into a future refresh is not.
+    """
     try:
         stats = _stats(form, INDEX_TABLE)
     except AdapterError as exc:
         if is_missing_relation(exc):
             return {}, None
         raise
-    return parse_registry(stats.get("description")), stats
+    now = now or datetime.now(timezone.utc)
+
+    def _dt(value: Any) -> datetime | None:
+        if value is not None and not isinstance(value, datetime):
+            value = _parse_iso(value)
+        if isinstance(value, datetime) and value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value if isinstance(value, datetime) else None
+
+    known = {c.key: c for c in expensive_columns(form)}
+    if not known:
+        # Nothing the current chart wants could ever match, so the WHERE-
+        # less scan of the whole table would run for nothing on every
+        # render, forever, whenever the current mapping has no expensive
+        # columns at all (e.g. Value at reset to "each event").
+        return {}, stats
+    result = run(recovered_columns_sql(form))
+    columns: dict[str, Any] = {}
+    for row in result.rows:
+        cand = known.get(row.get("fc_column"))
+        if cand is None:
+            continue
+        first = _dt(row.get("fc_first_at"))
+        bm = _dt(row.get("fc_bookmark"))
+        columns[cand.key] = {
+            "expr": cand.expr,
+            "label": cand.label,
+            # `built_at` and `refreshed_at` come from the rows' own history,
+            # not from None: an entry with neither can never take the
+            # refresh branch (it requires one), so it would attach once and
+            # then never fold in a new row again.
+            "built_at": now_iso(first) if first else None,
+            "refreshed_at": now_iso(bm) if bm else None,
+            # `last_used_at` is NOW, though - not the data's age. The sweep
+            # evicts on `last_used_at or built_at`, and a recovered column's
+            # `built_at` is the oldest event in the index, routinely years
+            # back: leaving this None fed the whole recovered backfill
+            # straight to the next sweep, which dropped the column and then
+            # the table - destroying exactly what recovery just rescued.
+            # It was found and used this second, which is what use means.
+            "last_used_at": now_iso(now),
+            "use_count": 0,
+            "pinned": False,
+            "overrides": {},
+            "bookmark": now_iso(bm) if bm else None,
+        }
+    registry = {"v": REGISTRY_VERSION, "fp": config_fingerprint(form), "columns": columns}
+    return registry, stats
 
 
-def reconcile_registry(form: dict[str, Any]) -> dict[str, Any]:
-    """The registry to plan from on the Run path: the index table's own
-    description when the table exists (the authority), an empty registry
-    when it does not — never the mirror alone, which can outlive a table
-    dropped out of band or point at a new, empty destination. The mirror's
-    probe cache is kept either way (it is about the events table)."""
+def reconcile_registry(
+    form: dict[str, Any], run: RunFn, *, now: datetime | None = None
+) -> dict[str, Any]:
+    """The registry to plan and display from: the local mirror, trusted
+    directly once it is written the moment each column's build completes
+    (``apply_plan``'s ``persist``) - not the warehouse, which used to be
+    asked on every read and could itself go stale on its own failed write
+    on its own failed write. Protected two ways, both cheap: a destination
+    invalidates the mirror outright (its columns describe a different
+    physical table, and the physical rows there - if any - were not
+    necessarily built under THIS entity/table mapping either, so this
+    starts clean rather than recovering and trust-attaching what might be
+    someone else's data); a mirror
+    claiming columns while the table itself is gone out of band resets to
+    empty via one metadata call. Recovery - re-deriving from
+    ``fc_column_index``'s own rows - runs only when the mirror is genuinely
+    empty for the CURRENT destination, never on a destination change and
+    never on an ordinary read where the mirror already has an answer. The
+    mirror's probe cache is kept either way (it is about the events table,
+    not this)."""
     mirror = registry_from_form(form)
     probes = mirror.get("probes") if isinstance(mirror.get("probes"), dict) else {}
+    dest = index_table(form)
+    if dest is None:
+        return {"probes": probes}
+    fp = config_fingerprint(form)
+    cols = mirror.get("columns") if isinstance(mirror.get("columns"), dict) else {}
+    mirror_fp = mirror.get("fp") if isinstance(mirror.get("fp"), dict) else {}
+    dest_changed = bool(cols) and mirror_fp.get("dest") != fp.get("dest")
+    if dest_changed:
+        return {"probes": probes}
+    if not cols:
+        try:
+            recovered, stats = recover_registry_from_rows(form, run, now=now)
+        except AdapterError:
+            return {"probes": probes}
+        if stats is None or not recovered.get("columns"):
+            return {"probes": probes}
+        recovered["probes"] = probes
+        return recovered
     try:
-        authority, stats = authoritative_registry(form)
-    except AdapterError:
-        # Metadata unavailable: plan from the mirror rather than fail the run.
+        _stats(form, INDEX_TABLE)
+    except AdapterError as exc:
+        if is_missing_relation(exc):
+            # Dropped out of band: the mirror's bookmarks describe rows
+            # that are gone.
+            return {"probes": probes}
+        # Metadata unavailable for another reason: plan from the mirror
+        # rather than fail the run.
         return mirror
-    if stats is None:
-        return {"probes": probes}
-    if not authority:
-        return {"probes": probes}
-    authority.setdefault("probes", {}).update(probes)
-    return authority
+    return mirror
 
 
-def list_payload(form: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+def list_payload(form: dict[str, Any], run: RunFn, *, now: datetime | None = None) -> dict[str, Any]:
     """What the Setup section renders: settings, the event-name cache row,
     one row per indexed column, the mirror to persist."""
     now = now or datetime.now(timezone.utc)
@@ -1176,11 +1288,13 @@ def list_payload(form: dict[str, Any], *, now: datetime | None = None) -> dict[s
     payload: dict[str, Any] = {"settings": cfg, "dest": dest, "tables": [], "columns": []}
     if dest is None:
         return payload
-    registry, stats = authoritative_registry(form)
-    if not registry:
-        registry = registry_from_form(form)
-        if stats is None:
-            registry = {**registry, "columns": {}} if registry else {}
+    registry = reconcile_registry(form, run)
+    try:
+        stats = _stats(form, INDEX_TABLE)
+    except AdapterError as exc:
+        if not is_missing_relation(exc):
+            raise
+        stats = None
     payload["registry"] = registry
     if stats is not None:
         payload["tables"].append(
@@ -1233,50 +1347,59 @@ def apply_action(
     *,
     action: str,
     key: str = "",
+    persist: Callable[[dict[str, Any]], None] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """The one Setup action on the index: ``drop`` a column (and the table
     when it was the last one). Returns the registry mirror to persist.
     Building, refreshing and rebuilding are Automatic mode's job on every
     warehouse; the owner withdrew the manual paths (Index a column now,
-    Refresh, Rebuild, Pin, Overrides) as noise for the people who use Setup."""
+    Refresh, Rebuild, Pin, Overrides) as noise for the people who use Setup.
+
+    ``persist``, when given, is called with the reduced registry BEFORE the
+    DELETE/DROP runs — record first, rows second. The other order leaves
+    the record claiming a bookmark for rows already gone when the DELETE
+    fails; a later run then attaches to an empty column and reads only the
+    live tail, silently wrong, with no error. The mirror is a local write,
+    so this ordering costs nothing to keep.
+    """
     now = now or datetime.now(timezone.utc)
     dest = index_table(form)
     if dest is None:
         raise ValueError("Set a write destination on Setup first")
     if action != "drop":
         raise ValueError("action must be drop")
-    registry, _stats_ = authoritative_registry(form)
-    if not registry:
-        registry = registry_from_form(form) or {}
+    registry = registry_from_form(form) or {}
     fp = config_fingerprint(form)
     if registry.get("fp") != fp:
         # The mapping moved, so every column in the table is a stale
         # generation. Setup still lists them and the guides promise Drop as
         # the immediate erasure remedy, so honour it by dropping the table
         # whole rather than refusing with "no such indexed column".
+        reset = {"v": REGISTRY_VERSION, "fp": fp, "columns": {}, "probes": registry.get("probes") or {}}
         if registry.get("columns"):
+            if persist is not None:
+                persist(reset)
             try:
                 run(drop_table_sql(form))
             except AdapterError as exc:
                 if not is_missing_relation(exc):
                     raise
-        return {"v": REGISTRY_VERSION, "fp": fp, "columns": {}, "probes": registry.get("probes") or {}}
+        return reset
     cols: dict[str, Any] = registry.setdefault("columns", {})
     if key not in cols:
         raise ValueError("no such indexed column")
     del cols[key]
     if cols:
-        # Registry first, rows second. The other order leaves the authority
-        # claiming a bookmark for rows that are already gone when the second
-        # statement fails; a later run then attaches to an empty column and
-        # reads only the live tail - silently wrong, with no error.
-        run(registry_comment_sql(form, registry))
+        if persist is not None:
+            persist(registry)
         try:
             run(delete_column_sql(form, key))
         except AdapterError as exc:
             if not is_missing_relation(exc):
                 raise
     else:
+        if persist is not None:
+            persist(registry)
         run(drop_table_sql(form))
     return registry

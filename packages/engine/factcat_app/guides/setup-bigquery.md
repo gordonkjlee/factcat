@@ -152,10 +152,14 @@ existing index is still read.
 
 The list shows size and age per table; Drop is the only per-table action
 (building, refreshing and rebuilding are Automatic mode's job). Its
-bookkeeping (fingerprints,
-last use, census snapshot) lives in the table's own description; a
-mapping change rebuilds, a new event name with backfilled history is
-back-filled on the next refresh, a name whose row count shrank is rebuilt.
+bookkeeping (fingerprints, last use, census snapshot) lives in
+`.factcat.json` on this machine, written the moment each column's build
+finishes; a mapping change rebuilds, a new event name with backfilled
+history is back-filled on the next refresh, a name whose row count shrank
+is rebuilt. If that file is ever lost while the table already holds real
+data, Factcat re-derives which columns and how far back from the table's
+own rows, matched by name — trusting the entity, table and timestamp
+mapping have not changed underneath it, single-install only.
 Needs `bigquery.tables.create` on the dataset (the rights check above).
 A failed build never blocks a chart: it runs on the full history and the
 run row says why.

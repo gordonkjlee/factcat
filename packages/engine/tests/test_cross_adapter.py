@@ -287,7 +287,7 @@ def test_setup_docs_cover_every_adapter():
 
 @pytest.mark.parametrize("kind", list(ADAPTERS))
 def test_values_table_compiles_through_the_form_on_every_adapter(kind, sqlglot_warnings):
-    """Item 12: an attached column index reaches the emitter through the
+    """An attached column index reaches the emitter through the
     form path on both kinds — the case PR 1's review flagged as owed."""
     from datetime import datetime, timezone
 
@@ -321,9 +321,9 @@ def test_values_table_compiles_through_the_form_on_every_adapter(kind, sqlglot_w
     assert sqlglot_warnings.messages == [], sqlglot_warnings.messages
     # the index's own statements compile on this kind too
     for stmt in (
-        managed.ensure_table_sql(form, form["managed_tables"]),
+        managed.ensure_table_sql(form),
         managed.backfill_sql(form, "plan", "plan"),
-        managed.registry_comment_sql(form, form["managed_tables"]),
+        managed.recovered_columns_sql(form),
     ):
         assert "fc_column_index" in stmt
     assert sqlglot_warnings.messages == []

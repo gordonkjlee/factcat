@@ -2440,7 +2440,7 @@ def test_blocking_endpoints_use_threadpool():
 
 
 # ---------------------------------------------------------------------------
-# Factcat-managed tables (item 12): build on Run, estimate stays a dry run,
+# Factcat-managed tables: build on Run, estimate stays a dry run,
 # the Setup list and actions, and the chrome both pages carry.
 
 
@@ -2598,6 +2598,9 @@ def test_estimate_prices_the_build_once_the_probe_is_cached(monkeypatch, tmp_pat
 
 
 def test_managed_list_and_actions(monkeypatch, tmp_path):
+    """The mirror is the record now; it is seeded directly rather
+    than encoded into a mocked table description, and the existence-check
+    stats no longer need to carry it."""
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     from factcat_app import managed as managed_mod
 
@@ -2607,11 +2610,12 @@ def test_managed_list_and_actions(monkeypatch, tmp_path):
                              "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
                              "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 2, "pinned": False, "overrides": {}}},
     }
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": registry}), encoding="utf-8")
     monkeypatch.setattr(
         managed_mod, "_stats",
-        lambda form, table: {"name": table, "kind": "table", "bytes": 84 * 1024 ** 2, "rows": 1000,
-                             "description": json.dumps(registry) if table == "fc_column_index" else ""},
+        lambda form, table: {"name": table, "kind": "table", "bytes": 84 * 1024 ** 2, "rows": 1000},
     )
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: _ManagedWarehouse())
     client = TestClient(app)
     res = client.post("/api/managed", json=_managed_body())
     assert res.status_code == 200, res.text
@@ -2703,9 +2707,10 @@ def test_estimate_prices_the_build_as_a_select_and_survives_a_missing_table(monk
 
 
 def test_run_reconciles_the_mirror_with_the_table(monkeypatch, tmp_path):
-    """A mirror that says 'attach' while the table is gone must not attach:
-    the run plans from the table's own registry (absent here), probes, and
-    builds instead of reading an empty relation."""
+    """A mirror that says 'attach' while the table is gone out of band must
+    not attach: reconcile's cheap existence check resets to
+    empty, so the run probes and builds instead of reading an empty
+    relation."""
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     from factcat_app import managed as managed_mod
 
@@ -2717,7 +2722,11 @@ def test_run_reconciles_the_mirror_with_the_table(monkeypatch, tmp_path):
                              "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1, "pinned": False, "overrides": {}}},
     }
     (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": stale_mirror}), encoding="utf-8")
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: ({}, None))
+
+    def _missing(f, t):
+        raise AdapterError("Not found: Table")
+
+    monkeypatch.setattr(managed_mod, "_stats", _missing)
     wh = _ManagedWarehouse()
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
     client = TestClient(app)
@@ -2743,8 +2752,9 @@ def test_run_falls_back_live_when_the_attached_table_vanishes(monkeypatch, tmp_p
         "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}},
     }
     (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
-    # the description still says the column is there (stale metadata), but the query finds no table
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    # the mirror is trusted directly now; the existence check just
+    # needs to see the table as present so reconcile does not reset it
+    monkeypatch.setattr(managed_mod, "_stats", lambda f, t: {"bytes": 1})
 
     class _W(_ManagedWarehouse):
         def run(self, sql, *, dry_run=False):
@@ -2793,44 +2803,16 @@ def test_estimate_attaches_an_existing_index_from_the_config_mirror(monkeypatch,
     assert "managed_note" not in res.json()
 
 
-def test_sweep_plans_from_the_table_registry_not_the_mirror(monkeypatch, tmp_path):
-    """Two workstations, one index. A's mirror says the column is 90 days
-    unused; the table's own description (B charts daily) says an hour ago.
-    A's Run must drop nothing. Mutation: sweep before reconcile."""
-    from datetime import datetime, timedelta, timezone
+# `test_sweep_plans_from_the_table_registry_not_the_mirror` removed:
+# it proved a guarantee this redesign deliberately no longer
+# makes - that one install's sweep would defer to what ANOTHER install's
+# warehouse-side registry said, so a workstation with a stale local mirror
+# would not drop a column a second workstation charts daily. The owner
+# scoped multi-install sharing out explicitly ("let's not get too hung up
+# on the multi-install pattern that is only happening due to our dev
+# cycles"); the registry is single-install-local now (`.factcat.json`), and
+# there is no warehouse-side registry left for a second install to read.
 
-    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
-    from factcat_app import managed as managed_mod
-
-    body = _managed_body()
-    now = datetime.now(timezone.utc)
-
-    def registry(last_used):
-        return {
-            "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
-            "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": (now - timedelta(days=100)).isoformat(),
-                                 "refreshed_at": (now - timedelta(hours=1)).isoformat(), "last_used_at": last_used.isoformat(),
-                                 "bookmark": (now - timedelta(hours=1)).isoformat(), "use_count": 9, "pinned": False, "overrides": {}}},
-            "probes": {"plan": {"density": 0.01, "at": now.isoformat()}},
-        }
-
-    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": registry(now - timedelta(days=90))}), encoding="utf-8")
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (registry(now - timedelta(hours=1)), {"bytes": 1}))
-    wh = _ManagedWarehouse()
-    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
-    client = TestClient(app)
-    res = client.post("/api/run", json=body)
-    assert res.status_code == 200, res.text
-    ups = [c[0].upper() for c in wh.calls if not c[1]]
-    assert not any(u.startswith("DELETE FROM") or u.startswith("DROP TABLE") for u in ups)
-    # control: when the table's own registry agrees the column is unused, the sweep does drop it
-    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": registry(now - timedelta(days=90))}), encoding="utf-8")
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (registry(now - timedelta(days=90)), {"bytes": 1}))
-    wh2 = _ManagedWarehouse()
-    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh2)
-    res2 = client.post("/api/run", json=body)
-    assert res2.status_code == 200, res2.text
-    assert any(c[0].upper().startswith("DELETE FROM") for c in wh2.calls if not c[1])
 
 
 def test_write_access_verdict_is_saved_for_the_run_gate(monkeypatch, tmp_path):
@@ -2863,7 +2845,7 @@ def test_managed_drop_runs_under_the_scan_cap(monkeypatch, tmp_path):
                              "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
                              "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1}},
     }
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
     seen = {}
 
     def fake_connect(kind, **kw):
@@ -2931,7 +2913,7 @@ def test_run_reads_the_census_and_repairs_a_name_whose_rows_shrank(monkeypatch, 
         "managed_tables": reg,
         "event_name_cache": {"v": 2, "kind": "view", "fp": "x"},
     }), encoding="utf-8")
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    monkeypatch.setattr(managed_mod, "_stats", lambda f, t: {"bytes": 1})
     wh = _CensusWarehouse({"subscription_started": 400})
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
     client = TestClient(app)
@@ -2957,7 +2939,7 @@ def test_run_leaves_the_index_alone_when_the_census_matches(monkeypatch, tmp_pat
         "managed_tables": reg,
         "event_name_cache": {"v": 2, "kind": "view", "fp": "x"},
     }), encoding="utf-8")
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    monkeypatch.setattr(managed_mod, "_stats", lambda f, t: {"bytes": 1})
     wh = _CensusWarehouse({"subscription_started": 1000})
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
     client = TestClient(app)
@@ -2984,7 +2966,7 @@ def test_run_backfills_a_new_event_name_whole(monkeypatch, tmp_path):
         "managed_tables": reg,
         "event_name_cache": {"v": 2, "kind": "view", "fp": "x"},
     }), encoding="utf-8")
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
+    monkeypatch.setattr(managed_mod, "_stats", lambda f, t: {"bytes": 1})
     # the census knows a name the index has never seen, with history
     wh = _CensusWarehouse({"subscription_started": 1000, "plan_backfilled": 5000})
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
@@ -3030,12 +3012,14 @@ def test_a_refused_column_saves_its_probe(monkeypatch, tmp_path):
     assert not any("FC_PRESENT" in c[0].upper() for c in wh2.calls), "re-probed a refused column"
 
 
-def test_drop_writes_the_registry_before_it_deletes_the_rows(monkeypatch, tmp_path):
-    """The description is the authority: if it still lists a column whose
-    rows are gone, a later run attaches to an empty column and reads only
-    the live tail - silently wrong. So the registry is written first, and a
-    failed DELETE leaves a recoverable state, not a lying one.
-    Mutation: put the DELETE back before the comment write."""
+def test_drop_writes_the_mirror_before_it_deletes_the_rows(monkeypatch, tmp_path):
+    """If the record still lists a column whose rows are gone, a later run
+    attaches to an empty column and reads only the live tail - silently
+    wrong. So the mirror is written first (locally, via `persist`; this
+    used to be a warehouse comment), and a failed DELETE
+    leaves a recoverable state, not a lying one: observable here as the
+    config file already reflecting the drop even though the request itself
+    reports failure. Mutation: call persist() after run(), not before."""
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
     from factcat_app import managed as managed_mod
 
@@ -3045,18 +3029,16 @@ def test_drop_writes_the_registry_before_it_deletes_the_rows(monkeypatch, tmp_pa
              "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
              "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1}
     reg = {"v": 1, "fp": fp, "columns": {"plan": dict(entry), "tier": {**entry, "expr": "tier", "label": "tier"}}}
-    monkeypatch.setattr(managed_mod, "authoritative_registry", lambda form: (reg, {"bytes": 1}))
-    wh = _ManagedWarehouse()
+    (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
+    wh = _ManagedWarehouse(fail_on=("DELETE FROM",))
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
     client = TestClient(app)
     res = client.post("/api/managed/action", json={**body, "action": "drop", "key": "plan"})
-    assert res.status_code == 200, res.text
-    order = [c[0].upper().strip() for c in wh.calls if not c[1]]
-    comment = next(i for i, s_ in enumerate(order) if s_.startswith("ALTER TABLE") or s_.startswith("COMMENT ON"))
-    delete = next(i for i, s_ in enumerate(order) if s_.startswith("DELETE FROM"))
-    assert comment < delete, "rows were deleted before the registry that describes them"
-    assert "plan" not in res.json()["registry"]["columns"]
-    assert "tier" in res.json()["registry"]["columns"]
+    assert res.status_code == 400, res.text
+    assert "no longer listed" in res.json()["error"]
+    saved = json.loads((tmp_path / "cfg.json").read_text(encoding="utf-8"))
+    assert "plan" not in saved["managed_tables"]["columns"], "the mirror was not written before the failed DELETE"
+    assert "tier" in saved["managed_tables"]["columns"]
 
 
 def test_the_mapped_column_types_reach_the_run(monkeypatch, tmp_path):
