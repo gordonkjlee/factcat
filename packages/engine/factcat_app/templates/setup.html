@@ -337,12 +337,12 @@
           <option value="auto"{% if (config.managed_mode or 'auto') == 'auto' %} selected{% endif %}>Automatic</option>
           <option value="off"{% if config.managed_mode == 'off' %} selected{% endif %}>Off</option>
         </select>
-        <span class="hint">Automatic indexes a sparse column the first time an expensive breakdown mode uses it, refreshes it when stale, and drops it when unused. Off keeps existing tables and changes nothing.</span>
+        <span class="hint">Automatic indexes a sparse column the first time an expensive breakdown mode uses it, refreshes it when stale, and drops it when unused. Off stops using them: charts read the full history and scan more. Nothing is deleted — the tables are waiting when you switch back.</span>
       </div>
       <div>
         <label for="managed_drop_days">Drop unused after</label>
         <input id="managed_drop_days" name="managed_drop_days" type="number" min="1" step="1" value="{{ config.managed_drop_days if config.managed_drop_days is not none else 60 }}"><span class="mt-unit">days</span>
-        <span class="hint">A column no chart has used for this long is dropped on the next daily sweep.</span>
+        <span class="hint">A column no chart has used for this long is dropped during a chart run, at most once a day. Nothing runs in the background, and a column the current chart uses is never dropped.</span>
       </div>
       <div>
         <label for="managed_refresh_days">Refresh when older than</label>

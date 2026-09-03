@@ -141,14 +141,17 @@ under the chip says what later runs cost. Once the index exists the chip
 prices the cheap query. The build runs under the same scan cap as a chart;
 over the cap it fails cleanly and the chart reads the full history. Automatic refreshes
 it when older than **Refresh when older than**, and drops columns no
-chart has used for **Drop unused after** on a daily sweep. **Late-arrival
+chart has used for **Drop unused after**, during a chart Run and at most
+once a day — nothing runs in the background, and a column the current
+chart asks for is never dropped. **Late-arrival
 lookback** is how late a row can land after its event time; a refresh
 re-reads that much before each event name's bookmark. Dense columns (the
 value on more than about a quarter of recent rows) are not indexed —
 **Value at: each event** already has them. Columns that are not text are left alone too (the
 index stores text); write `CAST(x AS STRING)` as the breakdown expression to
-index one. Off changes nothing: no build, refresh, rebuild or drop; an
-existing index is still read.
+index one. Off stops Factcat using the indexes: charts read the full
+history and scan more. It also stops every build, refresh, rebuild and
+drop, and deletes nothing — the tables are waiting when it goes back on.
 
 The list shows size and age per table; Drop is the only per-table action
 (building, refreshing and rebuilding are Automatic mode's job). Its

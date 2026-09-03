@@ -551,6 +551,10 @@ class Plan:
     # false twice over.
     registry_failures: list[str] = field(default_factory=list)
     built: list[str] = field(default_factory=list)
+    # Columns rebuilt because rows had gone missing from the index behind
+    # us. Kept apart from `built` so the run row can say what happened
+    # rather than reporting an ordinary build.
+    repaired: list[str] = field(default_factory=list)
 
     def maybe(self) -> list[ColumnPlan]:
         """Columns that would be indexed but have not been measured yet: the
@@ -681,14 +685,26 @@ def build_plan(
         if col.fill == "expr":
             plan.columns.append(ColumnPlan(col, "live", "fill from is a SQL expression"))
             continue
-        # Mode: Off is the kill-switch for every automatic build, refresh,
-        # rebuild and drop (the hourly usage bump on an attached column is
-        # metadata-only and keeps last_used_at honest, so nothing is evicted
-        # the moment Mode returns to auto). An index whose fingerprint still matches
-        # is read as-is (the live tail keeps results exact however stale it
-        # is); Setup's own actions remain the way to change it.
+        # Mode: Off says whether Factcat may USE the indexes, not only whether
+        # it may maintain them - so it is the kill-switch for every automatic
+        # build, refresh, rebuild and drop AND stops an existing index being
+        # read. Charts then scan full history, which is the honest cost of
+        # turning indexing off. Nothing is deleted: the sweep returns early
+        # under Off, and its demand guard means a column the chart asks for
+        # survives the switch back on rather than being evicted for having
+        # gone unserved. Setup's own actions remain the way to change it.
         mode_open = _mode_open(form, cfg)
         if entry:
+            # Off is a USE toggle, not only a maintenance one: it says whether
+            # Factcat may read the index at all. Charts then read full history
+            # and scan more, which is the honest meaning of turning indexing
+            # off and is said where the toggle lives. The rows are kept and
+            # nothing is dropped - `sweep` returns early under Off, and the
+            # demand guard there means the index is still waiting when the
+            # toggle goes back on.
+            if not mode_open:
+                plan.columns.append(ColumnPlan(col, "live", "indexing is off"))
+                continue
             bookmark = _parse_iso(entry.get("bookmark"))
             refreshed = _parse_iso(entry.get("refreshed_at")) or _parse_iso(entry.get("built_at"))
             days = cfg["refresh_days"]
@@ -773,6 +789,65 @@ def _iso_or_none(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.replace(microsecond=0).isoformat()
     return str(value)
+
+
+def _read_index_state(
+    form: dict[str, Any], run: RunFn, key: str
+) -> tuple[dict[str | None, datetime], dict[str, int]]:
+    """One column's per-event-name bookmarks AND row counts.
+
+    ``bookmarks_sql`` has always selected ``COUNT(*) AS fc_rows`` and
+    ``_read_bookmarks`` has always thrown it away. Keeping it is what makes
+    divergence detectable at all: a bookmark only moves when the NEWEST row
+    changes, so comparing bookmarks cannot see rows deleted from the middle
+    or the old end, nor one event name's rows removed while another's stay -
+    which are the shapes that actually lose history. A count that went DOWN
+    is unambiguous, because only Factcat writes this table.
+
+    Counts are keyed by name as text (JSON has no null key); the NULL-named
+    bucket is ``""``.
+    """
+    res = run(bookmarks_sql(form, key))
+    marks: dict[str | None, datetime] = {}
+    counts: dict[str, int] = {}
+    for row in res.rows:
+        name = row.get("fc_event_name")
+        try:
+            counts[str(name) if name is not None else ""] = int(row.get("fc_rows") or 0)
+        except (TypeError, ValueError):
+            pass
+        bm = row.get("fc_bookmark")
+        if bm is None:
+            continue
+        if not isinstance(bm, datetime):
+            parsed = _parse_iso(bm)
+            if parsed is None:
+                continue
+            bm = parsed
+        if bm.tzinfo is None:
+            bm = bm.replace(tzinfo=timezone.utc)
+        marks[str(name) if name is not None else None] = bm
+    return marks, counts
+
+
+def _rows_went_missing(stored: Any, fresh: dict[str, int]) -> bool:
+    """True when any event name holds FEWER rows than we last recorded.
+
+    Only Factcat writes this table, and every path that removes rows
+    re-stamps in the same breath, so a decrease means something outside
+    Factcat deleted them - a retention job, a governance tool, a hand-run
+    DELETE. Growth is ordinary (a refresh appends), so only a decrease is a
+    signal. A name absent from the fresh read counts as zero.
+    """
+    if not isinstance(stored, dict) or not stored:
+        return False
+    for name, was in stored.items():
+        try:
+            if int(was) > int(fresh.get(str(name), 0)):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def _read_bookmarks(form: dict[str, Any], run: RunFn, key: str) -> dict[str | None, datetime]:
@@ -897,25 +972,54 @@ def apply_plan(
                 }
             else:
                 entry = dict(cols.get(key) or {})
-                known = _read_bookmarks(form, run, key)
-                new_names, rebuild_names = _census_repairs(
-                    entry, census, {n for n in known if n is not None}
-                )
-                lookback = plan.settings["lookback_days"]
-                override = (entry.get("overrides") or {}).get("lookback_days")
-                if override not in (None, ""):
-                    lookback = int(override)
-                if rebuild_names:
-                    run(delete_column_sql(form, key, names=rebuild_names))
-                    run(backfill_sql(form, key, cp.column.expr, names=rebuild_names))
-                    known = {n: bm for n, bm in known.items() if n not in rebuild_names}
-                if new_names:
-                    run(backfill_sql(form, key, cp.column.expr, names=new_names))
-                if known:
-                    days = {n: bm.date() for n, bm in known.items()}
-                    run(refresh_sql(form, key, cp.column.expr, bookmarks=days, lookback_days=lookback))
-                entry["refreshed_at"] = now_iso(now)
-            marks = _read_bookmarks(form, run, key)
+                # The read the refresh needs anyway, now also carrying the
+                # per-name counts. One statement, two answers: nothing extra
+                # is billed to find out whether the index still holds what it
+                # claimed.
+                known, fresh_counts = _read_index_state(form, run, key)
+                if _rows_went_missing(entry.get("row_counts"), fresh_counts):
+                    # Rows this column had are gone and Factcat did not remove
+                    # them. Appending a tail onto a hole would answer from an
+                    # index missing history - silently, with no error - so
+                    # rebuild the column whole instead of refreshing it.
+                    run(delete_column_sql(form, key))
+                    run(backfill_sql(form, key, cp.column.expr))
+                    entry = {
+                        "expr": cp.column.expr,
+                        "label": label,
+                        "built_at": now_iso(now),
+                        "refreshed_at": now_iso(now),
+                        "last_used_at": now_iso(now),
+                        "use_count": int((cols.get(key) or {}).get("use_count") or 0),
+                        "pinned": bool((cols.get(key) or {}).get("pinned")),
+                        "overrides": dict((cols.get(key) or {}).get("overrides") or {}),
+                    }
+                    plan.repaired.append(label)
+                else:
+                    new_names, rebuild_names = _census_repairs(
+                        entry, census, {n for n in known if n is not None}
+                    )
+                    lookback = plan.settings["lookback_days"]
+                    override = (entry.get("overrides") or {}).get("lookback_days")
+                    if override not in (None, ""):
+                        lookback = int(override)
+                    if rebuild_names:
+                        run(delete_column_sql(form, key, names=rebuild_names))
+                        run(backfill_sql(form, key, cp.column.expr, names=rebuild_names))
+                        known = {n: bm for n, bm in known.items() if n not in rebuild_names}
+                    if new_names:
+                        run(backfill_sql(form, key, cp.column.expr, names=new_names))
+                    if known:
+                        days = {n: bm.date() for n, bm in known.items()}
+                        run(refresh_sql(form, key, cp.column.expr, bookmarks=days, lookback_days=lookback))
+                    entry["refreshed_at"] = now_iso(now)
+            # The post-write read: everything this Run wrote has landed, so
+            # these counts are the state to compare against next time. Stamping
+            # here rather than before the writes is what stops Factcat's own
+            # census repair (which deletes names and re-inserts them) reading
+            # as tampering on the next refresh.
+            marks, counts = _read_index_state(form, run, key)
+            entry["row_counts"] = counts
             entry["bookmark"] = now_iso(max(marks.values())) if marks else None
             if census is not None:
                 entry["names"] = {n: census[n] for n in census}
@@ -999,9 +1103,21 @@ def sweep(
     if dest is None or not cols:
         return registry, dropped, True
     ttl = timedelta(days=cfg["drop_days"])
+    # What THIS request is asking for. The sweep runs before the plan, so
+    # without this it evicts on "unused as of a moment ago" while the request
+    # in flight is the use: coming back to a chart after the TTL dropped the
+    # column, dropped the table, and then rebuilt it from full history in the
+    # same Run - the act of using a column destroyed it. Pure form parsing,
+    # no warehouse call.
+    wanted = {c.key for c in expensive_columns(form)} if registry.get("fp") == config_fingerprint(form) else set()
     for key in list(cols):
         entry = cols[key]
         if not isinstance(entry, dict):
+            continue
+        # Demand this request can actually be served: the chart asks for it,
+        # the mapping still matches, and there is a bookmark to attach to.
+        # Not "recently used" - being used right now.
+        if key in wanted and entry.get("bookmark"):
             continue
         # `pinned` / `overrides` keys from a pre-trim registry (never shipped)
         # are ignored: use is the only thing that keeps a column.

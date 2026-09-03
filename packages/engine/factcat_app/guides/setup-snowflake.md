@@ -145,8 +145,12 @@ want. Because there is no cost preview there is no estimate chip, and so no
 "Indexing…" copy while it runs; one line under the Run button afterwards
 says the index is in place. **Refresh when older than**
 decides when newer rows are folded in, **Drop unused after** drops columns
-no chart has used (daily sweep), **Late-arrival lookback** is how late a
-row can land after its event time. Off changes nothing: no build, refresh,
+no chart has used — checked during a chart Run, at most once a day, never
+in the background, and never for a column the current chart asks for.
+**Late-arrival lookback** is how late a
+row can land after its event time. Off stops Factcat using the indexes:
+charts read the full history and scan more. It also stops every build,
+refresh,
 rebuild or drop; an existing index is still read.
 
 Columns that are not text are left alone (the index stores text); write
