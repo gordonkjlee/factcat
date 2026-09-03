@@ -1068,6 +1068,27 @@ def test_an_ordinary_refresh_does_not_read_as_tampering():
     assert registry["columns"]["plan"]["row_counts"] == {"subscription_started": 12}
 
 
+def test_an_event_name_that_vanished_entirely_counts_as_deletion():
+    """The per-name shape: one event name's rows removed while another's
+    remain. That name is simply absent from the fresh read - there is no row
+    to carry a smaller number - so absent must read as zero, not as "no
+    information". A retention job scoped to one event type is exactly this.
+
+    Mutation: default a missing name to something large instead of zero.
+    """
+    form = _form()
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    # `subscription_started` is untouched and still reports 5; `trial_started`
+    # is gone from the table altogether.
+    reg["columns"]["plan"]["row_counts"] = {"subscription_started": 5, "trial_started": 40}
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert plan.columns[0].action == "refresh"
+    run = _Run(bookmark=NOW - timedelta(days=1), rows=5)
+    apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
+    assert plan.repaired == ["plan"], "a whole event name disappeared and went unnoticed"
+    assert any(c.upper().strip().startswith("DELETE FROM") for c in run.calls)
+
+
 def test_a_column_with_no_recorded_counts_is_not_treated_as_tampered():
     """Entries written before this shipped, and recovered entries, carry no
     counts. Absent is not evidence of deletion - stamp on the next write and
