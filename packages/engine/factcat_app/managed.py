@@ -630,8 +630,8 @@ def _probe_density(
             return float(value) if value is not None else None
     res = run(density_probe_sql(form, expr, today=now.date()))
     rows = res.rows[0] if res.rows else {}
-    total = rows.get("fc_rows")
-    present = rows.get("fc_present")
+    total = _field(rows, "fc_rows")
+    present = _field(rows, "fc_present")
     density = None
     if total:
         density = float(present or 0) / float(total)
@@ -777,13 +777,13 @@ def _census(form: dict[str, Any], run: RunFn) -> dict[str, dict[str, Any]] | Non
         return None
     out: dict[str, dict[str, Any]] = {}
     for row in res.rows:
-        name = row.get("fc_value")
+        name = _field(row, "fc_value")
         if name is None:
             continue
         out[str(name)] = {
-            "rows": int(row.get("fc_rows") or 0),
-            "first": _iso_or_none(row.get("fc_first")),
-            "last": _iso_or_none(row.get("fc_last")),
+            "rows": int(_field(row, "fc_rows") or 0),
+            "first": _iso_or_none(_field(row, "fc_first")),
+            "last": _iso_or_none(_field(row, "fc_last")),
         }
     return out
 
@@ -794,6 +794,35 @@ def _iso_or_none(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.replace(microsecond=0).isoformat()
     return str(value)
+
+
+def _field(row: Any, name: str) -> Any:
+    """Read one generated column out of a result row, whatever case the
+    warehouse reported it in.
+
+    BigQuery echoes an unquoted alias as written; Snowflake resolves
+    unquoted identifiers and reports them UPPER CASE, and
+    ``SnowflakeAdapter.run`` builds its row dicts straight from
+    ``cur.description`` without folding. A plain ``row.get("fc_rows")``
+    therefore returns None on Snowflake and ``int(None or 0)`` is a silent
+    zero - no exception, no warning, a detector that never fires and a
+    bookmark that never attaches. Every column this module reads is one it
+    named itself (``fc_*``), so matching case-insensitively can only widen
+    what is already ours; it cannot collide with a caller's column.
+
+    The same assumption lives at other row readers outside this module
+    (the chart's own ``fc_value``), which is a wider question than this
+    file can settle without a live account.
+    """
+    if not isinstance(row, dict):
+        return None
+    if name in row:
+        return row[name]
+    lowered = name.lower()
+    for key, value in row.items():
+        if str(key).lower() == lowered:
+            return value
+    return None
 
 
 def _count_key(name: Any) -> str:
@@ -836,17 +865,17 @@ def _read_index_state(
     # `None` means the read is not trustworthy enough to compare against.
     counts: dict[str, int] | None = {}
     for row in res.rows:
-        name = row.get("fc_event_name")
+        name = _field(row, "fc_event_name")
         if counts is not None:
             try:
-                counts[_count_key(name)] = int(row.get("fc_rows") or 0)
+                counts[_count_key(name)] = int(_field(row, "fc_rows") or 0)
             except (TypeError, ValueError):
                 # Dropping just this name would make it read as a deletion
                 # on the next comparison and cost a full-history rebuild of
                 # a healthy column. One unreadable count makes the whole
                 # read unusable, and saying nothing is the safe answer.
                 counts = None
-        bm = row.get("fc_bookmark")
+        bm = _field(row, "fc_bookmark")
         if bm is None:
             continue
         if not isinstance(bm, datetime):
@@ -1350,11 +1379,11 @@ def recover_registry_from_rows(
     result = run(recovered_columns_sql(form))
     columns: dict[str, Any] = {}
     for row in result.rows:
-        cand = known.get(row.get("fc_column"))
+        cand = known.get(_field(row, "fc_column"))
         if cand is None:
             continue
-        first = _dt(row.get("fc_first_at"))
-        bm = _dt(row.get("fc_bookmark"))
+        first = _dt(_field(row, "fc_first_at"))
+        bm = _dt(_field(row, "fc_bookmark"))
         columns[cand.key] = {
             "expr": cand.expr,
             "label": cand.label,

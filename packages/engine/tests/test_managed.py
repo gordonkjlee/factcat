@@ -22,6 +22,7 @@ from factcat.warehouses import ADAPTERS, AdapterError, QueryResult
 from factcat_app import managed
 from factcat_app.managed import (
     ColumnPlan,
+    _parse_iso,
     IndexColumn,
     Plan,
     apply_plan,
@@ -1205,6 +1206,42 @@ def test_an_unreadable_count_says_nothing_rather_than_crying_deletion():
     registry = apply_plan(plan, {**form, "managed_tables": reg}, run, now=NOW)
     assert plan.repaired == [], "an unreadable count was treated as a deletion"
     assert registry["columns"]["plan"]["row_counts"] == {}, "a partial picture was stamped"
+
+
+def test_rows_are_read_whatever_case_the_warehouse_reports():
+    """Snowflake resolves unquoted identifiers and reports them UPPER CASE,
+    and its adapter builds row dicts straight from `cur.description` without
+    folding. `row.get("fc_rows")` then returns None and `int(None or 0)` is a
+    silent zero: no exception, no warning, a detector that never fires and a
+    bookmark that never attaches. Every column read here is one this module
+    named itself, so matching case-insensitively can only widen what is
+    already ours.
+
+    Mutation: read the rows with a plain `row.get(...)` again.
+    """
+    class _Shouty(_Run):
+        """Every generated column comes back upper-cased, as Snowflake does."""
+
+        def __call__(self, sql, *, dry_run=False):
+            res = super().__call__(sql, dry_run=dry_run)
+            res.rows[:] = [{k.upper(): v for k, v in row.items()} for row in res.rows]
+            return res
+
+    form = _form("snowflake")
+    reg = _registry(form, refreshed_at=(NOW - timedelta(days=9)).isoformat())
+    reg["columns"]["plan"]["row_counts"] = {managed._count_key("subscription_started"): 5}
+    plan = build_plan({**form, "managed_tables": reg}, _Run(), now=NOW)
+    assert plan.columns[0].action == "refresh"
+    mark = NOW - timedelta(days=1)
+    registry = apply_plan(plan, {**form, "managed_tables": reg},
+                          _Shouty(bookmark=mark, rows=5, rows_after=12), now=NOW)
+    entry = registry["columns"]["plan"]
+    # the bookmark was read, so the next run attaches instead of rebuilding
+    assert entry["bookmark"] is not None, "an upper-cased bookmark column was not read"
+    assert _parse_iso(entry["bookmark"]) == mark
+    # and the counts are real numbers, not a silent zero
+    assert entry["row_counts"] == {managed._count_key("subscription_started"): 12},         entry["row_counts"]
+    assert plan.repaired == [], "an unread count was mistaken for a deletion"
 
 
 def test_a_column_with_no_bookmark_earns_no_shelter_from_the_sweep():
