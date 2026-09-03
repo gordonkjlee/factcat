@@ -170,9 +170,11 @@ run row says why.
 The table holds entity ids and column values copied from your events table,
 so check who can read the write dataset before indexing a column that
 carries personal data. Rows deleted from the events table leave the index
-at the next refresh of that column (the census notices the row count fall);
-with Mode: Off, or for a column no chart uses, they stay until the sweep
-drops it. Drop the column for an immediate removal. One gap to know about: if an event name
+at the next refresh of that column (the census notices the row count fall).
+With **Mode: Off** there are no refreshes and no clean-up, so deleted rows
+stay in the index until you Drop the column or the table yourself. For a
+column no chart uses, they stay until the clean-up drops it (**Drop unused
+after**). Drop the column for an immediate removal. One gap to know about: if an event name
 that already existed starts carrying a column it never carried before, the
 index does not pick that up on its own — Drop the column and let the next
 chart rebuild it. The index is

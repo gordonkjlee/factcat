@@ -405,8 +405,8 @@ deleted from the events table leave the index at the next refresh of that
 column (**Refresh when older than**, 7 days by default), detected through
 the event-name census. For a column no chart uses, they stay until the
 clean-up drops it (**Drop unused after**, 60 days). With **Mode: Off**
-nothing is dropped at all, so they stay until you Drop the column or the
-table yourself.
+there are no refreshes and no clean-up, so deleted rows stay in the index
+until you Drop the column or the table yourself.
 If an erasure has to be immediate, Drop the column on Setup or drop the
 table. Two changes the index cannot see are a value rewritten in place with
 no change in row count, and an identity remap; Drop is the remedy for both.

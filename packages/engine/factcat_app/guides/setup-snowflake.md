@@ -163,7 +163,9 @@ at the next refresh of that column, which depends on the event-name census
 noticing the row count fall — and without Enterprise materialized views
 that census is a table snapshot that only refreshes when someone clicks
 **Refresh event names**, so on standard edition the check is as fresh as
-your last refresh. Drop the column for an immediate removal. One gap to know about: if an event name
+your last refresh. With **Mode: Off** there are no refreshes and no
+clean-up at all, so deleted rows stay in the index until you Drop the
+column or the table yourself. Drop the column for an immediate removal. One gap to know about: if an event name
 that already existed starts carrying a column it never carried before, the
 index does not pick that up on its own — Drop the column and let the next
 chart rebuild it. The build
