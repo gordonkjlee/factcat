@@ -17,4 +17,8 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # A PAT, so the release PR and the GitHub Release are ordinary events:
+          # GITHUB_TOKEN raises none, which left the release PR without its
+          # required checks and never fired the publish workflow. Falls back to
+          # GITHUB_TOKEN when unset or expired - degraded, not broken.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
