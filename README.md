@@ -313,8 +313,8 @@ official driver. The default has **no** warehouse SDK. Do not install a
 second PyPI project per warehouse. Setup guides ship in the app
 (`setup-bigquery.md`, `setup-snowflake.md`).
 
-If Setup finds a warehouse extra missing it offers to install it for you,
-using whichever of pip or uv can reach the interpreter it is running in.
+If Setup finds a warehouse extra missing it shows the command, and offers to
+run it when pip or uv can reach the interpreter it is running in.
 
 To hack on the library:
 
@@ -334,21 +334,25 @@ on the project, Data Viewer on the dataset). For Snowflake, an account, a user w
 key-pair, a compute warehouse, and a table you can query.
 
 ```bash
-pip install "factcat[bigquery]"   # or uv / pipx / your tool of choice
+uv tool install "factcat[bigquery]"    # or: pipx install "factcat[bigquery]"
 
-cd /path/to/your/warehouse        # mapping is saved here
+cd /path/to/your/warehouse             # mapping is saved here
 factcat
 ```
 
+Either of those puts `factcat` on your PATH, so there is nothing to activate
+first. `pip install "factcat[bigquery]"` works too and is the right call when
+you want it inside an environment you already manage — though a system Python
+will refuse a bare `pip install` (PEP 668), which is what the two commands
+above sidestep.
+
 The working directory decides which `.factcat.json` is read and written, so
-run it from the project the mapping belongs to. If you installed with
-`uv tool` or `pipx`, `factcat` is on your PATH and there is nothing to
-activate first.
+run it from the project the mapping belongs to.
 
 Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): pick **BigQuery** or
 **Snowflake** (experimental — see Execute adapters). If that warehouse extra is not installed, Setup shows the
-command and **Install** (into this environment; it does not pip on its
-own). Then that warehouse's connection and catalog, then entity id and
+command and **Install** (into this environment; it does not install on
+its own). Then that warehouse's connection and catalog, then entity id and
 timestamp. Fields persist as you pick them (no Save button). Event names
 load on Events **Refresh list**. Optional: allow Factcat to create and
 maintain tables in your warehouse for better performance (BigQuery:

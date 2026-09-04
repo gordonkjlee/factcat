@@ -42,13 +42,16 @@ def editable_origin() -> Path | None:
 
 
 def _installer() -> list[str]:
-    """The install front-end that can actually reach this interpreter.
-
-    An isolated install (``uv tool``, ``pipx``) need not carry pip, so
-    assuming ``python -m pip`` offered a button that fails and printed a
-    command the reader cannot run.
-    """
-    if importlib.util.find_spec("pip") is not None:
+    """The install front-end that can reach this interpreter. An isolated
+    install (``uv tool``, ``pipx``) need not carry pip."""
+    try:
+        has_pip = importlib.util.find_spec("pip") is not None
+    except (ImportError, ValueError):
+        # A stale sys.modules entry raises rather than answering. This runs
+        # while Setup renders, so a raise here would be a dead page instead
+        # of a failed install.
+        has_pip = False
+    if has_pip:
         return [sys.executable, "-m", "pip", "install"]
     uv = shutil.which("uv")
     if uv:

@@ -24,7 +24,14 @@ def _adapter_class(kind: str):
 
 @pytest.fixture()
 def py_pi_install(monkeypatch):
+    # Pin BOTH branches install_argv depends on. Without the find_spec pin
+    # these tests pass or fail on whether the interpreter running the suite
+    # happens to carry pip - and a uv tool env, the case this module exists
+    # for, does not.
     monkeypatch.setattr("factcat_app.extras.editable_origin", lambda: None)
+    monkeypatch.setattr(
+        "factcat_app.extras.importlib.util.find_spec", lambda name: object()
+    )
 
 
 @pytest.mark.parametrize("kind", list(ADAPTERS))
@@ -82,12 +89,45 @@ def test_an_interpreter_without_pip_installs_through_uv(monkeypatch):
     assert "-m" not in argv, "it must not route through the missing pip module"
 
 
+def test_a_source_checkout_installs_editable_through_uv(monkeypatch, tmp_path):
+    """The two branches compose: `-e <checkout>[kind]` has to land after
+    `--python <exe>`, not before it. Only append order enforces that."""
+    origin = tmp_path / "packages" / "engine"
+    origin.mkdir(parents=True)
+    fake_uv = "/opt/bin/uv"
+    monkeypatch.setattr("factcat_app.extras.importlib.util.find_spec", lambda name: None)
+    monkeypatch.setattr(
+        "factcat_app.extras.shutil.which", lambda name: fake_uv if name == "uv" else None
+    )
+    monkeypatch.setattr("factcat_app.extras.editable_origin", lambda: origin)
+    argv = install_argv("bigquery")
+    assert argv[:5] == [fake_uv, "pip", "install", "--python", sys.executable]
+    assert argv[5:] == ["-e", f"{origin}[bigquery]"]
+
+
+def test_a_broken_pip_spec_does_not_take_the_page_down(monkeypatch):
+    """`find_spec` raises rather than answering when `sys.modules` holds a
+    stale entry. This runs while Setup renders, so it must degrade to another
+    installer instead of 500ing the page."""
+    def boom(name):
+        raise ValueError("pip.__spec__ is None")
+
+    monkeypatch.setattr("factcat_app.extras.importlib.util.find_spec", boom)
+    monkeypatch.setattr("factcat_app.extras.shutil.which", lambda name: "/opt/bin/uv")
+    monkeypatch.setattr("factcat_app.extras.editable_origin", lambda: None)
+    assert install_argv("bigquery")[0] == "/opt/bin/uv"
+
+
 def test_no_pip_and_no_uv_still_names_a_command(monkeypatch):
     """Nothing to install with is not a crash: the page still shows a command
     the reader can run themselves."""
     monkeypatch.setattr("factcat_app.extras.importlib.util.find_spec", lambda name: None)
     monkeypatch.setattr("factcat_app.extras.shutil.which", lambda name: None)
     monkeypatch.setattr("factcat_app.extras.editable_origin", lambda: None)
+    argv = install_argv("bigquery")
+    assert argv[0] == sys.executable
+    assert argv[1:4] == ["-m", "pip", "install"]
+    assert argv[-1] == "factcat[bigquery]"
     assert "factcat[bigquery]" in install_command("bigquery")
 
 
