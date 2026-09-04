@@ -253,7 +253,10 @@ integers for the period grid - and it lives in
 [`dialects.py`](packages/engine/factcat/dialects.py).
 
 **Execute adapters** push that SQL into the caller's warehouse through its official
-client. Factcat has no warehouse of its own. BigQuery and Snowflake ship today. The
+client. Factcat has no warehouse of its own. BigQuery ships today; **Snowflake is
+experimental** — its SQL is generated and compiled in CI against Snowflake's grammar,
+but no live Snowflake account has ever executed it, so treat a first run as a test.
+The
 contract is `dialect` plus `run(sql)` — identity, auth, and cost knobs stay on the
 concrete class so Snowflake does not inherit `project` / `location` /
 `maximum_bytes_billed`. A later warehouse is a module and one line in the registry; see
@@ -280,7 +283,7 @@ One project: [factcat](https://pypi.org/project/factcat/).
 ```bash
 pip install factcat              # SQL generation + the local chart
 pip install factcat[bigquery]    # run queries in BigQuery
-pip install factcat[snowflake]   # run queries in Snowflake
+pip install factcat[snowflake]   # run queries in Snowflake (experimental)
 pip install factcat[all]         # every execute adapter we ship
 ```
 

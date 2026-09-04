@@ -55,10 +55,21 @@ def test_dry_run_raises_without_executing(snowflake_stack):
 
 
 def test_run_returns_dicts(snowflake_stack):
+    """Keys come back as written, not as Snowflake reports them.
+
+    The driver hands over `N` for `SELECT 1 AS n`, because Snowflake resolves
+    unquoted identifiers upper-cased. Every consumer reads by the name it
+    generated - `row.get("bucket")`, `row.get("fc_bookmark")` - so an
+    unfolded key is None, `int(None or 0)` is a silent zero, and charts render
+    empty with no error anywhere. Every identifier this project generates is
+    unquoted, so lowering cannot collide.
+
+    Mutation: hand back `col[0]` unchanged.
+    """
     adapter = _adapter(private_key_path=snowflake_stack.key)
     result = adapter.run("SELECT 1 AS n")
     snowflake_stack.cur.execute.assert_called_once_with("SELECT 1 AS n")
-    assert result.rows == [{"N": 1}]
+    assert result.rows == [{"n": 1}]
     assert result.bytes_processed is None
     assert result.bytes_billed is None
     assert result.job_id == "sf-job-1"

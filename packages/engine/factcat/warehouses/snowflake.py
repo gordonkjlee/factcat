@@ -309,7 +309,10 @@ class SnowflakeAdapter:
             ctx = _open_connection(**self._connect_kwargs())
             cur = ctx.cursor()
             cur.execute(sql)
-            columns = [col[0] for col in (cur.description or [])]
+            # Snowflake reports unquoted identifiers upper-cased, and every
+            # identifier this project generates is unquoted. Lower them so a
+            # result row is shaped the same on every adapter.
+            columns = [str(col[0]).lower() for col in (cur.description or [])]
             raw_rows = cur.fetchall() or []
             rows = [dict(zip(columns, row)) for row in raw_rows]
             job_id = getattr(cur, "sfqid", None)

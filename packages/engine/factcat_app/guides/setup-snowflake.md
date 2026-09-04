@@ -175,7 +175,10 @@ index does not pick that up on its own — Drop the column and let the next
 chart rebuild it. The build
 statements for Snowflake are verified by compiling them against Snowflake's
 grammar in the test suite; no live Snowflake account ran them for this
-release. If a build fails, the chart reads the full history and the Setup
+release, which is why Snowflake is marked experimental. Result columns are
+lower-cased on the way back, because Snowflake reports unquoted identifiers
+upper-cased and every identifier Factcat generates is unquoted; if a chart
+comes back empty rather than wrong, that is the first thing to check. If a build fails, the chart reads the full history and the Setup
 list says why.
 
 The list shows size and age per table (from `SHOW TABLES`); Drop is the
