@@ -278,7 +278,9 @@ unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` 
 
 ## Install
 
-One project: [factcat](https://pypi.org/project/factcat/).
+One project: [factcat](https://pypi.org/project/factcat/). Python 3.10+, and
+that is the only requirement — it is an ordinary Python package, so install it
+with whatever you already use.
 
 ```bash
 pip install factcat              # SQL generation + the local chart
@@ -287,10 +289,32 @@ pip install factcat[snowflake]   # run queries in Snowflake (experimental)
 pip install factcat[all]         # every execute adapter we ship
 ```
 
+`uv`, `pipx`, Poetry, PDM, conda, a container image — all fine, same package
+and the same extras:
+
+```bash
+uv pip install "factcat[bigquery]"      # into the environment you are in
+uv tool install "factcat[bigquery]"     # isolated, puts `factcat` on PATH
+pipx install "factcat[bigquery]"        # same idea
+```
+
+The two `tool` forms are worth knowing about if you are installing into a
+project that pins its own dependencies — a dbt repo, say — because they keep
+factcat's requirements out of it while still giving you the `factcat`
+command. Nothing here needs a virtual environment of its own; how you isolate
+Python is your call, and factcat has no opinion about it.
+
+There is no npm package and no standalone binary. It is a Python library and
+a Python-served local page, so a Node or Homebrew distribution would only be a
+Python runtime in a costume.
+
 Each extra is named after `connect(kind=)` and installs that warehouse's
 official driver. The default has **no** warehouse SDK. Do not install a
 second PyPI project per warehouse. Setup guides ship in the app
 (`setup-bigquery.md`, `setup-snowflake.md`).
+
+If Setup finds a warehouse extra missing it offers to install it for you,
+using whichever of pip or uv can reach the interpreter it is running in.
 
 To hack on the library:
 
@@ -310,16 +334,16 @@ on the project, Data Viewer on the dataset). For Snowflake, an account, a user w
 key-pair, a compute warehouse, and a table you can query.
 
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux:
-source .venv/bin/activate
+pip install "factcat[bigquery]"   # or uv / pipx / your tool of choice
 
-pip install factcat
-
-cd /path/to/your/warehouse   # mapping is saved here
+cd /path/to/your/warehouse        # mapping is saved here
 factcat
 ```
+
+The working directory decides which `.factcat.json` is read and written, so
+run it from the project the mapping belongs to. If you installed with
+`uv tool` or `pipx`, `factcat` is on your PATH and there is nothing to
+activate first.
 
 Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): pick **BigQuery** or
 **Snowflake** (experimental — see Execute adapters). If that warehouse extra is not installed, Setup shows the

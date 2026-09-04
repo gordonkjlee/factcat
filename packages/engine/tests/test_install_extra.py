@@ -59,6 +59,38 @@ def test_install_argv_is_this_interpreter(py_pi_install):
     assert "-e" not in argv
 
 
+def test_an_interpreter_without_pip_installs_through_uv(monkeypatch):
+    """An isolated install (`uv tool`, `pipx`) need not carry pip.
+
+    Assuming `python -m pip` gave those users a Setup button that fails with
+    "No module named pip" and printed a command they cannot run - the one
+    install front-end the app suggests, unusable by the install method it is
+    most likely to have been installed with.
+
+    Mutation: hard-code the pip argv again.
+    """
+    fake_uv = "/opt/bin/uv"
+    monkeypatch.setattr("factcat_app.extras.importlib.util.find_spec", lambda name: None)
+    monkeypatch.setattr(
+        "factcat_app.extras.shutil.which", lambda name: fake_uv if name == "uv" else None
+    )
+    monkeypatch.setattr("factcat_app.extras.editable_origin", lambda: None)
+    argv = install_argv("snowflake")
+    assert argv[:2] == [fake_uv, "pip"]
+    assert argv[2:5] == ["install", "--python", sys.executable]
+    assert argv[-1] == "factcat[snowflake]"
+    assert "-m" not in argv, "it must not route through the missing pip module"
+
+
+def test_no_pip_and_no_uv_still_names_a_command(monkeypatch):
+    """Nothing to install with is not a crash: the page still shows a command
+    the reader can run themselves."""
+    monkeypatch.setattr("factcat_app.extras.importlib.util.find_spec", lambda name: None)
+    monkeypatch.setattr("factcat_app.extras.shutil.which", lambda name: None)
+    monkeypatch.setattr("factcat_app.extras.editable_origin", lambda: None)
+    assert "factcat[bigquery]" in install_command("bigquery")
+
+
 def test_unknown_kind_does_not_build_argv():
     with pytest.raises(ValueError, match="unknown warehouse extra"):
         install_argv("os.system")

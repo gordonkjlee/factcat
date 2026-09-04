@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -39,11 +41,26 @@ def editable_origin() -> Path | None:
     return root
 
 
+def _installer() -> list[str]:
+    """The install front-end that can actually reach this interpreter.
+
+    An isolated install (``uv tool``, ``pipx``) need not carry pip, so
+    assuming ``python -m pip`` offered a button that fails and printed a
+    command the reader cannot run.
+    """
+    if importlib.util.find_spec("pip") is not None:
+        return [sys.executable, "-m", "pip", "install"]
+    uv = shutil.which("uv")
+    if uv:
+        return [uv, "pip", "install", "--python", sys.executable]
+    return [sys.executable, "-m", "pip", "install"]
+
+
 def install_argv(kind: str) -> list[str]:
-    """Argv for ``python -m pip install`` of this kind's extra. Not a shell."""
+    """Argv to install this kind's extra into this interpreter. Not a shell."""
     if kind not in ADAPTERS:
         raise ValueError(f"unknown warehouse extra: {kind!r}")
-    argv = [sys.executable, "-m", "pip", "install"]
+    argv = list(_installer())
     origin = editable_origin()
     if origin is not None:
         argv.extend(["-e", f"{origin}[{kind}]"])
@@ -63,9 +80,9 @@ def _forget_failed_imports() -> None:
 
 
 def run_install(kind: str) -> dict[str, str | bool]:
-    """Install ``factcat[<kind>]`` into this venv after an explicit yes.
+    """Install ``factcat[<kind>]`` into this interpreter after an explicit yes.
 
-    Does not retry with ``--break-system-packages``. Does not pip for an
+    Does not retry with ``--break-system-packages``. Does not install for an
     unknown kind.
     """
     argv = install_argv(kind)
@@ -84,9 +101,9 @@ def run_install(kind: str) -> dict[str, str | bool]:
     except FileNotFoundError as exc:
         return {"ok": False, "command": command, "error": str(exc)}
     except subprocess.TimeoutExpired:
-        return {"ok": False, "command": command, "error": "pip timed out"}
+        return {"ok": False, "command": command, "error": "the install timed out"}
     if completed.returncode != 0:
-        err = (completed.stderr or completed.stdout or "pip failed").strip()
+        err = (completed.stderr or completed.stdout or "the install failed").strip()
         return {"ok": False, "command": command, "error": err[-4000:]}
     importlib.invalidate_caches()
     _forget_failed_imports()
@@ -94,6 +111,6 @@ def run_install(kind: str) -> dict[str, str | bool]:
         return {
             "ok": False,
             "command": command,
-            "error": "pip succeeded but the driver still does not import",
+            "error": "the install succeeded but the driver still does not import",
         }
     return {"ok": True, "command": command}
