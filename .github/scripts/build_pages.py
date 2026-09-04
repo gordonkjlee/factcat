@@ -28,8 +28,8 @@ GITHUB = "https://github.com/gordonkjlee/factcat"
 PYPI = "https://pypi.org/project/factcat/"
 PITCH = (
     "An open-source alternative to Amplitude and Mixpanel that runs in your own "
-    "data warehouse. Factcat generates SQL and runs it in your BigQuery or "
-    "Snowflake — no SDK, no ingestion, nothing hosted."
+    "data warehouse. Factcat generates SQL and runs it in your BigQuery (or "
+    "Snowflake, experimental) — no SDK, no ingestion, nothing hosted."
 )
 MARKDOWN_EXTENSIONS = ("fenced_code", "tables")
 
