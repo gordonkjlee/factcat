@@ -1,9 +1,8 @@
 name: CI
 
-# workflow_dispatch is for the release-please PR: GitHub raises no workflow
-# run for GITHUB_TOKEN events, so that PR never gets its required checks, and
-# a push filter hits the same rule. Dispatch it there by hand, once per head
-# SHA. A PAT or App token for release-please retires this.
+# workflow_dispatch is the fallback for the release-please PR when its token
+# is not working: GITHUB_TOKEN raises no events, and a push filter hits the
+# same rule. Dispatch at that branch, once per head SHA.
 
 on:
   push:
