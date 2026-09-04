@@ -1,24 +1,9 @@
 name: CI
 
-# `workflow_dispatch` exists for ONE case: the release-please PR.
-#
-# Release Please raises its PR with the repository's `GITHUB_TOKEN`, and
-# GitHub deliberately starts no workflow run for events raised by that token
-# (it is the recursion guard). So the release PR gets no `test (3.10)` /
-# `test (3.12)` check, the "Protect main" ruleset requires both, and the PR
-# is BLOCKED forever with "no checks reported" - not failing, never running.
-#
-# Adding the release branch to the `push` filter does NOT help: the same
-# restriction applies to push. The permanent fix is to give Release Please a
-# PAT or GitHub App token so its pushes are ordinary events; until then,
-# dispatch this workflow at the release branch by hand:
-#
-#   gh workflow run ci.yml --ref release-please--branches--main--components--factcat
-#
-# The run attaches `test (3.10)` and `test (3.12)` to that branch's head
-# commit, which is what the ruleset checks, so the PR goes mergeable. Do it
-# again if Release Please pushes another commit - the required checks are
-# evaluated against the head SHA, and a new SHA has none.
+# workflow_dispatch is for the release-please PR: GitHub raises no workflow
+# run for GITHUB_TOKEN events, so that PR never gets its required checks, and
+# a push filter hits the same rule. Dispatch it there by hand, once per head
+# SHA. A PAT or App token for release-please retires this.
 
 on:
   push:
