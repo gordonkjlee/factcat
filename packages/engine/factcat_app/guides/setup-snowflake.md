@@ -3,6 +3,10 @@
 Map **one wide events table** in your account. Factcat generates SQL and
 runs it there. It does not ingest rows.
 
+**Snowflake is experimental.** The SQL is compiled against Snowflake's
+grammar in the test suite, but no live Snowflake account has executed it, so
+treat a first run as a test rather than a routine setup.
+
 ## Credentials
 
 Two sign-in methods. Neither stores a password in `.factcat.json`.
@@ -175,7 +179,10 @@ index does not pick that up on its own — Drop the column and let the next
 chart rebuild it. The build
 statements for Snowflake are verified by compiling them against Snowflake's
 grammar in the test suite; no live Snowflake account ran them for this
-release. If a build fails, the chart reads the full history and the Setup
+release. Result columns are lower-cased on the way back, because Snowflake
+reports unquoted identifiers upper-cased and every identifier Factcat
+generates is unquoted; a chart that comes back empty rather than wrong is the
+symptom of that going missing. If a build fails, the chart reads the full history and the Setup
 list says why.
 
 The list shows size and age per table (from `SHOW TABLES`); Drop is the

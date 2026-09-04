@@ -800,19 +800,12 @@ def _field(row: Any, name: str) -> Any:
     """Read one generated column out of a result row, whatever case the
     warehouse reported it in.
 
-    BigQuery echoes an unquoted alias as written; Snowflake resolves
-    unquoted identifiers and reports them UPPER CASE, and
-    ``SnowflakeAdapter.run`` builds its row dicts straight from
-    ``cur.description`` without folding. A plain ``row.get("fc_rows")``
-    therefore returns None on Snowflake and ``int(None or 0)`` is a silent
-    zero - no exception, no warning, a detector that never fires and a
-    bookmark that never attaches. Every column this module reads is one it
-    named itself (``fc_*``), so matching case-insensitively can only widen
-    what is already ours; it cannot collide with a caller's column.
-
-    The same assumption lives at other row readers outside this module
-    (the chart's own ``fc_value``), which is a wider question than this
-    file can settle without a live account.
+Adapters normalise case now, so this is defence in depth rather than
+    the fix: ``run`` is a plain callable here, and a caller that does not
+    fold would otherwise return None for a column we named, which
+    ``int(None or 0)`` turns into a silent zero. Every column read here is
+    one this module named (``fc_*``), so matching case-insensitively can
+    only widen what is already ours.
     """
     if not isinstance(row, dict):
         return None

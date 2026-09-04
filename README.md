@@ -3,8 +3,8 @@
 <img src="packages/engine/factcat_app/static/waiting.jpg" width="200" alt="Factcat">
 
 An open-source alternative to Amplitude and Mixpanel that runs in your own data
-warehouse. Factcat generates SQL and runs it in your BigQuery or Snowflake —
-no SDK, no ingestion, nothing hosted.
+warehouse. Factcat generates SQL and runs it in your BigQuery (or Snowflake,
+experimental) — no SDK, no ingestion, nothing hosted.
 
 ## The problem
 
@@ -253,7 +253,10 @@ integers for the period grid - and it lives in
 [`dialects.py`](packages/engine/factcat/dialects.py).
 
 **Execute adapters** push that SQL into the caller's warehouse through its official
-client. Factcat has no warehouse of its own. BigQuery and Snowflake ship today. The
+client. Factcat has no warehouse of its own. BigQuery ships today; **Snowflake is
+experimental** — its SQL is generated and compiled in CI against Snowflake's grammar,
+but no live Snowflake account has ever executed it, so treat a first run as a test.
+The
 contract is `dialect` plus `run(sql)` — identity, auth, and cost knobs stay on the
 concrete class so Snowflake does not inherit `project` / `location` /
 `maximum_bytes_billed`. A later warehouse is a module and one line in the registry; see
@@ -280,7 +283,7 @@ One project: [factcat](https://pypi.org/project/factcat/).
 ```bash
 pip install factcat              # SQL generation + the local chart
 pip install factcat[bigquery]    # run queries in BigQuery
-pip install factcat[snowflake]   # run queries in Snowflake
+pip install factcat[snowflake]   # run queries in Snowflake (experimental)
 pip install factcat[all]         # every execute adapter we ship
 ```
 
@@ -298,7 +301,7 @@ pip install -e "packages/engine[dev,all]"
 ## Run the app
 
 The app is a local web page. It does not ingest your data. It generates SQL and runs it
-in **your** warehouse (BigQuery or Snowflake). No Docker. Start it from **your warehouse
+in **your** warehouse (BigQuery; Snowflake is experimental). No Docker. Start it from **your warehouse
 repo** (or any project directory); that is where `.factcat.json` is written.
 
 **You need:** Python 3.10+. For BigQuery, the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install),
@@ -319,7 +322,7 @@ factcat
 ```
 
 Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): pick **BigQuery** or
-**Snowflake**. If that warehouse extra is not installed, Setup shows the
+**Snowflake** (experimental — see Execute adapters). If that warehouse extra is not installed, Setup shows the
 command and **Install** (into this environment; it does not pip on its
 own). Then that warehouse's connection and catalog, then entity id and
 timestamp. Fields persist as you pick them (no Save button). Event names
