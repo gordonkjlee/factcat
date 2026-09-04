@@ -6,6 +6,27 @@ An open-source alternative to Amplitude and Mixpanel that runs in your own data
 warehouse. Factcat generates SQL and runs it in your BigQuery (or Snowflake,
 experimental) — no SDK, no ingestion, nothing hosted.
 
+**Point it at an events table you already have.** Nothing to instrument, nothing
+to ship, nothing to wait for — the events are in your warehouse today, so the
+first chart is minutes away rather than the weeks it takes to install an SDK and
+accumulate data.
+
+**You need** one wide events table — one row per event, properties as real
+columns — in BigQuery, and Python 3.10+.
+
+```bash
+pip install "factcat[bigquery]"
+cd /path/to/your/warehouse   # your mapping is saved here
+factcat
+```
+
+Setup asks which table, which column identifies the thing you are counting, and
+which column is the event timestamp. Then you have a chart.
+
+The rest of this page is *why* the modelling works the way it does, which is what
+separates Factcat from writing the SQL yourself. To just get it running, jump to
+[Run the app](#run-the-app).
+
 ## The problem
 
 Product analytics tools make your modelling decisions for you. The entity is a user
