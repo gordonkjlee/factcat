@@ -1,9 +1,14 @@
 name: CI
 
+# workflow_dispatch is the fallback for the release-please PR when its token
+# is not working: GITHUB_TOKEN raises no events, and a push filter hits the
+# same rule. Dispatch at that branch, once per head SHA.
+
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
