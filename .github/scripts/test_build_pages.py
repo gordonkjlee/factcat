@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from html import escape as html_escape
 from pathlib import Path
 
 import pytest
@@ -97,3 +99,38 @@ def test_cname_must_match_domain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     dest.mkdir()
     with pytest.raises(SystemExit, match="CNAME must be"):
         build_pages.write_cname(dest)
+
+
+def test_every_in_page_anchor_resolves_to_a_heading():
+    """An in-page link works on GitHub whatever we do, because GitHub slugs
+    headings itself, and is dead on the site unless `toc` gives them ids. The
+    README's first such link shipped broken for exactly that reason: the
+    existing anchor test only checks that rewriting leaves them alone, never
+    that the target exists.
+
+    Mutation: drop "toc" from MARKDOWN_EXTENSIONS.
+    """
+    _pitch, rest = build_pages.split_readme((ROOT / "README.md").read_text(encoding="utf-8"))
+    html = build_pages.render_markdown(rest)
+    ids = set(re.findall(r'id="([^"]+)"', html))
+    links = re.findall(r'href="#([^"]+)"', html)
+    assert links, "no in-page anchors left; drop this guard or the link it protects"
+    assert [link for link in links if link not in ids] == []
+
+
+def test_the_hero_command_is_the_one_the_readme_prints():
+    """The landing hero hard-coded its own `pip install factcat`, directly
+    above whatever the README said. They disagreed, and the hero's form
+    installs no warehouse driver - so the site's most prominent command left
+    the reader unable to connect to anything.
+
+    Mutation: return the fallback instead of reading the README.
+    """
+    _pitch, rest = build_pages.split_readme((ROOT / "README.md").read_text(encoding="utf-8"))
+    command = build_pages.first_install_command(rest)
+    assert command in rest, "the hero prints a command the README does not"
+    assert command.startswith("pip install ")
+    html = build_pages.wrap_html(
+        title="t", description="d", canonical="/", body="", install=command
+    )
+    assert f"<code>{html_escape(command)}</code>" in html

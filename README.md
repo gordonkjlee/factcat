@@ -6,6 +6,29 @@ An open-source alternative to Amplitude and Mixpanel that runs in your own data
 warehouse. Factcat generates SQL and runs it in your BigQuery (or Snowflake,
 experimental) — no SDK, no ingestion, nothing hosted.
 
+**Point it at an events table you already have.** Nothing to instrument, nothing
+to ship, nothing to wait for — the events are in your warehouse today, so the
+first chart is minutes away rather than the weeks it takes to install an SDK and
+accumulate data.
+
+**You need** one wide events table — one row per event, properties as real
+columns — in BigQuery, Python 3.10+, and the Google Cloud SDK signed in
+(`gcloud auth application-default login`).
+
+```bash
+pip install "factcat[bigquery]"
+cd /path/to/your/warehouse   # your mapping is saved here
+factcat
+```
+
+Open http://127.0.0.1:8000. Setup asks which table, which column identifies the
+thing you are counting, and which column is the event timestamp. Then you have
+a chart.
+
+The rest of this page is *why* the modelling works the way it does, which is what
+separates Factcat from writing the SQL yourself. To just get it running, jump to
+[Run the app](#run-the-app).
+
 ## The problem
 
 Product analytics tools make your modelling decisions for you. The entity is a user
@@ -278,19 +301,51 @@ unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` 
 
 ## Install
 
-One project: [factcat](https://pypi.org/project/factcat/).
+One project: [factcat](https://pypi.org/project/factcat/). Python 3.10+, and
+that is the only requirement — it is an ordinary Python package, so install it
+with whatever you already use.
 
 ```bash
-pip install factcat              # SQL generation + the local chart
-pip install factcat[bigquery]    # run queries in BigQuery
-pip install factcat[snowflake]   # run queries in Snowflake (experimental)
-pip install factcat[all]         # every execute adapter we ship
+pip install factcat                  # SQL generation + the local chart
+pip install "factcat[bigquery]"      # run queries in BigQuery
+pip install "factcat[snowflake]"     # run queries in Snowflake (experimental)
+pip install "factcat[all]"           # every execute adapter we ship
 ```
+
+The quotes are for zsh, which treats bare brackets as a glob and refuses the
+command.
+
+`uv`, `pipx`, Poetry, PDM, conda, a container image — all fine, same package
+and the same extras:
+
+```bash
+uv pip install "factcat[bigquery]"      # into the environment you are in
+uv tool install "factcat[bigquery]"     # isolated, puts `factcat` on PATH
+pipx install "factcat[bigquery]"        # same idea
+```
+
+The two `tool` forms are worth knowing about if you are installing into a
+project that pins its own dependencies — a dbt repo, say — because they keep
+factcat's requirements out of it while still giving you the `factcat`
+command. Name the extras you want at install time with those two: an extra
+added later through Setup goes into the tool's own environment, which
+`uv tool upgrade` and `pipx reinstall` rebuild from the original spec. Factcat does not require a virtual environment of its own — how you
+isolate Python is your call, and it has no opinion about it. The one case
+where the choice is made for you is a Homebrew or Linux-distribution
+`python3`, which refuses a bare `pip install` outright; see Run the app.
+
+There is no npm package and no standalone binary. It is a Python library and
+a Python-served local page, so a Node or Homebrew distribution would only be a
+Python runtime in a costume.
 
 Each extra is named after `connect(kind=)` and installs that warehouse's
 official driver. The default has **no** warehouse SDK. Do not install a
 second PyPI project per warehouse. Setup guides ship in the app
 (`setup-bigquery.md`, `setup-snowflake.md`).
+
+If Setup finds a warehouse extra missing it shows the command and an Install
+button, which uses pip or uv — whichever can reach the interpreter it is
+running in.
 
 To hack on the library:
 
@@ -310,21 +365,29 @@ on the project, Data Viewer on the dataset). For Snowflake, an account, a user w
 key-pair, a compute warehouse, and a table you can query.
 
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux:
-source .venv/bin/activate
+pip install "factcat[bigquery]"
 
-pip install factcat
-
-cd /path/to/your/warehouse   # mapping is saved here
+cd /path/to/your/warehouse        # mapping is saved here
 factcat
 ```
 
+That gives you a `factcat` command. If you would rather keep factcat's
+dependencies out of the environment you are installing into,
+`uv tool install "factcat[bigquery]"` and `pipx install "factcat[bigquery]"`
+do the same job in an isolated one.
+
+Two Pythons refuse a bare `pip install`: Homebrew's, and the `python3` your
+Linux distribution ships. Both print `externally-managed-environment` and mean
+"not into the system Python" — install into a virtual environment, or use one
+of the two commands above.
+
+The working directory decides which `.factcat.json` is read and written, so
+run it from the project the mapping belongs to.
+
 Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): pick **BigQuery** or
 **Snowflake** (experimental — see Execute adapters). If that warehouse extra is not installed, Setup shows the
-command and **Install** (into this environment; it does not pip on its
-own). Then that warehouse's connection and catalog, then entity id and
+command and **Install** (into this environment; it does not install on
+its own). Then that warehouse's connection and catalog, then entity id and
 timestamp. Fields persist as you pick them (no Save button). Event names
 load on Events **Refresh list**. Optional: allow Factcat to create and
 maintain tables in your warehouse for better performance (BigQuery:
