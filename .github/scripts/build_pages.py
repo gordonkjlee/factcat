@@ -8,6 +8,7 @@ marketing page — change the README instead.
 from __future__ import annotations
 
 import argparse
+import html
 import re
 import shutil
 import sys
@@ -26,12 +27,18 @@ DOMAIN = "factcat.dev"
 SITE_ORIGIN = f"https://{DOMAIN}"
 GITHUB = "https://github.com/gordonkjlee/factcat"
 PYPI = "https://pypi.org/project/factcat/"
+# The landing hero takes the README's own first command, so the two cannot
+# disagree - they did, and the hero's form installs no warehouse driver, so
+# the most prominent command on the site left the reader unable to connect.
+# Guide pages keep the generic form: they are not warehouse-specific.
+INSTALL_FALLBACK = "pip install factcat"
+
 PITCH = (
     "An open-source alternative to Amplitude and Mixpanel that runs in your own "
     "data warehouse. Factcat generates SQL and runs it in your BigQuery (or "
     "Snowflake, experimental) — no SDK, no ingestion, nothing hosted."
 )
-MARKDOWN_EXTENSIONS = ("fenced_code", "tables")
+MARKDOWN_EXTENSIONS = ("fenced_code", "tables", "toc")
 
 # Repo-relative source → published path. Anything else that exists in the
 # repo is rewritten to a GitHub blob URL so the site does not 404.
@@ -144,6 +151,15 @@ def split_readme(text: str) -> tuple[str, str]:
     return pitch, "\n".join(kept).strip() + "\n"
 
 
+def first_install_command(text: str, default: str = INSTALL_FALLBACK) -> str:
+    """The first ``pip install`` line in the README, for the site hero."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("pip install "):
+            return stripped.split("#", 1)[0].strip()
+    return default
+
+
 def wrap_html(
     *,
     title: str,
@@ -152,13 +168,14 @@ def wrap_html(
     body: str,
     heading: str | None = "Factcat",
     pitch: str = PITCH,
+    install: str = INSTALL_FALLBACK,
 ) -> str:
     canon = SITE_ORIGIN if canonical == "/" else f"{SITE_ORIGIN}{canonical}"
     title_html = f"<h1>{heading}</h1>\n      " if heading else ""
     landing = (
         f'<section class="landing">\n'
         f"      {title_html}<p class=\"pitch\">{pitch}</p>\n"
-        f"      <pre class=\"install\"><code>pip install factcat</code></pre>\n"
+        f"      <pre class=\"install\"><code>{html.escape(install)}</code></pre>\n"
         f"    </section>"
     )
     return f"""<!DOCTYPE html>
@@ -298,10 +315,12 @@ def build(dest: Path | None = None) -> Path:
         text = source.read_text(encoding="utf-8")
         heading: str | None = None
         description = page["description"]
+        install = INSTALL_FALLBACK
         if page["source"] == "README.md":
             text = readme_rest
             heading = "Factcat"
             description = pitch
+            install = first_install_command(readme_rest)
         body = rewrite_html(render_markdown(text), source)
         html = wrap_html(
             title=page["title"],
@@ -310,6 +329,7 @@ def build(dest: Path | None = None) -> Path:
             body=body,
             heading=heading,
             pitch=pitch,
+            install=install,
         )
         (dest / page["output"]).write_text(html, encoding="utf-8")
 

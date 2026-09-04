@@ -12,7 +12,8 @@ first chart is minutes away rather than the weeks it takes to install an SDK and
 accumulate data.
 
 **You need** one wide events table — one row per event, properties as real
-columns — in BigQuery, and Python 3.10+.
+columns — in BigQuery, Python 3.10+, and the Google Cloud SDK signed in
+(`gcloud auth application-default login`).
 
 ```bash
 pip install "factcat[bigquery]"
@@ -20,8 +21,9 @@ cd /path/to/your/warehouse   # your mapping is saved here
 factcat
 ```
 
-Setup asks which table, which column identifies the thing you are counting, and
-which column is the event timestamp. Then you have a chart.
+Open http://127.0.0.1:8000. Setup asks which table, which column identifies the
+thing you are counting, and which column is the event timestamp. Then you have
+a chart.
 
 The rest of this page is *why* the modelling works the way it does, which is what
 separates Factcat from writing the SQL yourself. To just get it running, jump to
@@ -304,11 +306,14 @@ that is the only requirement — it is an ordinary Python package, so install it
 with whatever you already use.
 
 ```bash
-pip install factcat              # SQL generation + the local chart
-pip install factcat[bigquery]    # run queries in BigQuery
-pip install factcat[snowflake]   # run queries in Snowflake (experimental)
-pip install factcat[all]         # every execute adapter we ship
+pip install factcat                  # SQL generation + the local chart
+pip install "factcat[bigquery]"      # run queries in BigQuery
+pip install "factcat[snowflake]"     # run queries in Snowflake (experimental)
+pip install "factcat[all]"           # every execute adapter we ship
 ```
+
+The quotes are for zsh, which treats bare brackets as a glob and refuses the
+command.
 
 `uv`, `pipx`, Poetry, PDM, conda, a container image — all fine, same package
 and the same extras:
@@ -322,8 +327,12 @@ pipx install "factcat[bigquery]"        # same idea
 The two `tool` forms are worth knowing about if you are installing into a
 project that pins its own dependencies — a dbt repo, say — because they keep
 factcat's requirements out of it while still giving you the `factcat`
-command. Nothing here needs a virtual environment of its own; how you isolate
-Python is your call, and factcat has no opinion about it.
+command. Name the extras you want at install time with those two: an extra
+added later through Setup goes into the tool's own environment, which
+`uv tool upgrade` and `pipx reinstall` rebuild from the original spec. Factcat does not require a virtual environment of its own — how you
+isolate Python is your call, and it has no opinion about it. The one case
+where the choice is made for you is a Homebrew or Linux-distribution
+`python3`, which refuses a bare `pip install` outright; see Run the app.
 
 There is no npm package and no standalone binary. It is a Python library and
 a Python-served local page, so a Node or Homebrew distribution would only be a
@@ -334,8 +343,9 @@ official driver. The default has **no** warehouse SDK. Do not install a
 second PyPI project per warehouse. Setup guides ship in the app
 (`setup-bigquery.md`, `setup-snowflake.md`).
 
-If Setup finds a warehouse extra missing it shows the command, and offers to
-run it when pip or uv can reach the interpreter it is running in.
+If Setup finds a warehouse extra missing it shows the command and an Install
+button, which uses pip or uv — whichever can reach the interpreter it is
+running in.
 
 To hack on the library:
 
