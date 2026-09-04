@@ -1209,13 +1209,11 @@ def test_an_unreadable_count_says_nothing_rather_than_crying_deletion():
 
 
 def test_rows_are_read_whatever_case_the_warehouse_reports():
-    """Snowflake resolves unquoted identifiers and reports them UPPER CASE,
-    and its adapter builds row dicts straight from `cur.description` without
-    folding. `row.get("fc_rows")` then returns None and `int(None or 0)` is a
-    silent zero: no exception, no warning, a detector that never fires and a
-    bookmark that never attaches. Every column read here is one this module
-    named itself, so matching case-insensitively can only widen what is
-    already ours.
+    """Adapters fold case now, so this is defence in depth: `run` is a
+    plain callable, and one that did not fold would return None for a column
+    we named, which `int(None or 0)` turns into a silent zero - no exception,
+    no warning. Every column read here is one this module named itself, so
+    matching case-insensitively can only widen what is already ours.
 
     Mutation: read the rows with a plain `row.get(...)` again.
     """

@@ -3,8 +3,8 @@
 <img src="packages/engine/factcat_app/static/waiting.jpg" width="200" alt="Factcat">
 
 An open-source alternative to Amplitude and Mixpanel that runs in your own data
-warehouse. Factcat generates SQL and runs it in your BigQuery or Snowflake —
-no SDK, no ingestion, nothing hosted.
+warehouse. Factcat generates SQL and runs it in your BigQuery (or Snowflake,
+experimental) — no SDK, no ingestion, nothing hosted.
 
 ## The problem
 
@@ -301,7 +301,7 @@ pip install -e "packages/engine[dev,all]"
 ## Run the app
 
 The app is a local web page. It does not ingest your data. It generates SQL and runs it
-in **your** warehouse (BigQuery or Snowflake). No Docker. Start it from **your warehouse
+in **your** warehouse (BigQuery; Snowflake is experimental). No Docker. Start it from **your warehouse
 repo** (or any project directory); that is where `.factcat.json` is written.
 
 **You need:** Python 3.10+. For BigQuery, the [Google Cloud SDK](https://cloud.google.com/sdk/docs/install),
@@ -322,7 +322,7 @@ factcat
 ```
 
 Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): pick **BigQuery** or
-**Snowflake**. If that warehouse extra is not installed, Setup shows the
+**Snowflake** (experimental — see Execute adapters). If that warehouse extra is not installed, Setup shows the
 command and **Install** (into this environment; it does not pip on its
 own). Then that warehouse's connection and catalog, then entity id and
 timestamp. Fields persist as you pick them (no Save button). Event names
