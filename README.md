@@ -334,17 +334,21 @@ on the project, Data Viewer on the dataset). For Snowflake, an account, a user w
 key-pair, a compute warehouse, and a table you can query.
 
 ```bash
-uv tool install "factcat[bigquery]"    # or: pipx install "factcat[bigquery]"
+pip install "factcat[bigquery]"
 
-cd /path/to/your/warehouse             # mapping is saved here
+cd /path/to/your/warehouse        # mapping is saved here
 factcat
 ```
 
-Either of those puts `factcat` on your PATH, so there is nothing to activate
-first. `pip install "factcat[bigquery]"` works too and is the right call when
-you want it inside an environment you already manage — though a system Python
-will refuse a bare `pip install` (PEP 668), which is what the two commands
-above sidestep.
+That gives you a `factcat` command. If you would rather keep factcat's
+dependencies out of the environment you are installing into,
+`uv tool install "factcat[bigquery]"` and `pipx install "factcat[bigquery]"`
+do the same job in an isolated one.
+
+Two Pythons refuse a bare `pip install`: Homebrew's, and the `python3` your
+Linux distribution ships. Both print `externally-managed-environment` and mean
+"not into the system Python" — install into a virtual environment, or use one
+of the two commands above.
 
 The working directory decides which `.factcat.json` is read and written, so
 run it from the project the mapping belongs to.
