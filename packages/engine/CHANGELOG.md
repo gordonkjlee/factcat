@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/gordonkjlee/factcat/compare/v0.5.0...v0.5.1) (2026-09-04)
+
+
+### Documentation
+
+* make the onboarding path work, and pick an installer that exists ([#78](https://github.com/gordonkjlee/factcat/issues/78)) ([327aa47](https://github.com/gordonkjlee/factcat/commit/327aa47571d4374487a3c4994969a4b465834832))
+
 ## [0.5.0](https://github.com/gordonkjlee/factcat/compare/v0.4.1...v0.5.0) (2026-09-04)
 
 
