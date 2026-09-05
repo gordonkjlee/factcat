@@ -76,9 +76,9 @@ def configure_logging() -> None:
     """One rotating file beside the loaded mapping; nothing on the console,
     which uvicorn owns. Idempotent so a second startup in one process (tests,
     reload) does not double every line."""
-    path = config_path().with_name("factcat.log")
+    path = config_path().with_name("factcat.log").resolve()
     for handler in logger.handlers:
-        if isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename) == path:
+        if isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename).resolve() == path:
             return
     handler = RotatingFileHandler(
         path, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
@@ -577,12 +577,13 @@ def _fail(
     sql: str | None,
     extra: dict[str, Any] | None = None,
 ) -> JSONResponse:
-    if isinstance(exc, AdapterError):
-        # The response strips the SQL and the stack; the file keeps both.
-        logger.exception("run failed: %s\n%s", exc, sql or "")
-    else:
+    if isinstance(exc, ValueError) and not isinstance(exc, AdapterError):
         # A form the app refused is not an incident.
         logger.info("run rejected: %s", exc)
+    else:
+        # The response strips the SQL and the stack; the file keeps both,
+        # for an adapter failure and for anything else the funnel catches.
+        logger.exception("run failed: %s\n%s", exc, sql or "")
     body = {"ok": False, "error": _client_error(exc, sql), "sql": sql}
     if extra:
         body.update(extra)
