@@ -228,6 +228,9 @@ jobs:
           NUMBER=$(echo "$MATCH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('number') or '')")
           STATE=$(echo "$MATCH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('state') or '')")
           if [ -z "$NUMBER" ]; then
+            gh label create release-automation --repo "${{ github.repository }}" \
+              --description "Filed by the publish workflow when a release fails to reach PyPI" \
+              --color 6E6E6E --force
             gh issue create --repo "${{ github.repository }}" \
               --title "$TITLE" \
               --label release-automation \

@@ -6,8 +6,9 @@ the next curl, which is how a successful upload was reported as a failed
 release.
 
 ``--installer pip`` installs into a throwaway venv; ``--installer uv`` goes
-through ``uv tool``, the isolated install the README offers, so the console
-script is exercised the way that path puts it on PATH.
+through ``uv tool``, the isolated install the README offers: it proves the
+package installs and imports where there is no pip, and the smoke's entry-point
+check runs in that environment. Neither leg launches the ``factcat`` script.
 """
 
 from __future__ import annotations
