@@ -7,7 +7,6 @@ clients only — no live warehouse in CI.
 
 from __future__ import annotations
 
-import logging
 
 import pytest
 
@@ -31,24 +30,6 @@ from factcat_app.query import (
     event_values_sql,
     events_sql_from_form,
 )
-
-
-class _Capture(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__()
-        self.messages: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
-
-
-@pytest.fixture()
-def sqlglot_warnings():
-    logger = logging.getLogger("sqlglot")
-    handler = _Capture()
-    logger.addHandler(handler)
-    yield handler
-    logger.removeHandler(handler)
 
 
 def _form(kind: str, **extra):
