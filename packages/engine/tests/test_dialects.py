@@ -9,7 +9,6 @@ broken SQL was emitted silently. These tests turn that warning into a failure.
 from __future__ import annotations
 
 import json
-import logging
 
 import re
 
@@ -430,24 +429,6 @@ EVENTS_TZ = EventsSpec(
         "current_date, 'week', 'monday', 0, 'Europe/Berlin', 'utc')"
     ),
 )
-
-
-class _Capture(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__()
-        self.messages: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(record.getMessage())
-
-
-@pytest.fixture()
-def sqlglot_warnings():
-    logger = logging.getLogger("sqlglot")
-    handler = _Capture()
-    logger.addHandler(handler)
-    yield handler
-    logger.removeHandler(handler)
 
 
 @pytest.mark.parametrize("dialect", SUPPORTED)
