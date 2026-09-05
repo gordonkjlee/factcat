@@ -49,8 +49,8 @@ jobs:
       - name: Pages builder tests
         run: python -m pytest .github/scripts/test_build_pages.py -q
 
-      # Private design notes are not in this repo, so a bare pointer to one
-      # is a dangling reference for every reader of the shipped tree.
+      # A pointer to a document that is not in this repo is a dangling
+      # reference for every reader of the shipped tree: name the constraint.
       - name: Internal reference check
         run: |
           ! git grep -nE '\bADR-[0-9]+\b|\(item [0-9]+\)' -- packages .github README.md
