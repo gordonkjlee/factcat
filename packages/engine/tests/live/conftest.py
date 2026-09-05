@@ -20,7 +20,7 @@ import pytest
 from factcat.warehouses.bigquery import BigQueryAdapter
 from factcat_app.catalog import type_sets
 from factcat_app.config import warehouse_kind
-from tests.test_cross_adapter import _form, sqlglot_warnings  # noqa: F401  (fixture re-export)
+from tests.test_cross_adapter import _form  # sqlglot_warnings comes from tests/conftest.py
 
 CONFIG_ENV = "FACTCAT_LIVE_CONFIG"
 PRODUCTION_BASENAME = ".factcat.json"
