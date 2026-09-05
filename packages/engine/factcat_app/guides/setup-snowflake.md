@@ -1,7 +1,9 @@
 # Snowflake
 
 Map **one wide events table** in your account. Factcat generates SQL and
-runs it there. It does not ingest rows.
+runs it there. It does not ingest rows. The mapping is written to
+`.factcat.json` in the directory you start `factcat` from; add
+`.factcat.json` to that repository's `.gitignore`.
 
 **Snowflake is experimental.** The SQL is compiled against Snowflake's
 grammar in the test suite, but no live Snowflake account has executed it, so

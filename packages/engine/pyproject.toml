@@ -12,8 +12,13 @@ license = { text = "MIT" }
 authors = [{ name = "Gordon Lee" }]
 keywords = ["analytics", "retention", "funnel", "warehouse", "sql", "dbt"]
 classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Topic :: Database",
   "Topic :: Scientific/Engineering :: Information Analysis",
 ]
@@ -39,8 +44,11 @@ all = ["factcat[bigquery,snowflake]"]
 factcat = "factcat_app.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/gordonkjlee/factcat"
+Homepage = "https://factcat.dev"
+Documentation = "https://factcat.dev"
 Source = "https://github.com/gordonkjlee/factcat"
+Changelog = "https://github.com/gordonkjlee/factcat/blob/main/packages/engine/CHANGELOG.md"
+Issues = "https://github.com/gordonkjlee/factcat/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["factcat", "factcat_app"]
