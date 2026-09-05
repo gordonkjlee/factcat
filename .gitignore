@@ -9,6 +9,7 @@ build/
 _site/
 .env
 .factcat.json
+factcat.log*
 .DS_Store
 node_modules/
 *.duckdb

@@ -384,6 +384,9 @@ of the two commands above.
 The working directory decides which `.factcat.json` is read and written, so
 run it from the project the mapping belongs to.
 
+Beside it the app writes `factcat.log` (rotating, four megabytes at most) with the
+generated SQL and the warehouse's error text; a bug report should include the relevant lines.
+
 Open http://127.0.0.1:8000. First run opens **Setup** (`/setup`): pick **BigQuery** or
 **Snowflake** (experimental — see Execute adapters). If that warehouse extra is not installed, Setup shows the
 command and **Install** (into this environment; it does not install on
