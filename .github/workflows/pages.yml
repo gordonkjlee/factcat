@@ -15,7 +15,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # If actions/configure-pages 403s on main, pages: write belongs on this job as well.
+    # configure-pages reads the site configuration with the job token, so the
+    # build needs pages access; the deploy token (id-token) stays on deploy.
+    permissions:
+      contents: read
+      pages: write
     concurrency:
       group: pages-build-${{ github.ref }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
