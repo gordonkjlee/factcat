@@ -279,9 +279,9 @@ def test_a_row_deleted_behind_us_comes_back_whole(lifecycle):
     )
     assert lifecycle.index_count() == PLAN_ROWS_AFTER - 1
     plan = lifecycle.chart_run(NOW + timedelta(days=16))
-    assert plan.repaired == ["plan"], "the deletion went unnoticed"
-    assert lifecycle.index_count() == PLAN_ROWS_AFTER
+    assert lifecycle.index_count() == PLAN_ROWS_AFTER, "the hole was never filled"
     assert lifecycle.index_rows() == INDEXED_AFTER
+    assert plan.repaired == ["plan"], "the deletion went unnoticed"
     entry = lifecycle.registry_entry()
     assert _counts(entry) == {"subscription_started": 7, "payment": 1}
     assert entry["bookmark"] == PLAN_BOOKMARK_AFTER
@@ -329,6 +329,7 @@ def test_mode_off_sweeps_nothing_and_the_index_persists(lifecycle):
     _registry, dropped, ran = lifecycle.sweep(
         NOW + timedelta(days=61), managed_mode="off", breakdowns=[]
     )
-    assert (ran, dropped) == (False, [])
+    assert not lifecycle.index_missing(), "Off dropped the index"
     assert lifecycle.index_count() == PLAN_ROWS
     assert config.load()["managed_tables"]["columns"]["plan"]["bookmark"] == PLAN_BOOKMARK
+    assert (ran, dropped) == (False, [])
