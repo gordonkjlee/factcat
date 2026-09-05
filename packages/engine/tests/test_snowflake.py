@@ -88,6 +88,24 @@ def test_connect_kwargs_use_jwt_and_key_file(snowflake_stack):
     assert "project" not in kwargs
 
 
+def test_connect_kwargs_set_statement_timeout(snowflake_stack):
+    """The connection timeout is also the server-side statement ceiling.
+
+    `login_timeout` and `network_timeout` only make the client stop
+    waiting; the warehouse keeps running the statement and keeps billing.
+    `STATEMENT_TIMEOUT_IN_SECONDS` is the only spend bound Snowflake gives
+    us, so it must ride on every session with the same number.
+
+    Mutation: drop the `session_parameters` key.
+    """
+    adapter = _adapter(private_key_path=snowflake_stack.key, timeout=90)
+    adapter.run("SELECT 1")
+    kwargs = snowflake_stack.connector.connect.call_args.kwargs
+    assert kwargs["session_parameters"] == {"STATEMENT_TIMEOUT_IN_SECONDS": 90}
+    assert kwargs["login_timeout"] == 90
+    assert kwargs["network_timeout"] == 90
+
+
 def test_missing_key_file_is_adapter_error(tmp_path):
     adapter = _adapter(private_key_path=str(tmp_path / "missing.p8"))
     with pytest.raises(AdapterError, match="not found"):
