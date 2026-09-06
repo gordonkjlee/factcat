@@ -48,10 +48,10 @@ jobs:
           skipped=""
           while read -r n; do
             [ -z "$n" ] && continue
-            gh pr comment "$n" --body "Merged by the T1 auto-merge: labelled auto-merge-t1, older than ${MIN_AGE_HOURS} h, all checks green." \
-              || echo "comment on #$n failed"
             if gh pr merge "$n" --squash --delete-branch; then
               merged="$merged #$n"
+              gh pr comment "$n" --body "Merged by the T1 auto-merge: labelled auto-merge-t1, older than ${MIN_AGE_HOURS} h, all checks green." \
+                || echo "comment on #$n failed"
             else
               echo "merge of #$n failed; it will be tried again next run"
               skipped="$skipped #$n"
