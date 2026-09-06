@@ -536,10 +536,9 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
     # cannot: sqlglot does not type-check. Folding produces a LABEL, so text
     # is the honest common type; the un-folded branch below keeps the
     # column's own type, because there is nothing to reconcile there.
-    # Live verdict (Platform P6 / P7, 2026-09-06, personal sandbox): remove
-    # both CAST(... AS TEXT) arms and `numeric_fold` dry-run goes red
-    # (INT64 vs STRING); hermetic `test_events_breakdowns` stays green
-    # (53 passed). Restore the CASTs and the same dry-run goes green.
+    # Live verdict (sandbox dry run, 2026-09-06): without both CAST arms the
+    # numeric-fold dry run is refused (INT64 against STRING) while the hermetic
+    # suite stays green; with them it is accepted.
     fold_selects = []
     for i in range(n):
         fold_selects.append(
