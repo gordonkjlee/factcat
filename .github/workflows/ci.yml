@@ -38,6 +38,9 @@ jobs:
       - name: Pages builder tests
         run: python -m pytest .github/scripts/test_build_pages.py -q
 
+      - name: Auto-merge selector tests
+        run: python -m pytest .github/scripts/test_automerge_candidates.py -q
+
       - name: Wheel
         run: |
           pip install build
