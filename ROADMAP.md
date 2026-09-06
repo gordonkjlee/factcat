@@ -13,8 +13,9 @@ In flight for the next release.
 
 - **Live dry-run tier.** The hermetic suite executes on DuckDB and mocks the adapters, so a
   construct BigQuery rejects and DuckDB coerces gets through. A `live` tier dry-runs every
-  statement shape Factcat emits against a real BigQuery and Snowflake at zero bytes scanned;
-  the production mapping basename is refused and nothing read from the mapping is printed.
+  statement shape Factcat emits against a real BigQuery at zero bytes billed, and executes
+  them against an empty Snowflake table; the production mapping basename is refused and
+  nothing read from the mapping is printed.
 - **Production isolation.** The development launch prints which warehouse its mapping points
   at and defaults to a development mapping; the test suite never resolves a real one.
 - **Snowflake spend ceiling.** The timeout on Setup becomes a session statement timeout, so a
