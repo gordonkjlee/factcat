@@ -607,6 +607,12 @@ mutation guards: disable the `retained` predicate and February's period 1 report
 retention on a payment that failed**, which is what the naive "any event retains" model
 tells you.
 
+## Contributing
+
+Bugs and requests go to [Issues](https://github.com/gordonkjlee/factcat/issues); the plan lives in
+[ROADMAP.md](ROADMAP.md). [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the review rules and
+the weekly cycle, and the [code of conduct](CODE_OF_CONDUCT.md) applies.
+
 ## Licence
 
 MIT.

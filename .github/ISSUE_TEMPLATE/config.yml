@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/gordonkjlee/factcat/security/advisories/new
+    about: Report it privately here, not in a public issue. Only the maintainer reads it.
+  - name: Roadmap
+    url: https://github.com/gordonkjlee/factcat/blob/main/ROADMAP.md
+    about: The plan, what is next, and the Never table. Check it before filing a request.
