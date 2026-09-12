@@ -8,6 +8,10 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - dependencies
+    # A conventional subject lets release-please read the bump.
+    commit-message:
+      prefix: chore
+      include: scope
 
   - package-ecosystem: github-actions
     directory: /
