@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.0](https://github.com/gordonkjlee/factcat/compare/v0.5.1...v0.6.0) (2026-09-12)
+
+
+### Features
+
+* **app:** write a rotating factcat.log beside the mapping, and log what the error funnels swallow ([#91](https://github.com/gordonkjlee/factcat/issues/91)) ([ecb07af](https://github.com/gordonkjlee/factcat/commit/ecb07afe27b11eb44a4309861f915c69c1eae5d5))
+
+
+### Bug Fixes
+
+* **app:** never guess the Unix-epoch unit on the compile path, and persist nothing on failure ([#84](https://github.com/gordonkjlee/factcat/issues/84)) ([d6eb243](https://github.com/gordonkjlee/factcat/commit/d6eb243e2e4bc3fe34b7d5f4cc63e1270563a3c3)), closes [#81](https://github.com/gordonkjlee/factcat/issues/81)
+* **engine:** cap Snowflake statements with STATEMENT_TIMEOUT_IN_SECONDS, and say what the guide cannot cap ([#89](https://github.com/gordonkjlee/factcat/issues/89)) ([1d3040d](https://github.com/gordonkjlee/factcat/commit/1d3040d3a10ddef0eb171db7dc3f4f8992ae49ae))
+* **tests:** isolate the mapping file from every test, and name the mapping a build serves ([#80](https://github.com/gordonkjlee/factcat/issues/80)) ([1f6af68](https://github.com/gordonkjlee/factcat/commit/1f6af68a45df35613bc3739b572cb41d095a9892))
+
+
+### Documentation
+
+* make the public surfaces agree — status and versioning, PyPI page, changelog pointer, classifiers ([#90](https://github.com/gordonkjlee/factcat/issues/90)) ([4b81c15](https://github.com/gordonkjlee/factcat/commit/4b81c1566458e8693a38345962aaa0ad474b0210))
+
 ## [0.5.1](https://github.com/gordonkjlee/factcat/compare/v0.5.0...v0.5.1) (2026-09-04)
 
 
