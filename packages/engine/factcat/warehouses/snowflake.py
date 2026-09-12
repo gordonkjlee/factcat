@@ -214,6 +214,9 @@ def _connect_kwargs(
         "user": user,
         "login_timeout": int(timeout),
         "network_timeout": int(timeout),
+        # A client-side give-up does not stop Snowflake billing the
+        # warehouse; the session parameter cancels the statement itself.
+        "session_parameters": {"STATEMENT_TIMEOUT_IN_SECONDS": int(timeout)},
     }
     if warehouse:
         kwargs["warehouse"] = warehouse

@@ -23,6 +23,21 @@ def test_rewrite_setup_guide_to_published_page():
     )
 
 
+def test_every_setup_guide_is_a_published_page():
+    """Setup shows one guide per warehouse, and the README links both; a guide
+    missing from PAGES is rewritten to a GitHub blob URL instead of a site page,
+    so the second warehouse's guide silently left the site.
+
+    Mutation: drop the Snowflake entry from PAGES.
+    """
+    src = ROOT / "README.md"
+    guides = sorted((ROOT / "packages/engine/factcat_app/guides").glob("setup-*.md"))
+    assert guides
+    for guide in guides:
+        rel = guide.relative_to(ROOT).as_posix()
+        assert build_pages.rewrite_url(rel, src) == guide.with_suffix(".html").name
+
+
 def test_rewrite_source_file_to_github():
     src = ROOT / "README.md"
     assert (
@@ -64,6 +79,10 @@ def test_builds_site_from_readme(tmp_path: Path):
     assert "one wide events table" in guide
     assert "pip install factcat" in guide
 
+    snowflake = (site / "setup-snowflake.html").read_text(encoding="utf-8")
+    assert "<title>Snowflake setup — Factcat</title>" in snowflake
+    assert "Snowflake is experimental" in snowflake
+
     assert (site / "CNAME").read_text(encoding="utf-8") == "factcat.dev\n"
     assert (site / ".nojekyll").is_file()
     assert (site / "assets" / "waiting.jpg").is_file()
@@ -73,9 +92,30 @@ def test_builds_site_from_readme(tmp_path: Path):
 def test_split_readme_uses_lede_and_keeps_image():
     pitch, rest = build_pages.split_readme((ROOT / "README.md").read_text(encoding="utf-8"))
     assert pitch == build_pages.PITCH  # README lede and fallback must not drift
-    assert rest.startswith("<img ")
+    assert rest.startswith("[![")
+    assert rest.splitlines()[2].startswith("<img ")
     assert "# Factcat" not in rest.splitlines()[0]
     assert "## The problem" in rest
+
+
+def test_split_readme_keeps_badges_out_of_the_pitch():
+    """A badge line under the H1 is markdown links, not the lede; taken as the
+    pitch it becomes the site's meta description and hero copy.
+
+    Mutation: remove the badge branch from split_readme.
+    """
+    text = (
+        "# Factcat\n\n"
+        "[![CI](https://example.invalid/ci.svg)](https://example.invalid/ci)\n\n"
+        '<img src="x.png">\n\n'
+        "The pitch.\n\n"
+        "## The problem\n\nBody.\n"
+    )
+    pitch, rest = build_pages.split_readme(text)
+    assert pitch == "The pitch."
+    assert rest.splitlines()[0].startswith("[![CI]")
+    assert '<img src="x.png">' in rest
+    assert "The pitch." not in rest
 
 
 def test_split_readme_joins_multiline_lede():

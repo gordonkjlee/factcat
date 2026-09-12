@@ -58,7 +58,8 @@ def test_run_returns_dicts(snowflake_stack):
     """Keys come back as written, not as Snowflake reports them.
 
     The driver hands over `N` for `SELECT 1 AS n`, because Snowflake resolves
-    unquoted identifiers upper-cased. Every consumer reads by the name it
+    unquoted identifiers upper-cased. Confirmed against a real account on
+    2026-09-06: `cur.description[0][0]` for `SELECT 1 AS fc_rows` was `'FC_ROWS'`. Every consumer reads by the name it
     generated - `row.get("bucket")`, `row.get("fc_bookmark")` - so an
     unfolded key is None, `int(None or 0)` is a silent zero, and charts render
     empty with no error anywhere. Every identifier this project generates is
@@ -86,6 +87,24 @@ def test_connect_kwargs_use_jwt_and_key_file(snowflake_stack):
     assert kwargs["account"] == "xy12345"
     assert "password" not in kwargs
     assert "project" not in kwargs
+
+
+def test_connect_kwargs_set_statement_timeout(snowflake_stack):
+    """The connection timeout is also the server-side statement ceiling.
+
+    `login_timeout` and `network_timeout` only make the client stop
+    waiting; the warehouse keeps running the statement and keeps billing.
+    `STATEMENT_TIMEOUT_IN_SECONDS` is the only spend bound Snowflake gives
+    us, so it must ride on every session with the same number.
+
+    Mutation: drop the `session_parameters` key.
+    """
+    adapter = _adapter(private_key_path=snowflake_stack.key, timeout=90)
+    adapter.run("SELECT 1")
+    kwargs = snowflake_stack.connector.connect.call_args.kwargs
+    assert kwargs["session_parameters"] == {"STATEMENT_TIMEOUT_IN_SECONDS": 90}
+    assert kwargs["login_timeout"] == 90
+    assert kwargs["network_timeout"] == 90
 
 
 def test_missing_key_file_is_adapter_error(tmp_path):
