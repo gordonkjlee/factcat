@@ -14,6 +14,12 @@ from factcat_app.catalog import column_fits
 from factcat_app.config import mapping_ready
 from factcat_app.main import APP_DIR, _client_error, app
 
+# Registry fixtures must read as recent on whatever day the suite runs: the app
+# compares them to the clock (refresh and drop windows), and absolute dates went stale
+# a week after they were written.
+from datetime import datetime, timedelta, timezone  # noqa: E402
+_RECENT = (datetime.now(timezone.utc) - timedelta(days=1)).replace(microsecond=0).isoformat()
+
 
 def _map_cfg(tmp_path, monkeypatch, **extra):
     monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
@@ -2636,7 +2642,7 @@ def test_estimate_prices_the_build_once_the_probe_is_cached(monkeypatch, tmp_pat
     wh = _ManagedWarehouse()
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
     client = TestClient(app)
-    mirror = {"v": 1, "columns": {}, "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}}}
+    mirror = {"v": 1, "columns": {}, "probes": {"plan": {"density": 0.01, "at": _RECENT}}}
     (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": mirror}), encoding="utf-8")
     res = client.post("/api/estimate", json=_managed_body())
     assert res.status_code == 200, res.text
@@ -2658,9 +2664,9 @@ def test_managed_list_and_actions(monkeypatch, tmp_path):
 
     registry = {
         "v": 1, "fp": managed_mod.config_fingerprint(_managed_body()),
-        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
-                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
-                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 2, "pinned": False, "overrides": {}}},
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": _RECENT,
+                             "refreshed_at": _RECENT, "last_used_at": _RECENT,
+                             "bookmark": _RECENT, "use_count": 2, "pinned": False, "overrides": {}}},
     }
     (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": registry}), encoding="utf-8")
     monkeypatch.setattr(
@@ -2748,7 +2754,7 @@ def test_estimate_prices_the_build_as_a_select_and_survives_a_missing_table(monk
     wh = _W()
     monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: wh)
     client = TestClient(app)
-    mirror = {"v": 1, "columns": {}, "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}}}
+    mirror = {"v": 1, "columns": {}, "probes": {"plan": {"density": 0.01, "at": _RECENT}}}
     (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": mirror}), encoding="utf-8")
     res = client.post("/api/estimate", json=_managed_body())
     assert res.status_code == 200, res.text
@@ -2769,9 +2775,9 @@ def test_run_reconciles_the_mirror_with_the_table(monkeypatch, tmp_path):
     body = _managed_body()
     stale_mirror = {
         "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
-        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
-                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
-                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1, "pinned": False, "overrides": {}}},
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": _RECENT,
+                             "refreshed_at": _RECENT, "last_used_at": _RECENT,
+                             "bookmark": _RECENT, "use_count": 1, "pinned": False, "overrides": {}}},
     }
     (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": stale_mirror}), encoding="utf-8")
 
@@ -2798,10 +2804,10 @@ def test_run_falls_back_live_when_the_attached_table_vanishes(monkeypatch, tmp_p
     body = _managed_body()
     reg = {
         "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
-        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
-                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
-                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1, "pinned": False, "overrides": {}}},
-        "probes": {"plan": {"density": 0.01, "at": "2026-09-02T10:00:00+00:00"}},
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": _RECENT,
+                             "refreshed_at": _RECENT, "last_used_at": _RECENT,
+                             "bookmark": _RECENT, "use_count": 1, "pinned": False, "overrides": {}}},
+        "probes": {"plan": {"density": 0.01, "at": _RECENT}},
     }
     (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
     # the mirror is trusted directly now; the existence check just
@@ -2840,9 +2846,9 @@ def test_estimate_attaches_an_existing_index_from_the_config_mirror(monkeypatch,
     body = _managed_body()
     reg = {
         "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
-        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
-                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
-                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1, "pinned": False, "overrides": {}}},
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": _RECENT,
+                             "refreshed_at": _RECENT, "last_used_at": _RECENT,
+                             "bookmark": _RECENT, "use_count": 1, "pinned": False, "overrides": {}}},
     }
     (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
     wh = _ManagedWarehouse()
@@ -2893,9 +2899,9 @@ def test_managed_drop_runs_under_the_scan_cap(monkeypatch, tmp_path):
     body = _managed_body(bytes_cap_gb=2)
     reg = {
         "v": 1, "fp": managed_mod.config_fingerprint({**body, "kind": "bigquery"}),
-        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
-                             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
-                             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1}},
+        "columns": {"plan": {"expr": "plan", "label": "plan", "built_at": _RECENT,
+                             "refreshed_at": _RECENT, "last_used_at": _RECENT,
+                             "bookmark": _RECENT, "use_count": 1}},
     }
     (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
     seen = {}
@@ -3077,9 +3083,9 @@ def test_drop_writes_the_mirror_before_it_deletes_the_rows(monkeypatch, tmp_path
 
     body = _managed_body()
     fp = managed_mod.config_fingerprint({**body, "kind": "bigquery"})
-    entry = {"expr": "plan", "label": "plan", "built_at": "2026-09-01T00:00:00+00:00",
-             "refreshed_at": "2026-09-01T00:00:00+00:00", "last_used_at": "2026-09-01T00:00:00+00:00",
-             "bookmark": "2026-09-01T00:00:00+00:00", "use_count": 1}
+    entry = {"expr": "plan", "label": "plan", "built_at": _RECENT,
+             "refreshed_at": _RECENT, "last_used_at": _RECENT,
+             "bookmark": _RECENT, "use_count": 1}
     reg = {"v": 1, "fp": fp, "columns": {"plan": dict(entry), "tier": {**entry, "expr": "tier", "label": "tier"}}}
     (tmp_path / "cfg.json").write_text(json.dumps({"managed_tables": reg}), encoding="utf-8")
     wh = _ManagedWarehouse(fail_on=("DELETE FROM",))
@@ -3407,3 +3413,15 @@ def test_the_timestamp_hint_says_the_same_thing_server_side_and_in_js(monkeypatc
         assert rendered.group(1).strip() == expected, (
             kind + ": the server copy and the JS copy have diverged; one is dead source"
         )
+
+
+def test_registry_fixtures_are_relative_to_the_clock():
+    """A registry entry with an absolute `refreshed_at` or `last_used_at` reads
+    as stale a week after it is written, and the run takes the rebuild path
+    instead of the one under test; main went red on 8 September 2026 that way.
+    Mutation: put a literal date back on any registry key and this goes red."""
+    import re as _re
+    source = Path(__file__).read_text(encoding="utf-8")
+    body = source.split("def test_registry_fixtures_are_relative_to_the_clock", 1)[0]
+    hits = _re.findall(r'"(?:built_at|refreshed_at|last_used_at|bookmark)": "\d{4}-', body)
+    assert hits == [], hits
