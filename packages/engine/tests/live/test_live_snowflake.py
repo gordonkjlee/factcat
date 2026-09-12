@@ -80,6 +80,16 @@ def test_record_raw_description_casing(adapter):
     assert raw[0].lower() == "fc_rows"
 
 
+def test_session_statement_timeout_is_in_force(adapter):
+    """The adapter sends STATEMENT_TIMEOUT_IN_SECONDS as a session parameter;
+    the warehouse must report it in force, or a stuck statement keeps billing
+    after the client has given up waiting. Read back from the session, never
+    from our own connect kwargs."""
+    result = adapter.run("SHOW PARAMETERS LIKE 'STATEMENT_TIMEOUT_IN_SECONDS' IN SESSION")
+    assert result.rows, "the session reports no STATEMENT_TIMEOUT_IN_SECONDS"
+    assert int(result.rows[0]["value"]) == int(adapter.timeout)
+
+
 def _shapes(cfg: dict) -> list[dict]:
     """The seven shapes ``tests.test_cross_adapter`` compiles, on the
     file's own mapping. Breakdown columns are the mapped event and entity

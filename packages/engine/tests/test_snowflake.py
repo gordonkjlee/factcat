@@ -58,7 +58,8 @@ def test_run_returns_dicts(snowflake_stack):
     """Keys come back as written, not as Snowflake reports them.
 
     The driver hands over `N` for `SELECT 1 AS n`, because Snowflake resolves
-    unquoted identifiers upper-cased. Every consumer reads by the name it
+    unquoted identifiers upper-cased. Confirmed against a real account on
+    2026-09-06: `cur.description[0][0]` for `SELECT 1 AS fc_rows` was `'FC_ROWS'`. Every consumer reads by the name it
     generated - `row.get("bucket")`, `row.get("fc_bookmark")` - so an
     unfolded key is None, `int(None or 0)` is a silent zero, and charts render
     empty with no error anywhere. Every identifier this project generates is
