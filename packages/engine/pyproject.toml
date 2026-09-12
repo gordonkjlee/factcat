@@ -55,4 +55,8 @@ packages = ["factcat", "factcat_app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# The live tier is hand-run; the default run (and CI) deselects it.
+addopts = "-q -m 'not live' --strict-markers"
+markers = [
+  "live: touches a real warehouse; run by hand with -m live before a release PR merges",
+]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -302,15 +301,3 @@ def test_sql_is_not_rewritten(google_stack):
     BigQueryAdapter(project="p", location="EU").run(sql)
     assert google_stack.client.query.call_args.args[0] == sql
 
-
-@pytest.mark.skipif(
-    not os.environ.get("FACTCAT_BQ_LIVE"),
-    reason="FACTCAT_BQ_LIVE not set",
-)
-def test_live_select_one():
-    adapter = BigQueryAdapter(
-        project=os.environ["FACTCAT_BQ_PROJECT"],
-        location=os.environ["FACTCAT_BQ_LOCATION"],
-    )
-    result = adapter.run("SELECT 1 AS n")
-    assert result.rows[0]["n"] == 1

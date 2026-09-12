@@ -24,6 +24,8 @@ import hashlib
 import subprocess
 from pathlib import Path
 
+from .config import config_path
+
 APP_DIR = Path(__file__).resolve().parent
 ENGINE_DIR = APP_DIR.parent
 _SUFFIXES = {".py", ".html", ".css", ".js", ".md"}
@@ -78,7 +80,9 @@ BUILD_ROOT_ID = hashlib.sha1(str(ENGINE_DIR).encode()).hexdigest()[:8]
 
 
 def build_info() -> dict[str, str]:
-    return {"build": BUILD_ID, "root_id": BUILD_ROOT_ID}
+    # The mapping's basename, never its path: a preview must be able to say
+    # DEV or PROD, and the endpoint is unauthenticated.
+    return {"build": BUILD_ID, "root_id": BUILD_ROOT_ID, "config": config_path().name}
 
 
 def root_id_for(path: str | Path) -> str:
