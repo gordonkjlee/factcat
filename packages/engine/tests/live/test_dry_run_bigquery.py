@@ -19,7 +19,13 @@ from typing import Any, Callable
 
 import pytest
 
-from factcat.warehouses import ADAPTERS, CAP_DRY_RUN, AdapterError, capabilities
+from factcat.warehouses import (
+    ADAPTERS,
+    CAP_DRY_RUN,
+    AdapterError,
+    capabilities,
+    is_missing_relation,
+)
 from factcat_app import managed
 from factcat_app.query import (
     event_name_cache_census_sql,
@@ -259,12 +265,6 @@ MANAGED_SHAPES: dict[str, Callable[[Any, dict[str, Any], str, date], str]] = {
     "density_probe": lambda live, f, col, today: managed.density_probe_sql(f, col, today=today),
     "drop_table": lambda live, f, col, today: managed.drop_table_sql(f),
     "attached_chart": lambda live, f, col, today: _attached_chart(live, col, today),
-    "event_name_cache_view": lambda live, f, col, today: event_name_cache_rebuild_sql(
-        f, materialized=True
-    ),
-    "event_name_cache_table": lambda live, f, col, today: event_name_cache_rebuild_sql(
-        f, materialized=False
-    ),
     "event_name_cache_census": lambda live, f, col, today: event_name_cache_census_sql(f),
     "event_name_cache_read": lambda live, f, col, today: event_name_cache_read_sql(f),
     "event_values_catalog": lambda live, f, col, today: event_values_sql({**f, "catalog": True}),
@@ -280,6 +280,44 @@ def test_managed_shapes_dry_run(kind, shape, live, sqlglot_warnings):
     form = live.form()
     sql = MANAGED_SHAPES[shape](live, form, col, date.today())
     _dry(live, sql, sqlglot_warnings)
+
+
+# ------------------------------------------------ the event-name cache's two shapes
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
+def test_one_event_name_cache_shape_is_always_legal(kind, live, sqlglot_warnings):
+    """The cache is a materialized view or a table at one destination, and the
+    app picks by trying one shape and falling back when the warehouse refuses
+    it (`catalog_event_values` -> `create_then_read`). A dry run is validated
+    against the object that is already there, so on a destination that holds
+    one shape the other is refused for its type. What must hold is the property
+    the fallback rests on: at least one shape estimates at zero billed bytes,
+    and a refusal names the type rather than the SQL.
+
+    This replaces two cases that dry-ran both shapes unconditionally. They
+    passed on 2026-09-06 only because the destination did not exist yet; the
+    first run after the app had built the cache reported the second shape's
+    type refusal as a release-blocking failure.
+
+    Mutation: accept `is_missing_relation` as a type refusal, and a destination
+    that has vanished reads as a healthy fallback.
+    """
+    _ready(kind, live)
+    form = live.form()
+    legal, refusals = [], []
+    for name, materialized in (("materialized_view", True), ("table", False)):
+        sql = event_name_cache_rebuild_sql(form, materialized=materialized)
+        try:
+            _dry(live, sql, sqlglot_warnings)
+        except AdapterError as exc:
+            assert not is_missing_relation(exc), f"{name}: {exc}"
+            message = str(exc).lower()
+            assert "type" in message or "not allowed" in message, f"{name}: {exc}"
+            refusals.append(name)
+        else:
+            legal.append(name)
+    assert legal, f"the warehouse refused both cache shapes: {refusals}"
 
 
 # ---------------------------------------------------------------- connection
