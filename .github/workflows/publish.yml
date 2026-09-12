@@ -1,7 +1,14 @@
 name: Publish to PyPI
 
 # Fire only when a GitHub Release is published (release-please merging a
-# release PR), or on a manual retry of a specific tag.
+# release PR), or on a manual retry of a specific tag. Dispatch a retry FROM
+# THE TAG REF (pick v0.5.1 in the "Use workflow from" menu, not main): the
+# pypi environment admits only v* tags, so a run dispatched from main is
+# refused before it can upload.
+#
+# The daily schedule is a lag check only: it never enters the protected
+# environment, it asks PyPI whether the newest tag is there and files the
+# same issue as a failed publish if it is not.
 #
 # Do not use workflow_run on the Release Please workflow: that workflow
 # succeeds every time it *updates* an open release PR after an ordinary
@@ -18,6 +25,8 @@ on:
         description: Git tag to publish (v0.4.1)
         required: true
         type: string
+  schedule:
+    - cron: '0 7 * * *'
 
 concurrency:
   group: publish-pypi
@@ -25,6 +34,7 @@ concurrency:
 
 jobs:
   publish:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -91,6 +101,10 @@ jobs:
         with:
           packages-dir: packages/engine/dist
 
+  # The smoke script comes from the tag being verified, so a retry months
+  # later checks what that release promised, not what main promises now.
+  # Three legs: the floor interpreter with every adapter extra, the
+  # development interpreter bare, and uv tool, the isolated install the README offers.
   verify:
     needs: publish
     if: needs.publish.result == 'success' && needs.publish.outputs.found == 'true'
@@ -98,17 +112,72 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {python: '3.12', extras: '', installer: pip}
+          - {python: '3.10', extras: 'all', installer: pip}
+          - {python: '3.12', extras: '', installer: uv}
+    name: verify (${{ matrix.installer }}, py${{ matrix.python }}, extras ${{ matrix.extras || 'none' }})
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish.outputs.tag }}
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
+      - if: matrix.installer == 'uv'
+        uses: astral-sh/setup-uv@v6
       - name: Install ${{ needs.publish.outputs.tag }} from PyPI
-        run: python .github/scripts/pypi_smoke.py --version "${{ needs.publish.outputs.version }}"
+        run: >
+          python .github/scripts/pypi_smoke.py
+          --version "${{ needs.publish.outputs.version }}"
+          --extras "${{ matrix.extras }}"
+          --installer "${{ matrix.installer }}"
+
+  # Shares the concurrency group with publish, so a lag run that lands while
+  # a release is still uploading waits for it instead of reporting the gap.
+  lag:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+      missing: ${{ steps.check.outputs.missing }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Is the newest release tag on PyPI
+        id: check
+        run: |
+          TAG=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          if [ -z "$TAG" ]; then
+            echo "::error::No release tag matching v0.4.1 found."
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/factcat/${VERSION}/json")
+          if [ "$CODE" = "200" ]; then
+            echo "$TAG is on PyPI"
+            echo "missing=false" >> "$GITHUB_OUTPUT"
+          elif [ "$CODE" = "404" ]; then
+            echo "::warning::$TAG is not on PyPI"
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::PyPI returned ${CODE} for factcat ${VERSION}. Refusing to guess whether it is published."
+            exit 1
+          fi
 
   alert:
-    needs: [publish, verify]
-    if: always() && (needs.publish.result == 'failure' || needs.verify.result == 'failure')
+    needs: [publish, verify, lag]
+    if: always() && (needs.publish.result == 'failure' || needs.verify.result == 'failure' || needs.lag.outputs.missing == 'true')
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -116,14 +185,15 @@ jobs:
       - name: Open or reopen one issue for this tag
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.publish.outputs.tag }}
-          VERSION: ${{ needs.publish.outputs.version }}
+          TAG: ${{ needs.publish.outputs.tag || needs.lag.outputs.tag }}
+          VERSION: ${{ needs.publish.outputs.version || needs.lag.outputs.version }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           VERIFY_RESULT: ${{ needs.verify.result }}
+          LAG_MISSING: ${{ needs.lag.outputs.missing }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$TAG" ]; then
-            echo "No tag on the publish job; nothing to file."
+            echo "No tag on the publish or lag job; nothing to file."
             exit 0
           fi
           TITLE="Release ${TAG} did not reach PyPI"
@@ -133,6 +203,9 @@ jobs:
             echo
             echo "Publish job result: ${PUBLISH_RESULT}."
             echo "Verify job result: ${VERIFY_RESULT}."
+            if [ "$LAG_MISSING" = "true" ]; then
+              echo "Detected by the daily lag check."
+            fi
             echo
             echo "Run that failed: ${RUN_URL}"
             echo
@@ -142,7 +215,8 @@ jobs:
             echo "3. Does \`pip install factcat==${VERSION}\` work now?"
           } > "$BODY_FILE"
 
-          MATCH=$(gh issue list --repo "${{ github.repository }}" --state all --limit 50 \
+          MATCH=$(gh issue list --repo "${{ github.repository }}" --state all \
+            --search "$TITLE in:title" --limit 10 \
             --json number,title,state \
             | TITLE="$TITLE" python3 -c "
           import json, os, sys
@@ -154,8 +228,12 @@ jobs:
           NUMBER=$(echo "$MATCH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('number') or '')")
           STATE=$(echo "$MATCH" | python3 -c "import json,sys; print(json.load(sys.stdin).get('state') or '')")
           if [ -z "$NUMBER" ]; then
+            gh label create release-automation --repo "${{ github.repository }}" \
+              --description "Filed by the publish workflow when a release fails to reach PyPI" \
+              --color 6E6E6E --force
             gh issue create --repo "${{ github.repository }}" \
               --title "$TITLE" \
+              --label release-automation \
               --assignee gordonkjlee \
               --body-file "$BODY_FILE"
             exit 0
