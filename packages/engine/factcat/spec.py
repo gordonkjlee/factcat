@@ -29,7 +29,7 @@ class Breakdown:
     The expression is one general form; this config is the other. A scalar
     expression's scope is the ``where``-filtered relation, so no expression
     written into the slot can reach unfiltered history — the config names the
-    relation scope and bounds an expression cannot (ADR-12, amended).
+    relation scope, a bound no expression can set for itself.
 
     Attributes:
         expr:      caller SQL expression over source columns. Interpolated,
