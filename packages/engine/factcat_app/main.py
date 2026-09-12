@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import re
+from contextlib import asynccontextmanager
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +45,7 @@ from .layout import (
     write_access_from_form,
 )
 from .extras import extra_commands, install_command, run_install
-from .config import load, mapping_ready, save, warehouse_kind
+from .config import config_path, load, mapping_ready, save, warehouse_kind
 from .build import BUILD_ID, build_info
 from .filters import filter_ui
 from .sql_display import apply_sql_keyword_case, sql_chrome, sql_plain
@@ -66,6 +69,33 @@ from .query import (
 )
 
 APP_DIR = Path(__file__).resolve().parent
+logger = logging.getLogger("factcat")
+
+
+def configure_logging() -> None:
+    """One rotating file beside the loaded mapping; nothing on the console,
+    which uvicorn owns. Idempotent so a second startup in one process (tests,
+    reload) does not double every line."""
+    path = config_path().with_name("factcat.log").resolve()
+    for handler in logger.handlers:
+        if isinstance(handler, RotatingFileHandler) and Path(handler.baseFilename).resolve() == path:
+            return
+    handler = RotatingFileHandler(
+        path, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+    )
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    )
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    # The mapping path is read here, not at import: FACTCAT_CONFIG may be set
+    # after the module loads, and the log belongs beside whichever file wins.
+    configure_logging()
+    yield
 
 
 def _install_no_store(application: FastAPI) -> None:
@@ -95,7 +125,7 @@ def setup_docs_html(kind: str = "bigquery") -> str:
     text = path.read_text(encoding="utf-8")
     return markdown.markdown(text, extensions=["fenced_code", "nl2br", "tables"])
 
-app = FastAPI(title="Factcat")
+app = FastAPI(title="Factcat", lifespan=_lifespan)
 _install_no_store(app)
 
 
@@ -188,6 +218,8 @@ def setup(request: Request) -> HTMLResponse:
 
 
 def _catalog_error(exc: Exception, form: dict | None = None) -> JSONResponse:
+    if isinstance(exc, AdapterError):
+        logger.exception("catalog call failed")
     payload = {"ok": False, "error": str(exc)}
     if isinstance(exc, ImportError) and form is not None:
         kind = form_kind(form)
@@ -545,6 +577,13 @@ def _fail(
     sql: str | None,
     extra: dict[str, Any] | None = None,
 ) -> JSONResponse:
+    if isinstance(exc, ValueError) and not isinstance(exc, AdapterError):
+        # A form the app refused is not an incident.
+        logger.info("run rejected: %s", exc)
+    else:
+        # The response strips the SQL and the stack; the file keeps both,
+        # for an adapter failure and for anything else the funnel catches.
+        logger.exception("run failed: %s\n%s", exc, sql or "")
     body = {"ok": False, "error": _client_error(exc, sql), "sql": sql}
     if extra:
         body.update(extra)
