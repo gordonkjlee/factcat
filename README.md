@@ -644,11 +644,12 @@ Three rules the code is held to, so a contribution knows what a review will ask:
 - **A new guard must be shown to fail.** Break the code the way the test's docstring
   names, watch the suite go red, restore. A test that cannot fail is documentation.
 
-## Bugs and feedback
+## Contributing
 
-Report a bug or ask for something at
-https://github.com/gordonkjlee/factcat/issues. A report that says which warehouse,
-which version (`pip show factcat`), and what the chart or Setup page said is enough.
+Bugs and requests go to [Issues](https://github.com/gordonkjlee/factcat/issues); the plan lives in
+[ROADMAP.md](ROADMAP.md). [CONTRIBUTING.md](CONTRIBUTING.md) covers setup, the review rules and
+the weekly cycle, and the [code of conduct](CODE_OF_CONDUCT.md) applies. A report that says which
+warehouse, which version (`pip show factcat`), and what the chart or Setup page said is enough.
 
 ## Licence
 
