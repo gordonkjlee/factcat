@@ -1,0 +1,34 @@
+name: Feature request
+description: Something you want to learn from your events that Factcat does not answer yet.
+title: "request: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, read [ROADMAP.md](https://github.com/gordonkjlee/factcat/blob/main/ROADMAP.md). If the idea is already under Now or Next, comment on that issue instead. If it is in the Never table, it has been decided, and the row says why.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem, in product terms
+      description: What are you trying to learn from your events? Say it as a question about your product, not as a feature.
+      placeholder: "Which subscriptions that paid in month 1 are still paying in month 3, split by plan?"
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today instead
+      description: Hand-written SQL, a spreadsheet, another tool, nothing.
+    validations:
+      required: true
+  - type: textarea
+    id: definition
+    attributes:
+      label: Entity, period and retained, if they are involved
+      description: |
+        In Factcat all three are SQL you supply, not a preset. If the request touches any of them, write the definition you would use: the thing you count (a subscription, an account, a session), the period as a number of days or an expression, and what "retained" means as a predicate.
+      placeholder: |
+        entity: subscription_id
+        period: 30 days from the subscription's first payment
+        retained: a payment event with status = 'succeeded' in that period

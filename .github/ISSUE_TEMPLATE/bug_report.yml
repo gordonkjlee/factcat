@@ -1,0 +1,69 @@
+name: Bug report
+description: Something in Factcat is wrong or broken.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks. Exact beats long: the error text as the page showed it, and the SQL if the SQL pane has it.
+  - type: dropdown
+    id: warehouse
+    attributes:
+      label: Warehouse
+      description: Where the SQL ran.
+      options:
+        - BigQuery
+        - Snowflake
+        - Other / SQL only (no warehouse run)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Factcat version
+      description: "`pip show factcat` prints it."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: The steps, in order, up to the point it went wrong.
+      placeholder: |
+        1. Setup: mapped table ..., entity column ..., time column ...
+        2. Events: picked ..., clicked Run
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: The exact error text from the page, or what the chart showed.
+    validations:
+      required: true
+  - type: textarea
+    id: sql
+    attributes:
+      label: Generated SQL (optional)
+      description: From the SQL pane, if it is relevant. Replace project, dataset and table names if they are private.
+      render: sql
+  - type: textarea
+    id: log
+    attributes:
+      label: Lines from factcat.log (optional)
+      description: The app writes a rotating `factcat.log` beside your mapping file (`.factcat.json`). Paste the relevant lines. Remove project ids, account names and anything else private first.
+      render: text
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: This report contains no credentials, keys, or private data.
+          required: true
