@@ -1,12 +1,27 @@
 # factcat
 
+[![CI](https://github.com/gordonkjlee/factcat/actions/workflows/ci.yml/badge.svg)](https://github.com/gordonkjlee/factcat/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/factcat)](https://pypi.org/project/factcat/) [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue)](https://github.com/gordonkjlee/factcat/blob/main/LICENSE)
+
 An open-source alternative to Amplitude and Mixpanel that runs in your own data
-warehouse. Factcat generates SQL and runs it in your BigQuery or Snowflake —
-no SDK, no ingestion, nothing hosted.
+warehouse. Factcat generates SQL and runs it in your BigQuery (or Snowflake,
+experimental) — no SDK, no ingestion, nothing hosted.
+
+**Point it at an events table you already have** — one row per event, properties
+as real columns. Python 3.10+ and credentials for your warehouse.
+
+```bash
+pip install "factcat[bigquery]"
+cd /path/to/your/warehouse   # your mapping is saved here
+factcat
+```
+
+That gives you a `factcat` command. Open http://127.0.0.1:8000. Setup asks which
+table, which column identifies the thing you are counting, and which column is
+the event timestamp. Then you have a chart.
 
 Product analytics tools make your modelling decisions for you: `entity = a user`,
-`period = a calendar bucket`, `retained = did an event`. Real definitions violate all
-three:
+`period = a calendar bucket`, `retained = did an event`. Real definitions violate
+all three, so Factcat makes all three yours:
 
 ```python
 from factcat import RetentionSpec, retention_sql
@@ -24,72 +39,26 @@ spec = RetentionSpec(
 print(retention_sql(spec, dialect="snowflake"))
 ```
 
-```python
-from factcat import EventsSpec, events_sql
-
-print(events_sql(EventsSpec(
-    table="analytics.fct_events",
-    entity="subscription_id",
-    event_time="occurred_at",
-    measure="uniques",
-)))
-```
-
-Breakdowns are caller SQL plus optional ``top_n`` (default 8) and
-``include_other`` (default True). Value semantics ride per column: a plain
-string means ``breakdown_at`` (``rows`` / ``first`` / ``last`` /
-``carried``); a ``Breakdown`` entry adds ``fill_from``, ``since`` /
-``until`` / strict ``before`` bounds, ``backfill``, and
-``own_value_first`` (carried: the row's own value outranks a narrowed
-``fill_from`` stream). ``carried`` is the last non-null value at or
-before each row's instant over the entity's unfiltered history.
-None of it replaces the expression.
-
-```python
-print(events_sql(EventsSpec(
-    table="analytics.fct_events",
-    entity="subscription_id",
-    event_time="occurred_at",
-    measure="uniques",
-    breakdowns=("country", "browser"),
-    top_n=8,
-)))
-```
-
-Event measures: `total`, `uniques`, `average` (Total / Uniques). Property
-measures (`on="property"`, `of=` a column): `sum`, `average`, `median`,
-`distinct` (mean distinct values per entity). Uniques is `COUNT DISTINCT` of
-`entity` when `exact=True`; default `exact=False` is approx NDV, approx
-median, and approx top-N breakdown labels (BigQuery and Snowflake included).
-The same `exact` field turns every sketch off.
-
 `retained` is arbitrary SQL over any column in your table, plus the derived columns
 `offset_days`, `period_index` and `within_period_offset`.
 
-Generates SQL and queries in place. No SDK, no ingestion, no copy of your data.
+**Status.** Factcat is 0.x. The SQL-generation API — `RetentionSpec`, `FunnelSpec`,
+`EventsSpec` and the `*_sql` functions — is the surface that stays stable. A minor
+release may change those dataclasses or the shape of `.factcat.json`, and says so at
+the top of its release notes; a patch release never does. Pin with `factcat~=0.5.0`.
 
-SQL generation supports DuckDB, Postgres, BigQuery, Snowflake, Databricks, Spark, Trino,
-Presto, ClickHouse and Redshift. Execute adapters push that SQL into the caller's
-warehouse. Factcat has no warehouse of its own. ``pip install factcat`` is the
-product (SQL + chart) and includes no warehouse SDK. Run queries with
-``pip install factcat[bigquery]`` or ``factcat[snowflake]``. ``factcat[all]`` is
-every shipped driver. The adapter contract is ``dialect`` plus ``run(sql)``.
+**Warehouses.** `pip install factcat` is SQL generation plus the local chart and
+includes no warehouse SDK; `factcat[bigquery]` and `factcat[snowflake]` add the
+official driver, `factcat[all]` adds every shipped one. BigQuery ships today;
+**Snowflake is experimental** — its SQL is generated and compiled in CI against
+Snowflake's grammar, but no live Snowflake account has ever executed it, so treat a
+first run as a test. SQL generation alone also targets DuckDB, Postgres, Databricks,
+Spark, Trino, Presto, ClickHouse and Redshift.
 
-```python
-from factcat import RetentionSpec, retention_sql
-from factcat.warehouses import connect
+**Managed tables.** Factcat may create `fc_` tables in a write dataset you choose,
+to make repeated breakdowns cheap; they hold entity ids and column values copied
+from your events table, and they live in your warehouse. See the setup guide.
 
-sql = retention_sql(spec, dialect="bigquery")
-bq = connect("bigquery", project="my-proj", location="EU")
-result = bq.run(sql)
-```
-
-Snowflake is the same shape with that warehouse's fields (`account`, `user`,
-`warehouse`, `database`, `schema`, `private_key_path`). It has no scan-cap dry-run.
-
-Application-default credentials by default (`gcloud auth application-default login`), or
-pass a service-account JSON path as `credentials`. BigQuery queries are capped at 10 GiB
-scanned unless you raise `maximum_bytes_billed` or pass `None` for unlimited. `project` and
-`location` are required so an EU dataset is not sent to US.
-
-Full documentation: https://github.com/gordonkjlee/factcat
+Long documentation: https://factcat.dev · Releases:
+https://github.com/gordonkjlee/factcat/releases · Bugs and feedback:
+https://github.com/gordonkjlee/factcat/issues

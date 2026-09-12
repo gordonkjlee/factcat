@@ -1,5 +1,7 @@
 # Factcat
 
+[![CI](https://github.com/gordonkjlee/factcat/actions/workflows/ci.yml/badge.svg)](https://github.com/gordonkjlee/factcat/actions/workflows/ci.yml) [![PyPI](https://img.shields.io/pypi/v/factcat)](https://pypi.org/project/factcat/) [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue)](https://github.com/gordonkjlee/factcat/blob/main/LICENSE)
+
 <img src="packages/engine/factcat_app/static/waiting.jpg" width="200" alt="Factcat">
 
 An open-source alternative to Amplitude and Mixpanel that runs in your own data
@@ -231,8 +233,10 @@ modelling decision, not something a vendor should have made for you.
 
 ## What it is not
 
-Factcat does not ship a tracking SDK, does not ingest, and never copies your data. There
-is no Factcat-hosted warehouse. You bring credentials to your own BigQuery or
+Factcat does not ship a tracking SDK, does not ingest, and never copies your events out
+of your warehouse; the optional managed tables described under
+[Run the app](#run-the-app) are the one exception, and they live in your warehouse too.
+There is no Factcat-hosted warehouse. You bring credentials to your own BigQuery or
 Snowflake. If you need event collection, keep using whatever you use.
 
 ## Recommended warehouse shape
@@ -352,6 +356,22 @@ To hack on the library:
 ```bash
 pip install -e "packages/engine[dev,all]"
 ```
+
+## Status and versioning
+
+Factcat is 0.x. The SQL-generation API — `RetentionSpec`, `FunnelSpec`,
+`EventsSpec` and the `*_sql` functions — is the surface that stays stable;
+the app's forms and the local page move faster. A minor release (0.5 → 0.6)
+may change those dataclasses or the shape of `.factcat.json`, and says so at
+the top of its release notes; a patch release (0.5.0 → 0.5.1) never does.
+Pin with `factcat~=0.5.0` to take patches and stop before the next minor.
+
+Snowflake is experimental; see [Supported warehouses](#supported-warehouses)
+for what that means.
+
+**Releases and changelog:** every version is on the
+[Releases page](https://github.com/gordonkjlee/factcat/releases); the ledger
+behind it is [`packages/engine/CHANGELOG.md`](packages/engine/CHANGELOG.md).
 
 ## Run the app
 
@@ -609,6 +629,26 @@ The suite runs against DuckDB with hand-computed ground truth, and every expecte
 mutation guards: disable the `retained` predicate and February's period 1 reports **100%
 retention on a payment that failed**, which is what the naive "any event retains" model
 tells you.
+
+Three rules the code is held to, so a contribution knows what a review will ask:
+
+- **One emitter per construct.** Portability comes from sqlglot. Per-dialect SQL text
+  lives in [`dialects.py`](packages/engine/factcat/dialects.py) and nowhere else, and it
+  goes there only after sqlglot has been shown not to do it. sqlglot warns rather than
+  raises on a construct it cannot transpile, so `tests/test_dialects.py` captures its
+  logger and fails on any warning — that capture stays.
+- **Every adapter is walked.** A change that generates SQL, runs a warehouse job, or
+  shows warehouse chrome is not done on the kind you happened to be looking at. For each
+  shipped adapter it behaves the same, is gated off through that adapter's declared
+  capabilities, or has a named branch with a test. Silence is a skip.
+- **A new guard must be shown to fail.** Break the code the way the test's docstring
+  names, watch the suite go red, restore. A test that cannot fail is documentation.
+
+## Bugs and feedback
+
+Report a bug or ask for something at
+https://github.com/gordonkjlee/factcat/issues. A report that says which warehouse,
+which version (`pip show factcat`), and what the chart or Setup page said is enough.
 
 ## Licence
 

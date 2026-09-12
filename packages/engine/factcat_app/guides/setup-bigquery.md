@@ -1,7 +1,9 @@
 # BigQuery
 
 Map **one wide events table** in your project. Factcat generates SQL and
-runs it there. It does not ingest rows.
+runs it there. It does not ingest rows. The mapping is written to
+`.factcat.json` in the directory you start `factcat` from; add
+`.factcat.json` to that repository's `.gitignore`.
 
 ## Credentials
 

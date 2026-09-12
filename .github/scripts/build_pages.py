@@ -57,6 +57,13 @@ PAGES = (
         "canonical": "/setup-bigquery.html",
         "description": "Map one wide BigQuery events table. Factcat generates SQL and runs it there.",
     },
+    {
+        "source": "packages/engine/factcat_app/guides/setup-snowflake.md",
+        "output": "setup-snowflake.html",
+        "title": "Snowflake setup — Factcat",
+        "canonical": "/setup-snowflake.html",
+        "description": "Map one wide Snowflake events table. Factcat generates SQL and runs it there. Experimental.",
+    },
 )
 
 ASSETS = (
@@ -116,7 +123,8 @@ def split_readme(text: str) -> tuple[str, str]:
     """Take title/pitch from the README; return (pitch, remaining markdown).
 
     The landing chrome already prints the H1 and one-line pitch, so those
-    lines are not repeated in the article. The hero image stays.
+    lines are not repeated in the article. The hero image and the badge
+    line under the H1 stay.
     """
     lines = text.splitlines()
     i = 0
@@ -128,6 +136,13 @@ def split_readme(text: str) -> tuple[str, str]:
         i += 1
 
     kept: list[str] = []
+    # Badges are links, not the pitch; taken as the lede they would become
+    # the site's meta description and hero copy.
+    if i < len(lines) and lines[i].startswith("[!["):
+        kept.extend([lines[i], ""])
+        i += 1
+        while i < len(lines) and not lines[i].strip():
+            i += 1
     if i < len(lines) and "<img" in lines[i]:
         chunk = [lines[i]]
         while i < len(lines) and ">" not in lines[i]:
