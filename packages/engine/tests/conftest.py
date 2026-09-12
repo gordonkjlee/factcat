@@ -7,13 +7,44 @@ product analytics tool can express.
 
 from __future__ import annotations
 
+import logging
+
 import duckdb
 import pytest
 
 
 @pytest.fixture(autouse=True)
-def isolate_user_prefs(tmp_path, monkeypatch):
+def isolate_user_state(tmp_path, monkeypatch):
+    """No test resolves the real mapping or the real preferences.
+
+    `config_path()` falls back to a CWD-relative `.factcat.json`, which in this
+    directory is a production mapping with managed tables on automatic; the
+    per-test setenv lines in test_app.py were the only thing standing between
+    the suite and it. Mutation: drop the FACTCAT_CONFIG line and
+    test_no_test_can_resolve_the_real_mapping goes red.
+    """
     monkeypatch.setenv("FACTCAT_PREFS", str(tmp_path / "preferences.json"))
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "factcat.json"))
+
+
+class _Capture(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+@pytest.fixture()
+def sqlglot_warnings():
+    logger = logging.getLogger("sqlglot")
+    handler = _Capture()
+    logger.addHandler(handler)
+    yield handler
+    logger.removeHandler(handler)
+
+
 
 # subscription_id, user_id, sub_start, paid_at, status
 PAYMENTS = [

@@ -256,22 +256,29 @@ def infer_epoch_from_form(form: dict[str, Any]) -> str:
 
 
 def ensure_epoch(form: dict[str, Any]) -> dict[str, Any]:
-    """Fill ``event_time_epoch`` when the mapped timestamp is a Unix integer."""
+    """Carry the recorded ``event_time_epoch`` when the mapped timestamp is a
+    Unix integer, and refuse when there is none.
+
+    The unit is inferred once, in Setup (``/api/infer_epoch``), where the
+    answer is shown and saved. Guessing here was silent, persisted, and wrong
+    for every millisecond column whose sample failed; compiling is never a
+    warehouse round-trip.
+    """
     if not _event_time_is_unix(form):
         return form
     raw = str(form.get("event_time_epoch") or "").strip().lower()
     if raw in _EPOCH:
         return form
-    try:
-        unit = infer_epoch_from_form(form)
-    except (ValueError, AdapterError, ImportError):
-        unit = "seconds"
-    if not unit:
-        unit = "seconds"
-    from factcat_app.config import save as save_cfg
+    from factcat_app.config import load as load_cfg
 
-    save_cfg({"event_time_epoch": unit})
-    return {**form, "event_time_epoch": unit}
+    stored = str(load_cfg().get("event_time_epoch") or "").strip().lower()
+    if stored in _EPOCH:
+        return {**form, "event_time_epoch": stored}
+    name = str(form.get("event_time") or "").strip()
+    raise ValueError(
+        f"Timestamp column {name} is a Unix epoch but its unit is not set. "
+        "Open Setup, which samples the column once and saves the unit."
+    )
 
 
 def _event_time_kind(form: dict[str, Any]) -> str:

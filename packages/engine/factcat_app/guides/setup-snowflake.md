@@ -142,7 +142,12 @@ mode uses it, on Snowflake as on BigQuery. Be deliberate about it here:
 Snowflake has no cost preview and no byte ceiling, so unlike BigQuery
 there is no scan cap standing behind the build, and that first run reads
 the column's whole history for every event name — several times what the
-chart alone would read. Snowflake also bills warehouse time rather than
+chart alone would read. Factcat cannot cap Snowflake spend by bytes: each
+statement is cut off after the connection timeout
+(`STATEMENT_TIMEOUT_IN_SECONDS`, ten minutes by default) and nothing else
+bounds it. Point Factcat at a dedicated X-Small warehouse with
+`AUTO_SUSPEND = 60`, so an idle warehouse costs nothing and a runaway
+query costs at most ten minutes of X-Small. Snowflake also bills warehouse time rather than
 bytes, so the saving shows up as a shorter query, not a smaller bill, and a
 warm warehouse may show little. Set Mode to Off if that is not a trade you
 want — it stops the builds and the reads together, so charts go back to

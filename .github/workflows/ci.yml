@@ -10,11 +10,22 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A superseded PR push cancels its own run; a push to main never does, so
+# every merge commit keeps its own green check.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # "test (3.10)" and "test (3.12)" are the status contexts the branch
+      # ruleset requires; renaming this job or the matrix key locks main.
       matrix:
         # 3.10 is the floor the package declares; 3.12 is what it is developed on.
         python-version: ["3.10", "3.12"]
@@ -38,6 +49,12 @@ jobs:
       - name: Pages builder tests
         run: python -m pytest .github/scripts/test_build_pages.py -q
 
+      # A pointer to a document that is not in this repo is a dangling
+      # reference for every reader of the shipped tree: name the constraint.
+      - name: Internal reference check
+        run: |
+          ! git grep -nE '\bADR-[0-9]+\b|\(item [0-9]+\)' -- packages .github README.md
+
       - name: Wheel
         run: |
           pip install build
@@ -53,6 +70,10 @@ jobs:
               "factcat_app/guides/setup-snowflake.md",
               "factcat_app/static/logo.png",
               "factcat_app/static/catalog.js",
+              "factcat_app/templates/base.html",
+              "factcat_app/templates/index.html",
+              "factcat_app/templates/setup.html",
+              "factcat_app/templates/preferences.html",
           ):
               if needle not in names:
                   sys.exit(f"missing {needle} in {names}")
