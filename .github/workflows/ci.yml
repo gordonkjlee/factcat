@@ -49,6 +49,9 @@ jobs:
       - name: Pages builder tests
         run: python -m pytest .github/scripts/test_build_pages.py -q
 
+      - name: Auto-merge selector tests
+        run: python -m pytest .github/scripts/test_automerge_candidates.py -q
+
       # A pointer to a document that is not in this repo is a dangling
       # reference for every reader of the shipped tree: name the constraint.
       - name: Internal reference check
