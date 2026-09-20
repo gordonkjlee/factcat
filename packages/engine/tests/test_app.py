@@ -2720,6 +2720,9 @@ def test_setup_and_events_carry_the_managed_chrome(monkeypatch, tmp_path):
     # the line sits on its own toolbar line, right-aligned and capped
     assert "#run-note { flex: 1 1 100%; display: flex; justify-content: flex-end;" in events
     assert "#run-note > span { max-width: 32rem; text-align: right;" in events
+    # A run note for this chart's inputs outranks a late estimate (issue 83).
+    assert 'runNoteKind === "run" && runNoteKey === key' in events
+    assert 'setRunNote(data.managed_note, false, "run", runKey)' in events
     # One convention for backticked labels: the note and both running-copy
     # branches render through the same helper (never literal backticks).
     assert events.count("appendMarked(") >= 3
