@@ -77,6 +77,19 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ steps.release.outputs.tag }}
+          fetch-depth: 0
+
+      # The pypi environment admits any v* tag; a ruleset cannot tell the
+      # owner's two PATs apart. Refuse before build if the tag is not on main.
+      - if: steps.release.outputs.found == 'true'
+        name: Refuse a tag that is not on main
+        run: |
+          git fetch --no-tags origin main
+          TAG="${{ steps.release.outputs.tag }}"
+          if ! git merge-base --is-ancestor "$TAG" origin/main; then
+            echo "::error::Tag $TAG is not an ancestor of main. Refusing to publish."
+            exit 1
+          fi
 
       - if: steps.release.outputs.found == 'true'
         uses: actions/setup-python@v7
