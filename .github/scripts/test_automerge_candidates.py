@@ -5,8 +5,11 @@ from __future__ import annotations
 import io
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
-from automerge_candidates import candidates, main
+from automerge_candidates import behind, candidates, main
+
+HEAD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 NOW = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
 OWNER = "octocat"
@@ -39,6 +42,9 @@ def pr(number: int = 1, **overrides) -> dict:
         "headRefName": "fix-thing",
         "baseRefName": "main",
         "mergeable": "MERGEABLE",
+        "mergeStateStatus": "CLEAN",
+        "headRefOid": HEAD,
+        "body": "Certified " + HEAD + "\n",
         "statusCheckRollup": [check_run(), status_context()],
         "reviewDecision": "",
     }
@@ -106,6 +112,26 @@ def test_conflicting_does_not_qualify():
     assert pick(pr(mergeable="UNKNOWN")) == [1]
 
 
+def test_behind_does_not_merge_this_run():
+    """Mutation: treating BEHIND as CLEAN must turn this red."""
+    stale = pr(7, mergeStateStatus="BEHIND")
+    assert pick(stale) == []
+    assert behind([stale], NOW, 24, (OWNER,)) == [7]
+
+
+def test_unknown_merge_state_does_not_qualify():
+    assert pick(pr(mergeStateStatus="UNKNOWN")) == []
+    assert pick(pr(mergeStateStatus="UNSTABLE")) == []
+
+
+def test_body_must_name_the_head_sha():
+    """Mutation: skipping the headRefOid/body check must turn this red."""
+    assert pick(pr(body="no sha here")) == []
+    assert pick(pr(headRefOid="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")) == []
+    assert pick(pr(headRefOid="abc")) == []
+    assert pick(pr(headRefOid="")) == []
+
+
 def test_changes_requested_does_not_qualify():
     assert pick(pr(reviewDecision="CHANGES_REQUESTED")) == []
     assert pick(pr(reviewDecision="APPROVED")) == [1]
@@ -119,6 +145,18 @@ def test_main_reads_gh_json_and_prints_sorted_numbers(capsys):
     )
     assert rc == 0
     assert capsys.readouterr().out.splitlines() == ["3", "12"]
+
+
+def test_workflow_asks_for_head_body_and_behind():
+    """Mutation: drop headRefOid/body from --json, or the London cron, and this goes red."""
+    raw = (Path(__file__).resolve().parents[1] / "workflows" / "automerge.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "headRefOid" in raw
+    assert ",body" in raw or "body," in raw
+    assert "mergeStateStatus" in raw
+    assert "0 8,14,19" in raw
+    assert "--behind" in raw
 
 
 def test_main_default_min_age_is_a_day(capsys):

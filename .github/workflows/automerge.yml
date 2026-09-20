@@ -2,13 +2,14 @@ name: Auto-merge T1
 
 # The auto-merge-t1 label marks a T1 pull request whose evidence report and
 # review passed at ship time. The shipping pipeline applies it; nobody adds it
-# by hand. Releases, and anything above T1, are never labelled. The schedule
-# is the cooling period: a labelled PR merges on the first run after it has
-# been open for a day with every check green.
+# by hand. Releases, and anything above T1, are never labelled.
+#
+# The cooling period is MIN_AGE_HOURS from createdAt, not from this cron.
+# 08:00, 14:00, 19:00 UTC sit inside 07:00-21:00 London in both GMT and BST.
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 8,14,19 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -34,18 +35,27 @@ jobs:
       - name: Select
         run: |
           gh pr list --state open --limit 100 --label auto-merge-t1 \
-            --json number,createdAt,author,isDraft,labels,headRefName,baseRefName,mergeable,statusCheckRollup,reviewDecision \
-            | python3 .github/scripts/automerge_candidates.py \
-                --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-                --min-age-hours "$MIN_AGE_HOURS" \
-                --author "$OWNER" \
-            > candidates.txt
+            --json number,createdAt,author,isDraft,labels,headRefName,baseRefName,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,headRefOid,body \
+            > prs.json
+          python3 .github/scripts/automerge_candidates.py \
+            --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --min-age-hours "$MIN_AGE_HOURS" \
+            --author "$OWNER" \
+            < prs.json > candidates.txt
+          python3 .github/scripts/automerge_candidates.py \
+            --behind \
+            --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --min-age-hours "$MIN_AGE_HOURS" \
+            --author "$OWNER" \
+            < prs.json > behind.txt
           echo "candidates: $(tr '\n' ' ' < candidates.txt)"
+          echo "behind: $(tr '\n' ' ' < behind.txt)"
 
       - name: Merge
         run: |
           merged=""
           skipped=""
+          updated=""
           while read -r n; do
             [ -z "$n" ] && continue
             if gh pr merge "$n" --squash --delete-branch; then
@@ -57,9 +67,19 @@ jobs:
               skipped="$skipped #$n"
             fi
           done < candidates.txt
+          while read -r n; do
+            [ -z "$n" ] && continue
+            if gh pr update-branch "$n"; then
+              updated="$updated #$n"
+            else
+              echo "update-branch of #$n failed; it will be tried again next run"
+              skipped="$skipped #$n"
+            fi
+          done < behind.txt
           {
             echo "## T1 auto-merge"
             echo
             echo "- merged:${merged:- none}"
+            echo "- behind updated:${updated:- none}"
             echo "- skipped:${skipped:- none}"
           } >> "$GITHUB_STEP_SUMMARY"

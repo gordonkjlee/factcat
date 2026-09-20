@@ -36,7 +36,15 @@ def check_is_green(check: dict[str, Any]) -> bool:
     return verdict.upper() in GREEN
 
 
-def qualifies(
+def body_names_head(pr: dict[str, Any]) -> bool:
+    """The body must name the current head so a later push cannot ride the label."""
+    sha = (pr.get("headRefOid") or "").strip().lower()
+    if len(sha) < 40:
+        return False
+    return sha in (pr.get("body") or "").lower()
+
+
+def gates_hold(
     pr: dict[str, Any], now: datetime, min_age_hours: float, authors: set[str]
 ) -> bool:
     if not any(label.get("name") == LABEL for label in pr.get("labels") or []):
@@ -54,9 +62,23 @@ def qualifies(
     # A reviewer who asked for changes after the label went on outranks it.
     if pr.get("reviewDecision") == "CHANGES_REQUESTED":
         return False
+    if not body_names_head(pr):
+        return False
     checks = pr.get("statusCheckRollup") or []
     # No checks is no evidence: a PR nothing ran on is not green.
     return bool(checks) and all(check_is_green(check) for check in checks)
+
+
+def qualifies(
+    pr: dict[str, Any], now: datetime, min_age_hours: float, authors: set[str]
+) -> bool:
+    return gates_hold(pr, now, min_age_hours, authors) and pr.get("mergeStateStatus") == "CLEAN"
+
+
+def is_behind(
+    pr: dict[str, Any], now: datetime, min_age_hours: float, authors: set[str]
+) -> bool:
+    return gates_hold(pr, now, min_age_hours, authors) and pr.get("mergeStateStatus") == "BEHIND"
 
 
 def candidates(
@@ -68,6 +90,18 @@ def candidates(
     allowed = set(authors)
     return sorted(
         int(pr["number"]) for pr in prs if qualifies(pr, now, min_age_hours, allowed)
+    )
+
+
+def behind(
+    prs: Iterable[dict[str, Any]],
+    now: datetime,
+    min_age_hours: float,
+    authors: Iterable[str],
+) -> list[int]:
+    allowed = set(authors)
+    return sorted(
+        int(pr["number"]) for pr in prs if is_behind(pr, now, min_age_hours, allowed)
     )
 
 
@@ -83,9 +117,15 @@ def main(argv: list[str] | None = None, stdin: TextIO | None = None) -> int:
         default=[],
         help="author login allowed to merge this way; repeatable",
     )
+    parser.add_argument(
+        "--behind",
+        action="store_true",
+        help="print BEHIND numbers (to update-branch) instead of CLEAN merge candidates",
+    )
     args = parser.parse_args(argv)
     prs = json.load(stdin or sys.stdin)
-    for number in candidates(prs, parse_instant(args.now), args.min_age_hours, args.author):
+    pick = behind if args.behind else candidates
+    for number in pick(prs, parse_instant(args.now), args.min_age_hours, args.author):
         print(number)
     return 0
 
