@@ -4265,9 +4265,10 @@ function labelText(v) {
 function labelHeads() {
   return [...(tableUsesSeriesCol() ? [seriesHeader()] : []), ...tableDimKeys()];
 }
-function labelCells(row) {
-  const cells = tableUsesSeriesCol() ? [labelText(row.seriesCell)] : [];
-  tableDimKeys().forEach((k) => cells.push(labelText(row.dims ? row.dims[k] : "")));
+function labelCells(row, raw = false) {
+  const show = raw ? (v) => v : labelText;
+  const cells = tableUsesSeriesCol() ? [show(row.seriesCell)] : [];
+  tableDimKeys().forEach((k) => cells.push(show(row.dims ? row.dims[k] : null)));
   return cells;
 }
 function tableHeaderRow() {
@@ -4319,7 +4320,7 @@ function mdCell(value) {
   return String(value ?? "").replace(/\|/g, "\\|").replace(/[\n\r]+/g, " ");
 }
 function rawTableCells(row) {
-  return [row.bucket, ...labelCells(row), row.value, row.incomplete ? "true" : "false"];
+  return [row.bucket, ...labelCells(row, true), row.value, row.incomplete ? "true" : "false"];
 }
 function exportTable(kind) {
   const err = tableErrorText();
