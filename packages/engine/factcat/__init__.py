@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from .dialects import SUPPORTED, period_grid
 from .events import build_sql as events_sql
+from .events import shared_top_labels_sql
 from .funnel import build_sql as funnel_sql
 from .retention import build_sql as retention_sql
 from .spec import (
@@ -41,4 +42,5 @@ __all__ = [
     "funnel_sql",
     "period_grid",
     "retention_sql",
+    "shared_top_labels_sql",
 ]

@@ -1043,3 +1043,13 @@ def test_a_numeric_breakdown_folds_into_other_without_a_type_clash():
         )
     )
     assert "(other)" not in plain
+
+
+def test_shared_pick_refuses_specs_that_disagree_on_the_axis():
+    """Mutation: drop the top_n/exact check and a mismatched spec is ranked silently."""
+    with pytest.raises(ValueError, match="same top_n and exact"):
+        shared_top_labels_sql(
+            [EVENTS_BREAKDOWN, dataclasses.replace(EVENTS_BREAKDOWN, top_n=3)], "bigquery"
+        )
+    with pytest.raises(ValueError, match="same breakdown count"):
+        shared_top_labels_sql([EVENTS_BREAKDOWN, EVENTS_BREAKDOWN_PAIR], "bigquery")

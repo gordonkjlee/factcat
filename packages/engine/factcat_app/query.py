@@ -9,8 +9,14 @@ from typing import Any
 
 from datetime import date, datetime, timedelta, timezone
 
-from factcat import EVENT_MEASURES, PROPERTY_MEASURES, Breakdown, EventsSpec, events_sql
-from factcat.events import shared_top_labels_sql
+from factcat import (
+    EVENT_MEASURES,
+    PROPERTY_MEASURES,
+    Breakdown,
+    EventsSpec,
+    events_sql,
+    shared_top_labels_sql,
+)
 from factcat.spec import BREAKDOWN_AT
 from factcat.warehouses import (
     AdapterError,

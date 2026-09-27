@@ -75,6 +75,38 @@ def test_events_sql_from_form_emits_without_warnings(kind, sqlglot_warnings):
 
 
 @pytest.mark.parametrize("kind", list(ADAPTERS))
+@pytest.mark.parametrize("grain", ["day", "hour", "day_of_week"])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"breakdown_column": "country"},
+        {"breakdowns": [{"breakdown_column": "country"}, {"breakdown_column": "browser"}]},
+        {"measure": "sum", "of_column": "revenue", "breakdown_column": "country"},
+        {
+            "breakdown_by_series": True,
+            "series": [
+                {"event": "started", "breakdown_column": "country"},
+                {"event": "completed"},
+            ],
+        },
+    ],
+    ids=["one_group", "two_groups", "ranked_by_sum", "per_series"],
+)
+def test_overlay_series_compile(kind, grain, extra, sqlglot_warnings):
+    """Two event series with a group-by compile per shipped adapter, with the
+    shared pick referenced from inside every arm and no placeholder left."""
+    form = {"series": [{"event": "started"}, {"event": "completed"}], **extra}
+    sql = events_sql_from_form(_form(kind, grain=grain, **form))
+    assert "FACTCAT_" not in sql.upper()
+    assert "FC_TOP_PLACEHOLDER" not in sql.upper()
+    if not form.get("breakdown_by_series"):
+        assert sql.count("SELECT * FROM fc_shared_top") == 2
+    assert sqlglot_warnings.messages == [], (
+        f"sqlglot warned for {kind}: {sqlglot_warnings.messages}"
+    )
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
 def test_breakdown_value_semantics_compile(kind, sqlglot_warnings):
     """Value at × If missing × Fill from compiles per shipped adapter:
     carried stream, range anchor, and no placeholder residue."""

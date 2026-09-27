@@ -660,10 +660,10 @@ def shared_top_labels_sql(specs: list[EventsSpec], dialect: str) -> str:
     """One top-N pick over the rows of every spec together.
 
     Each spec contributes its own matching rows (its ``where``, its breakdown
-    values); the rank, ``top_n`` and ``exact`` come from the first spec, so the
-    caller passes specs that already carry the measure the axis is ranked by.
-    The result has the ``fc_bd_*`` columns ``build_sql(top_labels_sql=)``
-    folds against.
+    values). The specs must agree on breakdown count, ``top_n`` and ``exact``,
+    and the first one's measure ranks the axis, so pass specs that already
+    carry the measure to rank by. The result is SQL for ``dialect`` with the
+    ``fc_bd_*`` columns ``events_sql(top_labels_sql=)`` folds against.
     """
     if not specs or not specs[0].breakdowns:
         raise ValueError("a shared pick needs at least one spec with breakdowns")
@@ -671,6 +671,8 @@ def shared_top_labels_sql(specs: list[EventsSpec], dialect: str) -> str:
     n = len(first.breakdowns)
     if any(len(s.breakdowns) != n for s in specs):
         raise ValueError("every spec in a shared pick needs the same breakdown count")
+    if any((s.top_n, s.exact) != (first.top_n, first.exact) for s in specs):
+        raise ValueError("every spec in a shared pick needs the same top_n and exact")
     rank = _rank_sql(first)
     cols = [f"fc_bd_{i}" for i in range(n)]
     if rank != "COUNT(*)":
@@ -701,7 +703,9 @@ def build_sql(
     With breakdowns: one row per bucket and label (``(other)`` when folded).
     ``top_labels_sql`` replaces this spec's own top-N pick with a caller's
     SELECT of ``fc_bd_*`` (for example ``shared_top_labels_sql``), so several
-    queries can fold against one label set.
+    queries can fold against one label set. It is spliced in after
+    transpiling, so it must already be SQL for ``dialect``, and any relation
+    it names must be in scope where the query runs.
     """
     if not spec.breakdowns:
         return _plain_sql(spec, dialect)
