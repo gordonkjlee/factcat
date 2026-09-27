@@ -8,6 +8,7 @@ broken SQL was emitted silently. These tests turn that warning into a failure.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import re
@@ -25,6 +26,7 @@ from factcat import (
     retention_sql,
 )
 from factcat._emit import GRID_RELATION, transpile_with_grid
+from factcat.events import shared_top_labels_sql
 from factcat.dialects import (
     as_instant,
     create_or_replace_relation,
@@ -484,6 +486,21 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS_BREAKDOWN_VALUES_ASOF, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_VALUES_RAW_COLUMN, dialect=dialect)
 
+    assert sqlglot_warnings.messages == [], (
+        f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
+    )
+
+
+@pytest.mark.parametrize("dialect", SUPPORTED)
+@pytest.mark.parametrize(
+    "spec", [EVENTS_BREAKDOWN, EVENTS_BREAKDOWN_APPROX, EVENTS_BREAKDOWN_SUM_APPROX,
+             EVENTS_BREAKDOWN_PAIR, EVENTS_BREAKDOWN_CARRIED],
+)
+def test_shared_top_labels_emit_without_warnings(dialect, spec, sqlglot_warnings):
+    other = dataclasses.replace(spec, where="event_name = 'other'")
+    pick = shared_top_labels_sql([spec, other], dialect)
+    sql = events_sql(spec, dialect=dialect, top_labels_sql=pick)
+    assert pick in sql
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
     )

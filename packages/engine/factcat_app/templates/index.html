@@ -4081,6 +4081,8 @@ function valueHeader() {
   return (lastRun && lastRun.valueHeader) || draftValueHeader();
 }
 function seriesHeader() {
+  // Beside the group columns this column holds the event, not a group.
+  if (tableUsesSeriesCol() && tableDimKeys().length) return t("series_th");
   return (lastRun && lastRun.seriesHeader) || draftSeriesHeader();
 }
 function resultGrain() {
@@ -4122,10 +4124,7 @@ function tableDimKeys() {
   return keys;
 }
 function tableUsesSeriesCol() {
-  return !tableDimKeys().length && tableRows.some((r) => r.series);
-}
-function hasSeries() {
-  return tableUsesSeriesCol() || tableDimKeys().length > 0;
+  return tableRows.some((r) => r.seriesCell != null);
 }
 function bindTh(th) {
   th.addEventListener("click", (e) => {
@@ -4158,11 +4157,8 @@ function ensureDimHeaders(keys) {
   tr.querySelectorAll("th.dim-col").forEach((th) => th.remove());
   const valueTh = tr.querySelector('th[data-key="value"]');
   const seriesTh = document.getElementById("th-series");
-  if (!keys.length) {
-    if (seriesTh) seriesTh.hidden = !tableUsesSeriesCol();
-    return;
-  }
-  if (seriesTh) seriesTh.hidden = true;
+  if (seriesTh) seriesTh.hidden = !tableUsesSeriesCol();
+  if (!keys.length) return;
   keys.forEach((key, i) => {
     const th = document.createElement("th");
     th.className = "dim-col";
@@ -4184,8 +4180,6 @@ function headerLabel(key) {
 }
 function syncTableHeaders() {
   ensureDimHeaders(tableDimKeys());
-  const seriesTh = document.getElementById("th-series");
-  if (seriesTh && !tableDimKeys().length) seriesTh.hidden = !tableUsesSeriesCol();
   document.querySelectorAll("#result-table th[data-key]").forEach((th) => {
     if (th.hidden) return;
     const grip = th.querySelector(".grip");
@@ -4242,7 +4236,6 @@ function renderTable() {
   const tbody = document.getElementById("rows");
   tbody.innerHTML = "";
   const ranked = rankedTableRows();
-  const dims = tableDimKeys();
   for (const row of ranked) {
     const tr = document.createElement("tr");
     if (row.incomplete) tr.className = "incomplete";
@@ -4250,32 +4243,35 @@ function renderTable() {
     const tdValue = document.createElement("td");
     tdBucket.textContent = displayBucket(row);
     tdValue.textContent = formatValue(row.value);
-    const extra = [];
-    if (dims.length) {
-      dims.forEach((k) => {
-        const td = document.createElement("td");
-        const v = row.dims ? row.dims[k] : "";
-        td.textContent = v == null || v === "" ? "(null)" : String(v);
-        extra.push(td);
-      });
-    } else if (tableUsesSeriesCol()) {
-      const tdSeries = document.createElement("td");
-      tdSeries.textContent = row.series;
-      extra.push(tdSeries);
-    }
+    const extra = labelCells(row).map((text) => {
+      const td = document.createElement("td");
+      td.textContent = text;
+      return td;
+    });
     tr.append(tdBucket, ...extra, tdValue);
     tbody.appendChild(tr);
   }
 }
 function rowSortValue(row, key) {
   if (key && key.startsWith("dim:")) return row.dims ? row.dims[key.slice(4)] : "";
+  if (key === "series") return row.seriesCell;
   return row[key];
 }
+function labelText(v) {
+  return v == null || v === "" ? "(null)" : String(v);
+}
+// The table, the copy and every export share one column order:
+// bucket, Series, each group, value.
+function labelHeads() {
+  return [...(tableUsesSeriesCol() ? [seriesHeader()] : []), ...tableDimKeys()];
+}
+function labelCells(row) {
+  const cells = tableUsesSeriesCol() ? [labelText(row.seriesCell)] : [];
+  tableDimKeys().forEach((k) => cells.push(labelText(row.dims ? row.dims[k] : "")));
+  return cells;
+}
 function tableHeaderRow() {
-  const dims = tableDimKeys();
-  if (dims.length) return [grainHeader(), ...dims, valueHeader(), "incomplete"];
-  if (tableUsesSeriesCol()) return [grainHeader(), seriesHeader(), valueHeader(), "incomplete"];
-  return [grainHeader(), valueHeader(), "incomplete"];
+  return [grainHeader(), ...labelHeads(), valueHeader(), "incomplete"];
 }
 function tableErrorText() {
   const el = document.getElementById("table-empty");
@@ -4323,9 +4319,7 @@ function mdCell(value) {
   return String(value ?? "").replace(/\|/g, "\\|").replace(/[\n\r]+/g, " ");
 }
 function rawTableCells(row) {
-  return hasSeries()
-    ? [row.bucket, row.series, row.value, row.incomplete ? "true" : "false"]
-    : [row.bucket, row.value, row.incomplete ? "true" : "false"];
+  return [row.bucket, ...labelCells(row), row.value, row.incomplete ? "true" : "false"];
 }
 function exportTable(kind) {
   const err = tableErrorText();
@@ -4348,25 +4342,23 @@ function exportTable(kind) {
   }
   if (kind === "json") {
     const rows = rankedTableRows().map((row) => {
-      const item = { bucket: row.bucket, value: row.value, incomplete: !!row.incomplete };
-      if (hasSeries()) item.series = row.series;
+      const item = { bucket: row.bucket };
+      if (tableUsesSeriesCol()) item.series = row.seriesCell;
+      tableDimKeys().forEach((k) => { item[k] = row.dims ? row.dims[k] : null; });
+      Object.assign(item, { value: row.value, incomplete: !!row.incomplete });
       return item;
     });
     downloadBlob(JSON.stringify(rows, null, 2), slug + ".json", "application/json");
     return;
   }
   // Markdown is the human-facing export: display buckets and formatted values.
-  const head = hasSeries()
-    ? [grainHeader(), seriesHeader(), valueHeader()]
-    : [grainHeader(), valueHeader()];
+  const head = [grainHeader(), ...labelHeads(), valueHeader()];
   const md = [
     "| " + head.map(mdCell).join(" | ") + " |",
     "| " + head.map(() => "---").join(" | ") + " |",
   ];
   for (const row of rankedTableRows()) {
-    const cells = hasSeries()
-      ? [displayBucket(row), row.series, formatValue(row.value)]
-      : [displayBucket(row), formatValue(row.value)];
+    const cells = [displayBucket(row), ...labelCells(row), formatValue(row.value)];
     md.push("| " + cells.map(mdCell).join(" | ") + " |");
   }
   downloadBlob(md.join("\n"), slug + ".md", "text/markdown");
@@ -4411,13 +4403,9 @@ document.getElementById("copy-table").addEventListener("click", async () => {
     flashCopied(document.getElementById("copy-table"));
     return;
   }
-  const lines = [hasSeries()
-    ? grainHeader() + "\t" + seriesHeader() + "\t" + valueHeader()
-    : grainHeader() + "\t" + valueHeader()];
+  const lines = [[grainHeader(), ...labelHeads(), valueHeader()].join("\t")];
   for (const row of rankedTableRows()) {
-    lines.push(hasSeries()
-      ? displayBucket(row) + "\t" + row.series + "\t" + formatValue(row.value)
-      : displayBucket(row) + "\t" + formatValue(row.value));
+    lines.push([displayBucket(row), ...labelCells(row), formatValue(row.value)].join("\t"));
   }
   await navigator.clipboard.writeText(lines.join("\n") + "\n");
   flashCopied(document.getElementById("copy-table"));
@@ -4495,13 +4483,12 @@ function formatValue(v) {
   }
   return applySeps(raw);
 }
+// One chart line per series and group together: two events split by the
+// same country are two lines, and a missing group reads (null) on each.
 function seriesFromRow(row) {
   const skip = new Set(["bucket", "value", "incomplete"]);
   const keys = Object.keys(row).filter((k) => !skip.has(k));
-  if (!keys.length) return "";
-  const v = row[keys[0]];
-  if (v == null || v === "") return "(null)";
-  return String(v);
+  return keys.map((k) => labelText(row[k])).join(" · ");
 }
 function cssToken(name, fallback) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
@@ -5100,6 +5087,7 @@ form.addEventListener("submit", async (e) => {
         bucketRaw: row.bucket,
         value: row.value,
         series: seriesFromRow(row),
+        seriesCell: "series" in row ? row.series : undefined,
         dims,
         dimKeys: Object.keys(dims),
         incomplete: !!row.incomplete,
