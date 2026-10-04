@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from typing import Any
 
 from datetime import date, datetime, timedelta, timezone
 
-from factcat import EVENT_MEASURES, PROPERTY_MEASURES, Breakdown, EventsSpec, events_sql
+from factcat import (
+    EVENT_MEASURES,
+    PROPERTY_MEASURES,
+    Breakdown,
+    EventsSpec,
+    events_sql,
+    shared_top_labels_sql,
+)
 from factcat.spec import BREAKDOWN_AT
 from factcat.warehouses import (
     AdapterError,
@@ -728,8 +736,7 @@ def fill_cyclic_buckets(
     skip = frozenset({"bucket", "value", "incomplete"})
 
     def series_key(row: dict[str, Any]) -> str:
-        if "series" in row and row.get("series") not in (None, ""):
-            return str(row["series"])
+        # An overlay row's line is its series AND its groups, never either alone.
         extras = {k: row[k] for k in row if k not in skip}
         if not extras:
             return ""
@@ -2016,11 +2023,19 @@ def _series_arm_sql(
     dialect: str,
     extra_cols: tuple[str, ...] = (),
 ) -> str:
-    """Wrap one Events aggregation so overlay UNION ALL has bucket, series, value."""
+    """Wrap one Events aggregation so overlay UNION ALL has bucket, series, value.
+
+    With ``extra_cols`` the groups stay their own columns and ``series`` is the
+    event label; without them the groups are joined into ``series``.
+    """
     quoted = _sql_string(label)
     body = _indent_sql(inner.rstrip(), 4)
-    if spec.breakdowns:
-        parts = [quoted] + [as_text(lab, dialect) for lab in spec.bd_labels()]
+    if spec.breakdowns and not extra_cols:
+        # CONCAT of a NULL is NULL on BigQuery and Snowflake, which would
+        # merge every event's missing group into one line.
+        parts = [quoted] + [
+            f"COALESCE({as_text(lab, dialect)}, '(null)')" for lab in spec.bd_labels()
+        ]
         series_expr = "CONCAT(" + ", ' · ', ".join(parts) + ")"
     else:
         series_expr = quoted
@@ -2032,6 +2047,27 @@ def _series_arm_sql(
         f"  value\n"
         f"FROM (\n{body}\n) AS {alias}"
     )
+
+
+SHARED_TOP = "fc_shared_top"
+
+
+def _shared_pick_sql(
+    form: dict[str, Any], specs: list[EventsSpec], dialect: str
+) -> str:
+    """The overlay's one top-N pick, ranked by the chart-wide measure.
+
+    A card's own measure still sets its values; it does not reorder the axis.
+    """
+    on, measure = _measure_from_form(form)
+    of = _of_from_form(form, measure=measure) if on == "property" else ""
+    if not (on == "property" and measure == "sum" and of):
+        on, measure, of = "events", "total", ""
+    rank_specs = [
+        dataclasses.replace(spec, on=on, measure=measure, of=of or None)
+        for spec in specs
+    ]
+    return shared_top_labels_sql(rank_specs, dialect)
 
 
 def events_sql_from_form(form: dict[str, Any], *, managed: Any = None) -> str:
@@ -2050,18 +2086,31 @@ def events_sql_from_form(form: dict[str, Any], *, managed: Any = None) -> str:
             if label_sets and label_sets[0] and all(s == label_sets[0] for s in label_sets)
             else ()
         )
+        # A chart-wide group-by is one axis: every arm folds against one pick
+        # ranked over all arms' rows. Per-series mode keeps each card's own.
+        pick = (
+            _shared_pick_sql(form, specs, dialect)
+            if specs[0].breakdowns and not _bool(form, "breakdown_by_series")
+            else None
+        )
         arms: list[str] = []
         for i, (unit, spec) in enumerate(zip(units, specs)):
             _pred, label = _unit_predicate(
                 unit, (form.get("event_column") or "").strip(), form
             )
-            inner = events_sql(spec, dialect=dialect)
+            inner = events_sql(
+                spec,
+                dialect=dialect,
+                top_labels_sql=f"SELECT * FROM {SHARED_TOP}" if pick else None,
+            )
             arms.append(
                 _series_arm_sql(
                     inner, spec, label, f"_fc_arm_{i}", dialect, extra_cols=shared
                 )
             )
         sql = "\nUNION ALL\n".join(arms)
+        if pick:
+            sql = f"WITH {SHARED_TOP} AS (\n{_indent_sql(pick, 4)}\n)\n{sql}"
     elif len(units) == 1:
         sql = events_sql(
             spec_from_form(form, unit=units[0], managed=managed), dialect=dialect

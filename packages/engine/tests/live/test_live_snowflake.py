@@ -120,11 +120,22 @@ def _shapes(cfg: dict) -> list[dict]:
                 {"breakdown_column": cfg["entity"]},
             ]
         },
+        {
+            "breakdown_column": cfg["event_column"],
+            "series": [{"event": "fc_probe_a"}, {"event": "fc_probe_b"}],
+        },
+        {
+            "breakdown_by_series": True,
+            "series": [
+                {"event": "fc_probe_a", "breakdown_column": cfg["event_column"]},
+                {"event": "fc_probe_b"},
+            ],
+        },
     ]
     return [{**base, **extra} for extra in extras]
 
 
-@pytest.mark.parametrize("index", range(7))
+@pytest.mark.parametrize("index", range(9))
 def test_cross_adapter_shapes_run_on_an_empty_table(adapter, live_config, index):
     """Snowflake has no dry run, so the shapes execute for real. The table is
     empty and the events SQL has no period grid, so every shape must come

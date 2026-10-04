@@ -126,6 +126,24 @@ def _two_breakdowns(live: Any) -> dict[str, Any]:
     return live.form(breakdowns=[{"breakdown_column": a}, {"breakdown_column": b}])
 
 
+def _overlay_group_by(live: Any) -> dict[str, Any]:
+    """Two series folded against one shared pick: an outer WITH referenced
+    from inside each arm's own WITH."""
+    (col,) = _text(live, 1)
+    return live.form(
+        breakdown_column=col,
+        series=[{"event": PROBE_EVENT}, {"event": PROBE_EVENT + "_b"}],
+    )
+
+
+def _overlay_per_series(live: Any) -> dict[str, Any]:
+    (col,) = _text(live, 1)
+    return live.form(
+        breakdown_by_series=True,
+        series=[{"event": PROBE_EVENT, "breakdown_column": col}, {"event": PROBE_EVENT + "_b"}],
+    )
+
+
 def _value_semantics(live: Any) -> dict[str, Any]:
     """Value at x If missing x Fill from, on as many slots as the mapping
     has text columns for (at least one)."""
@@ -184,6 +202,8 @@ EVENT_SHAPES: dict[str, Callable[[Any], dict[str, Any]]] = {
     "hour_of_day": _hour_of_day,
     "one_breakdown": _one_breakdown,
     "two_breakdowns": _two_breakdowns,
+    "overlay_group_by": _overlay_group_by,
+    "overlay_per_series": _overlay_per_series,
     "value_semantics": _value_semantics,
     "numeric_fold": _numeric_fold,
     "epoch_millis": _epoch_millis,

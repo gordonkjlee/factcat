@@ -1763,11 +1763,16 @@ def test_overlay_per_series_breakdown():
         )
     )
     assert "UNION ALL" in sql
-    assert "CONCAT('started', ' · ', CAST(country AS STRING)) AS series" in sql
+    assert (
+        "CONCAT('started', ' · ', COALESCE(CAST(country AS STRING), '(null)')) AS series"
+        in sql
+    )
     assert "'completed' AS series" in sql
+    assert "fc_shared_top" not in sql
 
 
-def test_overlay_concat_all_breakdown_labels():
+def test_overlay_keeps_groups_as_columns_and_series_as_the_event():
+    """Mutation: joining the event and its groups back into ``series`` goes red."""
     sql = events_sql_from_form(
         _form(
             event_column="event_name",
@@ -1778,24 +1783,47 @@ def test_overlay_concat_all_breakdown_labels():
             series=[{"event": "paid"}, {"event": "signup"}],
         )
     )
-    assert "UNION ALL" in sql
-    assert "CAST(country AS STRING)" in sql
-    assert "CAST(browser AS STRING)" in sql
-    assert ", country, browser," in sql.replace("\n", " ")
+    flat = " ".join(sql.split())
+    assert "'paid' AS series, country, browser," in flat
+    assert "'signup' AS series, country, browser," in flat
+    assert "CONCAT" not in sql
 
 
-def test_snowflake_overlay_cast_is_varchar():
+def test_overlay_group_by_folds_every_arm_against_one_pick():
     sql = events_sql_from_form(
         _form(
-            kind="snowflake",
-            table="ANALYTICS.MARTS.EVENTS",
             event_column="event_name",
-            series=[{"event": "started"}, {"event": "completed"}],
             breakdown_column="country",
+            series=[{"event": "started"}, {"event": "completed"}],
         )
     )
-    assert "CAST(country AS VARCHAR)" in sql
-    assert "CAST(country AS STRING)" not in sql
+    assert sql.count("WITH fc_shared_top AS (") == 1
+    assert sql.count("SELECT * FROM fc_shared_top") == 2
+    assert "event_name = 'started'" in sql and "event_name = 'completed'" in sql
+
+
+@pytest.mark.parametrize(
+    ("kind", "cast"),
+    [("bigquery", "CAST(country AS STRING)"), ("snowflake", "CAST(country AS VARCHAR)")],
+)
+def test_per_series_concat_is_null_safe_on_each_warehouse(kind, cast):
+    """BigQuery and Snowflake return NULL for CONCAT with a NULL argument,
+    which DuckDB fixtures cannot show, so the emitted shape is the guard."""
+    sql = events_sql_from_form(
+        _form(
+            kind=kind,
+            table="ANALYTICS.MARTS.EVENTS" if kind == "snowflake" else "analytics.events",
+            event_column="event_name",
+            breakdown_by_series=True,
+            series=[
+                {"event": "started", "breakdown_column": "country"},
+                {"event": "completed"},
+            ],
+        )
+    )
+    assert f"COALESCE({cast}, '(null)')" in sql
+    other = "STRING" if kind == "snowflake" else "VARCHAR"
+    assert f"AS {other})" not in sql
 
 
 def test_series_measure_overrides_chart_measure():

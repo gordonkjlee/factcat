@@ -8,6 +8,7 @@ broken SQL was emitted silently. These tests turn that warning into a failure.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import re
@@ -25,6 +26,7 @@ from factcat import (
     retention_sql,
 )
 from factcat._emit import GRID_RELATION, transpile_with_grid
+from factcat.events import shared_top_labels_sql
 from factcat.dialects import (
     as_instant,
     create_or_replace_relation,
@@ -484,6 +486,21 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     events_sql(EVENTS_BREAKDOWN_VALUES_ASOF, dialect=dialect)
     events_sql(EVENTS_BREAKDOWN_VALUES_RAW_COLUMN, dialect=dialect)
 
+    assert sqlglot_warnings.messages == [], (
+        f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
+    )
+
+
+@pytest.mark.parametrize("dialect", SUPPORTED)
+@pytest.mark.parametrize(
+    "spec", [EVENTS_BREAKDOWN, EVENTS_BREAKDOWN_APPROX, EVENTS_BREAKDOWN_SUM_APPROX,
+             EVENTS_BREAKDOWN_PAIR, EVENTS_BREAKDOWN_CARRIED],
+)
+def test_shared_top_labels_emit_without_warnings(dialect, spec, sqlglot_warnings):
+    other = dataclasses.replace(spec, where="event_name = 'other'")
+    pick = shared_top_labels_sql([spec, other], dialect)
+    sql = events_sql(spec, dialect=dialect, top_labels_sql=pick)
+    assert pick in sql
     assert sqlglot_warnings.messages == [], (
         f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
     )
@@ -1026,3 +1043,13 @@ def test_a_numeric_breakdown_folds_into_other_without_a_type_clash():
         )
     )
     assert "(other)" not in plain
+
+
+def test_shared_pick_refuses_specs_that_disagree_on_the_axis():
+    """Mutation: drop the top_n/exact check and a mismatched spec is ranked silently."""
+    with pytest.raises(ValueError, match="same top_n and exact"):
+        shared_top_labels_sql(
+            [EVENTS_BREAKDOWN, dataclasses.replace(EVENTS_BREAKDOWN, top_n=3)], "bigquery"
+        )
+    with pytest.raises(ValueError, match="same breakdown count"):
+        shared_top_labels_sql([EVENTS_BREAKDOWN, EVENTS_BREAKDOWN_PAIR], "bigquery")

@@ -63,16 +63,21 @@ def _finish(sql: str, dialect: str) -> str:
     return splice_placeholders(_splice_ndv(transpile(sql, dialect), dialect), dialect)
 
 
-def _inject_top_labels(sql: str, spec: EventsSpec, dialect: str) -> str:
+def _rank_sql(spec: EventsSpec) -> str:
+    return "SUM(fc_of)" if spec.on == "property" and spec.measure == "sum" else "COUNT(*)"
+
+
+def _inject_top_labels(
+    sql: str, spec: EventsSpec, dialect: str, top_labels_sql: str | None = None
+) -> str:
     cols = tuple(f"fc_bd_{i}" for i in range(len(spec.breakdowns)))
-    rank = "SUM(fc_of)" if spec.on == "property" and spec.measure == "sum" else "COUNT(*)"
-    body = top_labels_select(
+    body = top_labels_sql or top_labels_select(
         "sliced",
         cols,
         spec.top_n,
         dialect=dialect,
         exact=spec.exact,
-        rank_sql=rank,
+        rank_sql=_rank_sql(spec),
     )
     token = "fc_top_placeholder"
     if token not in sql and f"`{token}`" in sql:
@@ -424,11 +429,9 @@ def _pair_match(left_alias: str, right_alias: str, n: int) -> str:
     return " AND ".join(parts)
 
 
-def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
+def _sliced_ctes(spec: EventsSpec) -> str:
+    """The CTE chain through ``sliced``: one row per metric row with ``fc_bd_*``."""
     n = len(spec.breakdowns)
-    labels = spec.bd_labels()
-    bd_cols = [f"fc_bd_{i}" for i in range(n)]
-    fold_cols = [f"fc_fold_{i}" for i in range(n)]
     base = _base_cte(spec)
     resolved = spec.resolved_breakdowns()
     rows_items = [(i, b) for i, b in enumerate(resolved) if b.at == "rows"]
@@ -522,6 +525,19 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
         )
         """
 
+    ctes = base.rstrip()
+    if extras:
+        ctes = ctes + "," + ",".join(extras)
+    return ctes + "," + sliced
+
+
+def _breakdown_sql(
+    spec: EventsSpec, dialect: str, top_labels_sql: str | None = None
+) -> str:
+    n = len(spec.breakdowns)
+    labels = spec.bd_labels()
+    bd_cols = [f"fc_bd_{i}" for i in range(n)]
+    fold_cols = [f"fc_fold_{i}" for i in range(n)]
     join_on = _pair_match("sliced", "t", n)
     null_keep = " AND ".join(f"sliced.fc_bd_{i} IS NULL" for i in range(n))
     # LEFT JOIN, not EXISTS: BigQuery rejects correlated EXISTS against
@@ -577,10 +593,7 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
     order_by = group_by
     dim_group = ", ".join(["fc_bucket", *fold_cols])
 
-    ctes = base.rstrip()
-    if extras:
-        ctes = ctes + "," + ",".join(extras)
-    ctes = ctes + "," + sliced + f""",
+    ctes = _sliced_ctes(spec) + f""",
         top_labels AS (
             {_TOP_PLACEHOLDER}
         ),
@@ -607,7 +620,7 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
         GROUP BY {group_by}
         ORDER BY {order_by}
         """
-        return _inject_top_labels(_finish(sql, dialect), spec, dialect)
+        return _inject_top_labels(_finish(sql, dialect), spec, dialect, top_labels_sql)
 
     if spec.on == "property" and spec.measure == "median":
         med = median_select_from_base(
@@ -621,7 +634,8 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
         {med}
         """
         finished = _inject_top_labels(
-            splice_placeholders(transpile(sql, dialect), dialect), spec, dialect
+            splice_placeholders(transpile(sql, dialect), dialect), spec, dialect,
+            top_labels_sql,
         )
         rename = ", ".join(
             ["bucket"]
@@ -639,15 +653,60 @@ def _breakdown_sql(spec: EventsSpec, dialect: str) -> str:
     GROUP BY {group_by}
     ORDER BY {order_by}
     """
-    return _inject_top_labels(_finish(sql, dialect), spec, dialect)
+    return _inject_top_labels(_finish(sql, dialect), spec, dialect, top_labels_sql)
 
 
-def build_sql(spec: EventsSpec, dialect: str = "duckdb") -> str:
+def shared_top_labels_sql(specs: list[EventsSpec], dialect: str) -> str:
+    """One top-N pick over the rows of every spec together.
+
+    Each spec contributes its own matching rows (its ``where``, its breakdown
+    values). The specs must agree on breakdown count, ``top_n`` and ``exact``,
+    and the first one's measure ranks the axis, so pass specs that already
+    carry the measure to rank by. The result is SQL for ``dialect`` with the
+    ``fc_bd_*`` columns ``events_sql(top_labels_sql=)`` folds against.
+    """
+    if not specs or not specs[0].breakdowns:
+        raise ValueError("a shared pick needs at least one spec with breakdowns")
+    first = specs[0]
+    n = len(first.breakdowns)
+    if any(len(s.breakdowns) != n for s in specs):
+        raise ValueError("every spec in a shared pick needs the same breakdown count")
+    if any((s.top_n, s.exact) != (first.top_n, first.exact) for s in specs):
+        raise ValueError("every spec in a shared pick needs the same top_n and exact")
+    rank = _rank_sql(first)
+    cols = [f"fc_bd_{i}" for i in range(n)]
+    if rank != "COUNT(*)":
+        if any(not s.of for s in specs):
+            raise ValueError("ranking by a sum needs `of` on every spec")
+        cols.append("fc_of")
+    streams = []
+    for i, s in enumerate(specs):
+        body = _finish(f"{_sliced_ctes(s)} SELECT {', '.join(cols)} FROM sliced", dialect)
+        streams.append(f"SELECT * FROM ({body}) AS fc_stream_{i}")
+    source = "(" + " UNION ALL ".join(streams) + ") AS fc_all"
+    return top_labels_select(
+        source,
+        tuple(cols[:n]),
+        first.top_n,
+        dialect=dialect,
+        exact=first.exact,
+        rank_sql=rank,
+    )
+
+
+def build_sql(
+    spec: EventsSpec, dialect: str = "duckdb", *, top_labels_sql: str | None = None
+) -> str:
     """Render ``spec`` as SQL for ``dialect``.
 
     No breakdowns: one row per bucket (``bucket``, ``value``).
     With breakdowns: one row per bucket and label (``(other)`` when folded).
+    ``top_labels_sql`` replaces this spec's own top-N pick with a caller's
+    SELECT of ``fc_bd_*`` (for example ``shared_top_labels_sql``), so several
+    queries can fold against one label set. It is spliced in after
+    transpiling, so it must already be SQL for ``dialect``, and any relation
+    it names must be in scope where the query runs.
     """
     if not spec.breakdowns:
         return _plain_sql(spec, dialect)
-    return _breakdown_sql(spec, dialect)
+    return _breakdown_sql(spec, dialect, top_labels_sql)
