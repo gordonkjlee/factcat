@@ -14,3 +14,4 @@ factcat.log*
 .DS_Store
 node_modules/
 *.duckdb
+test-results/
