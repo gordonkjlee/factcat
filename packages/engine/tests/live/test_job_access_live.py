@@ -1,4 +1,4 @@
-"""Item 52 against the sandbox: the billing-project probe asks the real IAM.
+"""The billing-project probe asks the real IAM.
 
 No job runs and nothing is billed: Resource Manager's ``testIamPermissions``
 is metadata, and the fallback is a dry run.

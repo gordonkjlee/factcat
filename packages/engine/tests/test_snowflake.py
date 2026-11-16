@@ -206,7 +206,7 @@ def test_missing_extra_names_install(monkeypatch, tmp_path):
 
 
 def test_can_run_statement_selects_one_on_the_chosen_warehouse_and_role(snowflake_stack):
-    """The zero-byte analogue of BigQuery's jobs.create probe (item 52)."""
+    """The zero-byte analogue of BigQuery's jobs.create probe."""
     snowflake_stack.cur.description = [("fc_role",), ("fc_wh",)]
     snowflake_stack.cur.fetchall.return_value = [("ANALYST", "COMPUTE_WH")]
     got = can_run_statement(

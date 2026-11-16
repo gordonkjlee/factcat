@@ -1,6 +1,5 @@
-"""Item 52: Setup refuses a billing project (or role + warehouse) that cannot run jobs.
+"""Setup refuses a billing project (or role + warehouse) that cannot run jobs.
 
-Hermetic: IAM and the warehouses are stubbed. Mutation checks named per test.
 """
 
 from __future__ import annotations
