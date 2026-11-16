@@ -743,6 +743,31 @@ def current_hour_start(
     return "date_trunc('hour', CURRENT_TIMESTAMP)"
 
 
+def date_shift(expr: str, n: str, dialect: str) -> str:
+    """``expr`` (a date or timestamp) moved by ``n`` whole days, as a DATE.
+
+    ``n`` is any integer SQL expression (a literal, or the period grid's
+    ``period_index``), so the shift can differ per row.
+    """
+    if dialect not in SUPPORTED:
+        raise ValueError(f"unsupported dialect {dialect!r}")
+    d = f"CAST({expr} AS DATE)"
+    if dialect == "bigquery":
+        return f"DATE_ADD({d}, INTERVAL ({n}) DAY)"
+    if dialect == "snowflake":
+        return f"DATEADD('day', {n}, {d})"
+    if dialect in ("databricks", "spark"):
+        return f"DATE_ADD({d}, {n})"
+    if dialect in ("trino", "presto"):
+        return f"DATE_ADD('day', {n}, {d})"
+    if dialect == "clickhouse":
+        return f"addDays({d}, {n})"
+    if dialect == "redshift":
+        return f"CAST(DATEADD(day, {n}, {d}) AS DATE)"
+    # duckdb, postgres: DATE + integer is a DATE.
+    return f"({d} + CAST({n} AS INTEGER))"
+
+
 def bucket_out(expr: str = "fc_bucket") -> str:
     """Result time-axis column. Type follows the spec bucket (DATE, timestamp, or int)."""
     return f"{expr} AS bucket"
@@ -863,6 +888,13 @@ def splice_placeholders(sql: str, dialect: str) -> str:
         kind = parts[2].strip().strip("'").strip('"')
         return fn(parts[0], dialect, tz, kind)
 
+    def date_shift_call(inner: str) -> str:
+        parts = _split_top_args(inner)
+        if len(parts) != 2:
+            raise ValueError("factcat_date_shift expects expr, days")
+        return date_shift(parts[0].strip(), parts[1].strip(), dialect)
+
+    sql = _replace_func_calls(sql, "factcat_date_shift", date_shift_call)
     sql = _replace_func_calls(sql, "factcat_ts_at_date", ts_at_date)
     sql = _replace_func_calls(
         sql,
