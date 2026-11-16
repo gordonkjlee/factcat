@@ -11,6 +11,7 @@ from factcat.warehouses import AdapterError, DryRunNotSupported, connect
 from factcat.warehouses.snowflake import (
     SnowflakeAdapter,
     _load_snowflake,
+    can_run_statement,
     list_roles,
     list_warehouses,
 )
@@ -202,3 +203,39 @@ def test_missing_extra_names_install(monkeypatch, tmp_path):
     adapter = _adapter(private_key_path=str(key))
     with pytest.raises(ImportError, match=r"factcat\[snowflake\]"):
         adapter.run("SELECT 1")
+
+
+def test_can_run_statement_selects_one_on_the_chosen_warehouse_and_role(snowflake_stack):
+    """The zero-byte analogue of BigQuery's jobs.create probe (item 52)."""
+    snowflake_stack.cur.description = [("fc_role",), ("fc_wh",)]
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", "COMPUTE_WH")]
+    got = can_run_statement(
+        account="xy12345",
+        user="ANALYST",
+        warehouse="COMPUTE_WH",
+        private_key_path=snowflake_stack.key,
+        role="ANALYST",
+    )
+    kwargs = snowflake_stack.connector.connect.call_args.kwargs
+    assert kwargs["warehouse"] == "COMPUTE_WH" and kwargs["role"] == "ANALYST"
+    sqls = [c[0][0] for c in snowflake_stack.cur.execute.call_args_list]
+    assert sqls[0] == "ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 1"
+    assert sqls[1].startswith("SELECT CURRENT_ROLE()")
+    assert got == {"role": "ANALYST", "warehouse": "COMPUTE_WH"}
+
+
+def test_can_run_statement_refusal_is_an_adapter_error(snowflake_stack):
+    snowflake_stack.cur.execute.side_effect = RuntimeError("No active warehouse selected")
+    with pytest.raises(AdapterError, match="No active warehouse"):
+        can_run_statement(
+            account="xy12345",
+            user="ANALYST",
+            warehouse="COMPUTE_WH",
+            private_key_path=snowflake_stack.key,
+        )
+    assert snowflake_stack.ctx.close.called
+
+
+def test_can_run_statement_needs_a_warehouse(snowflake_stack):
+    with pytest.raises(ValueError, match="warehouse"):
+        can_run_statement(account="xy12345", user="U", private_key_path=snowflake_stack.key)

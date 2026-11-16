@@ -42,6 +42,8 @@ from .catalog import (
 )
 from .layout import (
     assemble_layout,
+    job_access_from_form,
+    job_access_key,
     write_access_from_form,
 )
 from .extras import extra_commands, install_command, run_install
@@ -331,6 +333,51 @@ async def api_layout(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, **payload})
 
 
+# What the last job-rights probe said about each billing project (BigQuery) or
+# role + warehouse (Snowflake) this process was asked about. It lets /api/save
+# refuse a mapping that would 403 on its first chart even when a client skips
+# the Setup gate.
+_JOB_VERDICTS: dict[str, str] = {}
+
+
+@app.post("/api/job_access")
+async def api_job_access(request: Request) -> JSONResponse:
+    form = await request.json()
+    try:
+        payload = await run_in_threadpool(job_access_from_form, form)
+    except (ValueError, AdapterError, LookupError, ImportError) as exc:
+        return _catalog_error(exc, form)
+    if payload.get("status") in ("ok", "denied"):
+        _JOB_VERDICTS[job_access_key(form)] = payload["status"]
+    return JSONResponse({"ok": True, **payload})
+
+
+def _job_refusal(form: dict[str, Any]) -> str:
+    """Why this mapping may not be saved, or "" when it may.
+
+    Only a verdict of ``denied`` blocks, and only after asking again, so a
+    grant made in the console clears it without a restart.
+    """
+    key = job_access_key(form)
+    if _JOB_VERDICTS.get(key) != "denied":
+        return ""
+    try:
+        payload = job_access_from_form(form)
+    except (ValueError, AdapterError, LookupError, ImportError):
+        return ""
+    if payload.get("status") in ("ok", "denied"):
+        _JOB_VERDICTS[key] = payload["status"]
+    if payload.get("status") != "denied":
+        return ""
+    if payload.get("warehouse"):
+        who = payload.get("role") or "The default role"
+        return f"{who} cannot run queries on {payload['warehouse']}. Nothing was saved."
+    return (
+        f"This login cannot run queries in {payload.get('project') or 'this project'}. "
+        "Nothing was saved."
+    )
+
+
 @app.post("/api/write_access")
 async def api_write_access(request: Request) -> JSONResponse:
     form = await request.json()
@@ -461,6 +508,9 @@ def preferences(request: Request) -> HTMLResponse:
 @app.post("/api/save")
 async def api_save(request: Request) -> JSONResponse:
     form = await request.json()
+    refusal = await run_in_threadpool(_job_refusal, form)
+    if refusal:
+        return JSONResponse({"ok": False, "error": refusal})
     save(form)
     return JSONResponse({"ok": True})
 

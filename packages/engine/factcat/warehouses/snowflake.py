@@ -790,6 +790,58 @@ def _schema_privileges_from_grants(
     return privileges
 
 
+def can_run_statement(
+    *,
+    account: str,
+    user: str,
+    warehouse: str = "",
+    private_key_path: str = "",
+    role: str | None = None,
+    private_key_passphrase: str | None = None,
+    authenticator: str = "key_pair",
+) -> dict[str, str]:
+    """Whether this role can run a statement on this warehouse. Zero bytes.
+
+    Snowflake has no single grants call that sees warehouse USAGE, so this
+    runs ``SELECT 1`` under a one-second statement timeout on the chosen
+    warehouse and role, the closest analogue of BigQuery's project IAM probe.
+    Raises ``AdapterError`` with Snowflake's own message when it cannot.
+    """
+    warehouse = (warehouse or "").strip()
+    if not warehouse:
+        raise ValueError("warehouse is required")
+    ctx = None
+    cur = None
+    try:
+        ctx = _catalog_connect(
+            account=account,
+            user=user,
+            warehouse=warehouse,
+            private_key_path=private_key_path,
+            role=role,
+            private_key_passphrase=private_key_passphrase,
+            authenticator=authenticator,
+        )
+        cur = ctx.cursor()
+        cur.execute("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 1")
+        cur.execute("SELECT CURRENT_ROLE() AS fc_role, CURRENT_WAREHOUSE() AS fc_wh")
+        got = list(_fetch_maps(cur) or [])
+    except (AdapterError, ImportError, ValueError):
+        raise
+    except Exception as exc:
+        raise AdapterError(str(exc) or "could not run a statement") from exc
+    finally:
+        if cur is not None:
+            cur.close()
+        if ctx is not None:
+            ctx.close()
+    first = got[0] if got else {}
+    return {
+        "role": str(_row_get(first, "fc_role", "CURRENT_ROLE()") or role or ""),
+        "warehouse": str(_row_get(first, "fc_wh", "CURRENT_WAREHOUSE()") or warehouse),
+    }
+
+
 def schema_write_privileges(
     *,
     account: str,

@@ -167,6 +167,7 @@
     <label for="project">GCP project that runs the query (billing)</label>
     <input id="project" name="project" autocomplete="off" value="{{ config.project }}">
     <span class="hint">Pre-filled from ADC, <code>GOOGLE_CLOUD_PROJECT</code>, or <code>gcloud config get-value project</code> when we can read them. Dataset and table are not part of that.</span>
+    <div class="callout" id="job-access-hint-bq" role="status" hidden></div>
     <label for="data_project">Project that holds the table (blank = same as billing)</label>
     <input id="data_project" name="data_project" autocomplete="off" value="{{ config.data_project }}">
     <input type="hidden" name="location" id="location" value="{{ config.location }}">
@@ -197,6 +198,7 @@
       <option value=""></option>
       {% if config.warehouse %}<option value="{{ config.warehouse }}" selected>{{ config.warehouse }}</option>{% endif %}
     </select>
+    <div class="callout" id="job-access-hint-sf" role="status" hidden></div>
   </div>
   <input type="hidden" name="table" id="table" value="{{ config.table }}">
 
@@ -1437,6 +1439,107 @@ async function requestWriteAccess() {
     if (gen !== writeAccessGen) return;
   }
 }
+// Can this login run queries where the form says they run? Asked of IAM
+// (BigQuery) or a SELECT 1 (Snowflake) when the billing project, or the role
+// and warehouse, settle. Autosave is gated on the answer for the CURRENT
+// value: a denial or an unanswered probe blocks it, an answer for another
+// value does not count. Browse rights are separate, so the pickers still fill.
+let jobAccessGen = 0;
+let jobAccessTimer = 0;
+let jobAccess = {key: "", state: "idle"};  // idle | pending | ok | denied | error
+function jobAccessReady() {
+  if (currentKind() === "snowflake") {
+    return !!(document.getElementById("account").value.trim() && warehouseEl.value.trim());
+  }
+  return !!projectEl.value.trim();
+}
+function jobAccessKey() {
+  const b = authBody();
+  return currentKind() === "snowflake"
+    ? ["snowflake", b.account, b.user, b.snowflake_auth, b.role, b.warehouse].join("|")
+    : ["bigquery", b.project, b.credentials].join("|");
+}
+function jobAccessEl() {
+  return document.getElementById(currentKind() === "snowflake" ? "job-access-hint-sf" : "job-access-hint-bq");
+}
+function paintJobAccess(data) {
+  ["job-access-hint-bq", "job-access-hint-sf"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.hidden = true;
+    el.textContent = "";
+  });
+  const el = jobAccessEl();
+  if (!el || !data) return;
+  let text = "";
+  if (data.status === "denied" && data.warehouse !== undefined) {
+    text = (data.role || "The default role") + " cannot run queries on " + data.warehouse
+      + ". Snowflake said: " + (data.error || "no usage on the warehouse")
+      + " Pick a role with USAGE on it, or another warehouse. Nothing is saved until then.";
+  } else if (data.status === "denied") {
+    const billing = data.project || projectEl.value.trim();
+    text = "Cannot run queries in " + billing + ". This Google login has no BigQuery Job User (bigquery.jobs.create) there."
+      + (data.data_project
+        ? " Jobs bill to " + billing + " and the table lives in " + data.data_project
+          + ": put a project that can run jobs in billing, and keep " + data.data_project
+          + " under \u201cProject that holds the table\u201d."
+        : " Put a project that can run jobs in billing, and put the project that holds the table under \u201cProject that holds the table\u201d.")
+      + " Nothing is saved until then.";
+  } else if (data.status === "error") {
+    text = "Could not check whether this login can run queries: " + (data.error || "the check failed")
+      + ". Saving continues; the first chart will say if it cannot.";
+  } else {
+    return;
+  }
+  el.textContent = text;
+  el.hidden = false;
+}
+async function requestJobAccess() {
+  clearTimeout(jobAccessTimer);
+  const gen = ++jobAccessGen;
+  if (!jobAccessReady()) {
+    jobAccess = {key: "", state: "idle"};
+    paintJobAccess(null);
+    return;
+  }
+  const key = jobAccessKey();
+  jobAccess = {key, state: "pending"};
+  paintJobAccess(null);
+  let data;
+  try {
+    data = await post("/api/job_access", authBody());
+  } catch (err) {
+    data = {ok: false, error: (err && err.message) || "the check did not answer"};
+  }
+  if (gen !== jobAccessGen) return;
+  const state = !data.ok ? "error"
+    : (data.status === "ok" || data.status === "denied" || data.status === "error") ? data.status : "idle";
+  jobAccess = {key, state};
+  paintJobAccess(!data.ok ? {status: "error", error: data.error} : data);
+  autosave.schedule();
+}
+function scheduleJobAccess() {
+  clearTimeout(jobAccessTimer);
+  jobAccessGen++;
+  if (!jobAccessReady()) {
+    jobAccess = {key: "", state: "idle"};
+    paintJobAccess(null);
+    return;
+  }
+  jobAccess = {key: jobAccessKey(), state: "pending"};
+  jobAccessTimer = setTimeout(requestJobAccess, 500);
+}
+function jobAccessGate() {
+  if (!jobAccessReady()) return true;
+  if (jobAccess.key !== jobAccessKey()) {
+    scheduleJobAccess();
+    return false;
+  }
+  return jobAccess.state !== "pending" && jobAccess.state !== "denied";
+}
+const JOB_ACCESS_FIELDS = new Set(["project", "data_project", "credentials", "account", "user", "snowflake_auth", "role", "warehouse", "private_key_path", "kind"]);
+form.addEventListener("input", (e) => { if (JOB_ACCESS_FIELDS.has(e.target && e.target.id)) scheduleJobAccess(); });
+form.addEventListener("change", (e) => { if (JOB_ACCESS_FIELDS.has(e.target && e.target.id)) scheduleJobAccess(); });
 function syncEventTimeStored() {
   const storage = document.getElementById("event_time_storage_tz");
   const hidden = document.getElementById("event_time_tz");
@@ -1611,6 +1714,7 @@ syncCatalogEnabled();
 syncManagedChrome();
 if (!applyLayoutCache()) requestLayout();
 requestWriteAccess();
+requestJobAccess();
 
 const ENTITY_NAME_PRESETS = {
   User: "Users",
@@ -1867,6 +1971,7 @@ const autosave = fcAutosave({
   },
   onFail: (msg) => setError(msg || "Could not save mapping"),
   suppressed: () => suppressChange,
+  gate: jobAccessGate,
 });
 
 function scheduleSave() {
