@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/gordonkjlee/factcat/compare/v0.6.0...v0.6.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **events:** split two event series by one shared group list ([#107](https://github.com/gordonkjlee/factcat/issues/107)) ([f72f36b](https://github.com/gordonkjlee/factcat/commit/f72f36b9a9b9c5b6c15776747db15d1f63beeb92))
+
 ## [0.6.0](https://github.com/gordonkjlee/factcat/compare/v0.5.1...v0.6.0) (2026-09-12)
 
 
