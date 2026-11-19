@@ -297,9 +297,7 @@ def test_date_shift_per_dialect(dialect, needle):
         ("DATE_ADD(CAST(a.d AS DATE), INTERVAL (p.n) DAY)", "bigquery", "INTERVAL (INTERVAL (p.n) DAY) DAY"),
         # DuckDB's TO_DAYS leaks into a dialect that has no such function.
         ("DATE_ADD(CAST(a.d AS DATE), TO_DAYS(p.n))", "snowflake", "TO_DAYS(p.n)"),
-        # DATE + integer passes through untouched; BigQuery and Trino have no
-        # such operator.
-        ("CAST(a.d AS DATE) + CAST(p.n AS INTEGER)", "bigquery", "+ CAST(p.n AS INT64)"),
+        # DATE + integer passes through untouched; Trino has no such operator.
         ("CAST(a.d AS DATE) + CAST(p.n AS INTEGER)", "trino", "+ CAST(p.n AS INTEGER)"),
     ],
 )
