@@ -1503,7 +1503,8 @@ function paintJobAccess(data) {
         : " Put a project that can run jobs in billing, and put the project that holds the table under \u201cProject that holds the table\u201d.")
       + " Nothing is saved until then.";
   } else if (data.status === "error") {
-    text = "Could not check whether this login can run queries: " + (data.error || "the check failed")
+    text = "Could not check whether this login can run queries: "
+      + (data.error || "the check failed").replace(/[.\s]+$/, "")
       + ". Saving continues; the first chart will say if it cannot.";
   } else {
     return;
