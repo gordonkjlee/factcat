@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import random
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import duckdb
 import pytest
@@ -29,7 +29,9 @@ from factcat_app.query import (
     spec_from_form,
 )
 
-TODAY = date.today()
+# The app reports in UTC here (no reporting time zone set), so the fixture's
+# today is the UTC date, not the machine's local one.
+TODAY = datetime.now(timezone.utc).date()
 
 
 def _fixture_rows() -> list[tuple[str, str, date]]:

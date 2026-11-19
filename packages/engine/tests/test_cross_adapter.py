@@ -107,6 +107,38 @@ def test_overlay_series_compile(kind, grain, extra, sqlglot_warnings):
 
 
 @pytest.mark.parametrize("kind", list(ADAPTERS))
+@pytest.mark.parametrize("grain", ["day", "week", "month"])
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"measure": "active", "window_days": 7},
+        {"measure": "active", "window_days": 30, "breakdown_column": "country"},
+        {
+            "breakdown_column": "country",
+            "series": [
+                {"event": "started", "measure": "active", "window_days": 1},
+                {"event": "started", "measure": "active", "window_days": 30},
+                {"event": "completed", "measure": "total"},
+            ],
+        },
+    ],
+    ids=["weekly", "monthly_by_group", "overlay_shared_group"],
+)
+def test_active_users_compile(kind, grain, extra, sqlglot_warnings):
+    """Active users through the app per shipped adapter: the lookback shift,
+    the day bucket, the report-day bounds and the fc_roll arms."""
+    sql = events_sql_from_form(
+        _form(kind, grain=grain, range_mode="last", range_unit=grain, range_n=3, **extra)
+    )
+    assert "FACTCAT_DATE_SHIFT" not in sql.upper()
+    if "series" in extra:
+        assert "FC_ROLL" in sql.upper()
+    assert sqlglot_warnings.messages == [], (
+        f"sqlglot warned for {kind}: {sqlglot_warnings.messages}"
+    )
+
+
+@pytest.mark.parametrize("kind", list(ADAPTERS))
 def test_breakdown_value_semantics_compile(kind, sqlglot_warnings):
     """Value at × If missing × Fill from compiles per shipped adapter:
     carried stream, range anchor, and no placeholder residue."""

@@ -311,6 +311,13 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       font-size: 0.78rem;
     }
+    /* Active users labels are words in both wordings, so they keep the
+       text face (the monospace one cuts "Monthly active users"). */
+    html[data-vocab="sql"] .series-measure:has(option[value^="active_"]:checked),
+    html[data-vocab="sql"] .series-measure option[value^="active_"] {
+      font-family: inherit;
+      font-size: 0.8rem;
+    }
     .summary { font-size: 0.75rem; color: var(--fc-slate); margin: 0 0 0.75rem; }
     .pane-head { display: flex; align-items: center; justify-content: flex-start; gap: 0.5rem; padding-right: 0.5rem; }
     .pane-head .pane-actions { margin-left: auto; }
@@ -881,7 +888,7 @@
         <option value="average" title="Volume divided by unique entities" {% if config.on != "property" and config.measure == "average" %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.average_per | sql_plain }}{% else %}{{ filter_ui.chrome.average_per.replace("{singular}", config.entity_label or "User") }}{% endif %}</option>
       </optgroup>
       {% set fc_pl = (config.entity_label_plural or "Users") | lower %}
-      <optgroup label="{{ filter_ui.chrome.active_group }}">
+      <optgroup label="{{ filter_ui.chrome.active_group.replace("{plural}", fc_pl) }}">
         <option value="active_1" title="Daily active {{ fc_pl }} (DAU): distinct {{ fc_pl }} with a row on that day">{{ filter_ui.chrome.active_1.replace("{plural}", fc_pl) }}</option>
         <option value="active_7" title="Weekly active {{ fc_pl }} (WAU): distinct {{ fc_pl }} with a row in the 7 days ending each day">{{ filter_ui.chrome.active_7.replace("{plural}", fc_pl) }}</option>
         <option value="active_30" title="Monthly active {{ fc_pl }} (MAU): distinct {{ fc_pl }} with a row in the 30 days ending each day">{{ filter_ui.chrome.active_30.replace("{plural}", fc_pl) }}</option>

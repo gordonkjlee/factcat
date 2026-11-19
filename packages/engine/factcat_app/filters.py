@@ -330,7 +330,7 @@ CHROME = {
         "volume": "Volume",
         "unique": "Unique {plural}",
         "average_per": "Average per {singular}",
-        "active_group": "Active users",
+        "active_group": "Active {plural}",
         "active_1": "Daily active {plural}",
         "active_7": "Weekly active {plural}",
         "active_30": "Monthly active {plural}",
@@ -378,7 +378,7 @@ CHROME = {
         "volume": "`COUNT(*)`",
         "unique": "`COUNT(DISTINCT id)`",
         "average_per": "`COUNT(*)`/`COUNT(DISTINCT id)`",
-        "active_group": "Active users",
+        "active_group": "Active {plural}",
         # A rolling window is no single SQL aggregate, and four labels that
         # start "COUNT(DISTINCT id) over" read the same once the menu cuts
         # them: SQL wording keeps the spelled-out names.
