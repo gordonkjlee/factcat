@@ -790,6 +790,73 @@ def _schema_privileges_from_grants(
     return privileges
 
 
+class WarehouseNotUsable(AdapterError):
+    """The session opened, but not on the chosen warehouse."""
+
+
+def can_run_statement(
+    *,
+    account: str,
+    user: str,
+    warehouse: str = "",
+    private_key_path: str = "",
+    role: str | None = None,
+    private_key_passphrase: str | None = None,
+    authenticator: str = "key_pair",
+) -> dict[str, str]:
+    """Whether this role can run queries on this warehouse. Zero bytes.
+
+    A role without USAGE still connects, with no warehouse bound, so the
+    probe reads ``CURRENT_WAREHOUSE()`` back and refuses NULL or another one.
+    """
+    warehouse = (warehouse or "").strip()
+    if not warehouse:
+        raise ValueError("warehouse is required")
+    ctx = None
+    cur = None
+    try:
+        ctx = _catalog_connect(
+            account=account,
+            user=user,
+            warehouse=warehouse,
+            private_key_path=private_key_path,
+            role=role,
+            private_key_passphrase=private_key_passphrase,
+            authenticator=authenticator,
+        )
+        cur = ctx.cursor()
+        cur.execute("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 1")
+        cur.execute("SELECT CURRENT_ROLE() AS fc_role, CURRENT_WAREHOUSE() AS fc_wh")
+        got = list(_fetch_maps(cur) or [])
+    except (AdapterError, ImportError, ValueError):
+        raise
+    except Exception as exc:
+        raise AdapterError(str(exc) or "could not run a statement") from exc
+    finally:
+        if cur is not None:
+            cur.close()
+        if ctx is not None:
+            ctx.close()
+    first = got[0] if got else {}
+    current_role = str(_row_get(first, "fc_role", "CURRENT_ROLE()") or role or "")
+    current_wh = str(_row_get(first, "fc_wh", "CURRENT_WAREHOUSE()") or "").strip()
+    if current_wh != _warehouse_key(warehouse):
+        raise WarehouseNotUsable(
+            f"Role {current_role or 'the default role'} has no USAGE on warehouse "
+            f"{warehouse}: the session opened with "
+            f"{'no current warehouse' if not current_wh else 'warehouse ' + current_wh}."
+        )
+    return {"role": current_role, "warehouse": current_wh}
+
+
+def _warehouse_key(name: str) -> str:
+    """The name Snowflake resolves a pick to: quoted kept exact, unquoted upper-cased."""
+    text = (name or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        return text[1:-1].replace('""', '"')
+    return text.upper()
+
+
 def schema_write_privileges(
     *,
     account: str,

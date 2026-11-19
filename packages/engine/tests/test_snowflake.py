@@ -11,6 +11,8 @@ from factcat.warehouses import AdapterError, DryRunNotSupported, connect
 from factcat.warehouses.snowflake import (
     SnowflakeAdapter,
     _load_snowflake,
+    WarehouseNotUsable,
+    can_run_statement,
     list_roles,
     list_warehouses,
 )
@@ -202,3 +204,110 @@ def test_missing_extra_names_install(monkeypatch, tmp_path):
     adapter = _adapter(private_key_path=str(key))
     with pytest.raises(ImportError, match=r"factcat\[snowflake\]"):
         adapter.run("SELECT 1")
+
+
+def test_can_run_statement_selects_one_on_the_chosen_warehouse_and_role(snowflake_stack):
+    """The zero-byte analogue of BigQuery's jobs.create probe."""
+    snowflake_stack.cur.description = [("fc_role",), ("fc_wh",)]
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", "COMPUTE_WH")]
+    got = can_run_statement(
+        account="xy12345",
+        user="ANALYST",
+        warehouse="COMPUTE_WH",
+        private_key_path=snowflake_stack.key,
+        role="ANALYST",
+    )
+    kwargs = snowflake_stack.connector.connect.call_args.kwargs
+    assert kwargs["warehouse"] == "COMPUTE_WH" and kwargs["role"] == "ANALYST"
+    sqls = [c[0][0] for c in snowflake_stack.cur.execute.call_args_list]
+    assert sqls[0] == "ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 1"
+    assert sqls[1].startswith("SELECT CURRENT_ROLE()")
+    assert got == {"role": "ANALYST", "warehouse": "COMPUTE_WH"}
+
+
+def test_can_run_statement_refusal_is_an_adapter_error(snowflake_stack):
+    snowflake_stack.cur.execute.side_effect = RuntimeError("No active warehouse selected")
+    with pytest.raises(AdapterError, match="No active warehouse"):
+        can_run_statement(
+            account="xy12345",
+            user="ANALYST",
+            warehouse="COMPUTE_WH",
+            private_key_path=snowflake_stack.key,
+        )
+    assert snowflake_stack.ctx.close.called
+
+
+def test_can_run_statement_needs_a_warehouse(snowflake_stack):
+    with pytest.raises(ValueError, match="warehouse"):
+        can_run_statement(account="xy12345", user="U", private_key_path=snowflake_stack.key)
+
+
+def test_can_run_statement_refuses_a_session_with_no_warehouse(snowflake_stack):
+    """A role without USAGE still connects; the warehouse just never binds.
+
+    Snowflake opens the session with ``CURRENT_WAREHOUSE()`` NULL and still
+    answers ``CURRENT_ROLE()``, so a probe that only checks the statement ran
+    would say ok for a role that cannot run a single query.
+
+    Mutation: drop the warehouse read-back; this goes green-to-red.
+    """
+    snowflake_stack.cur.description = [("FC_ROLE",), ("FC_WH",)]
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", None)]
+    with pytest.raises(WarehouseNotUsable, match="no USAGE on warehouse COMPUTE_WH"):
+        can_run_statement(
+            account="xy12345",
+            user="ANALYST",
+            warehouse="COMPUTE_WH",
+            private_key_path=snowflake_stack.key,
+            role="ANALYST",
+        )
+
+
+def test_can_run_statement_refuses_a_fallback_to_another_warehouse(snowflake_stack):
+    """A user DEFAULT_WAREHOUSE that binds instead is not the chosen one."""
+    snowflake_stack.cur.description = [("FC_ROLE",), ("FC_WH",)]
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", "DEFAULT_WH")]
+    with pytest.raises(WarehouseNotUsable, match="warehouse DEFAULT_WH"):
+        can_run_statement(
+            account="xy12345",
+            user="ANALYST",
+            warehouse="COMPUTE_WH",
+            private_key_path=snowflake_stack.key,
+        )
+
+
+def test_can_run_statement_matches_a_quoted_or_lower_case_pick(snowflake_stack):
+    snowflake_stack.cur.description = [("FC_ROLE",), ("FC_WH",)]
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", "COMPUTE_WH")]
+    for picked in ('"COMPUTE_WH"', "compute_wh"):
+        got = can_run_statement(
+            account="xy12345",
+            user="ANALYST",
+            warehouse=picked,
+            private_key_path=snowflake_stack.key,
+        )
+        assert got["warehouse"] == "COMPUTE_WH"
+
+
+def test_can_run_statement_keeps_a_quoted_name_case_sensitive(snowflake_stack):
+    """``"my_wh"`` and ``MY_WH`` are two warehouses; a fallback to one is not the other.
+
+    Mutation: fold the case of quoted names again; this goes green-to-red.
+    """
+    snowflake_stack.cur.description = [("FC_ROLE",), ("FC_WH",)]
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", "MY_WH")]
+    with pytest.raises(WarehouseNotUsable, match="warehouse MY_WH"):
+        can_run_statement(
+            account="xy12345",
+            user="ANALYST",
+            warehouse='"my_wh"',
+            private_key_path=snowflake_stack.key,
+        )
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", "my_wh")]
+    got = can_run_statement(
+        account="xy12345",
+        user="ANALYST",
+        warehouse='"my_wh"',
+        private_key_path=snowflake_stack.key,
+    )
+    assert got["warehouse"] == "my_wh"

@@ -11,13 +11,19 @@ from factcat._emit import transpile
 from factcat.dialects import splice_placeholders
 from factcat.warehouses import AdapterError, CAP_DRY_RUN, capabilities
 from factcat.warehouses.bigquery import (
+    JOBS_CREATE,
     dry_run_scan,
     get_table_relation,
     partition_avg_bytes,
     test_dataset_iam,
+    test_project_iam,
 )
-from factcat.warehouses.snowflake import schema_write_privileges
-from factcat_app.catalog import columns_from_form, form_kind
+from factcat.warehouses.snowflake import (
+    WarehouseNotUsable,
+    can_run_statement,
+    schema_write_privileges,
+)
+from factcat_app.catalog import _sf_auth, columns_from_form, form_kind
 from factcat_app.query import (
     _ident_column,
     _ident_table,
@@ -304,8 +310,15 @@ def _partition_avg(form: dict[str, Any], target: dict[str, Any]) -> int | None:
             table=table,
             location=creds["location"],
             credentials=creds.get("credentials"),
+            billing_project=creds["project"],
         )
-    except (AdapterError, ImportError, ValueError):
+    except AdapterError as exc:
+        if is_job_denial(exc):
+            # A refused job is not a table with no partition stats: let the
+            # caller see it instead of painting a missing layout hint.
+            raise
+        return None
+    except (ImportError, ValueError):
         return None
 
 
@@ -739,6 +752,84 @@ def _cluster_ok(
     if kind == "bigquery" and entity:
         note["entity_pos"] = _ident_in_cluster(item, entity)
     return note
+
+
+def is_job_denial(exc: BaseException) -> bool:
+    """True when ``exc`` is a refusal to create a job. A 403 on reading a table
+    also says "Access Denied" and, from a query job, "Job ID", so only the
+    ``bigquery.jobs.create`` permission name counts."""
+    return JOBS_CREATE in str(exc).lower()
+
+
+def job_access_key(form: dict[str, Any]) -> str:
+    """What a job-rights verdict is about: the billing project (BigQuery) or
+    the role and warehouse (Snowflake), plus the login and its key file."""
+    if form_kind(form) == "snowflake":
+        parts = (
+            "snowflake",
+            form.get("account"),
+            form.get("user"),
+            form.get("snowflake_auth"),
+            form.get("private_key_path"),
+            form.get("role"),
+            form.get("warehouse"),
+        )
+    else:
+        parts = ("bigquery", form.get("project"), form.get("credentials"))
+    return "|".join(str(p or "").strip() for p in parts)
+
+
+def job_access_from_form(form: dict[str, Any]) -> dict[str, Any]:
+    """Can this login run a statement where the form says jobs run?
+
+    BigQuery: ``bigquery.jobs.create`` on the billing project, asked of IAM
+    (no job, no bytes). If IAM itself cannot be asked, a dry-run ``SELECT 1``
+    answers the same question for free. Snowflake: a session on the chosen
+    role and warehouse that must come up with that warehouse bound; any other
+    driver failure (key, network, account) is a failure to check, as on
+    BigQuery. ``denied`` blocks Setup's save; ``error`` does not.
+    """
+    kind = form_kind(form)
+    if kind not in ("bigquery", "snowflake"):
+        return {"status": "skipped"}
+    if kind == "snowflake":
+        warehouse = str(form.get("warehouse") or "").strip()
+        if not warehouse or not str(form.get("account") or "").strip():
+            return {"status": "skipped"}
+        auth = _sf_auth(form)
+        base = {"warehouse": warehouse, "role": str(form.get("role") or "").strip()}
+        try:
+            got = can_run_statement(**auth)
+        except WarehouseNotUsable as exc:
+            return {"status": "denied", "reason": "no_usage", "error": str(exc), **base}
+        except AdapterError as exc:
+            return {"status": "error", "error": str(exc), **base}
+        return {"status": "ok", **base, **{k: v for k, v in got.items() if v}}
+    project = str(form.get("project") or "").strip()
+    if not project:
+        return {"status": "skipped"}
+    data = str(form.get("data_project") or "").strip()
+    out: dict[str, Any] = {"project": project}
+    if data and data != project:
+        out["data_project"] = data
+    creds = str(form.get("credentials") or "").strip() or None
+    try:
+        granted = test_project_iam(project=project, credentials=creds)
+    except AdapterError as iam_exc:
+        try:
+            dry_run_scan(
+                sql="SELECT 1",
+                project=project,
+                location=str(form.get("location") or "").strip(),
+                credentials=creds,
+            )
+        except AdapterError as exc:
+            if is_job_denial(exc):
+                return {"status": "denied", "error": str(exc), **out}
+            return {"status": "error", "error": str(iam_exc), **out}
+        return {"status": "ok", "via": "dry_run", **out}
+    ok = JOBS_CREATE in granted
+    return {"status": "ok" if ok else "denied", "granted": granted, **out}
 
 
 def write_access_from_form(form: dict[str, Any]) -> dict[str, Any]:
