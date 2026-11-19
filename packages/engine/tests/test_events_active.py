@@ -285,6 +285,38 @@ def test_date_shift_per_dialect(dialect, needle):
     assert date_shift("x", "n", dialect) == needle
 
 
+@pytest.mark.parametrize(
+    ("source", "dialect", "wrong"),
+    [
+        # The column is dropped: nothing left to shift by.
+        ("DATE_ADD(CAST(a.d AS DATE), INTERVAL (p.n) DAY)", "snowflake", "DATEADD(DAY, INTERVAL DAY,"),
+        ("DATE_ADD(CAST(a.d AS DATE), INTERVAL (p.n) DAY)", "redshift", "DATEADD(DAY, INTERVAL DAY,"),
+        # The column becomes the string 'n'.
+        ("DATE_ADD(CAST(a.d AS DATE), INTERVAL (p.n) DAY)", "postgres", "INTERVAL 'n DAY'"),
+        # An interval nested inside an interval.
+        ("DATE_ADD(CAST(a.d AS DATE), INTERVAL (p.n) DAY)", "bigquery", "INTERVAL (INTERVAL (p.n) DAY) DAY"),
+        # DuckDB's TO_DAYS leaks into a dialect that has no such function.
+        ("DATE_ADD(CAST(a.d AS DATE), TO_DAYS(p.n))", "snowflake", "TO_DAYS(p.n)"),
+        # DATE + integer passes through untouched; BigQuery and Trino have no
+        # such operator.
+        ("CAST(a.d AS DATE) + CAST(p.n AS INTEGER)", "bigquery", "+ CAST(p.n AS INT64)"),
+        ("CAST(a.d AS DATE) + CAST(p.n AS INTEGER)", "trino", "+ CAST(p.n AS INTEGER)"),
+    ],
+)
+def test_sqlglot_cannot_emit_a_per_row_day_shift(source, dialect, wrong):
+    """Why ``date_shift`` is written per dialect instead of transpiled.
+
+    Every DuckDB spelling of "this date plus ``n`` days, ``n`` a column" comes
+    out of sqlglot wrong for at least one supported dialect, and silently. If a
+    case here goes red, sqlglot has learned that spelling: check every dialect,
+    then move ``date_shift`` onto ``transpile`` and delete its branches.
+    """
+    import sqlglot
+
+    out = sqlglot.transpile(f"SELECT {source} FROM t", read="duckdb", write=dialect)[0]
+    assert wrong in out, out
+
+
 def test_date_shift_rejects_an_unknown_dialect():
     with pytest.raises(ValueError, match="unsupported dialect"):
         date_shift("x", "1", "oracle")
