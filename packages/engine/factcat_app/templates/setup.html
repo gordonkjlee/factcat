@@ -93,7 +93,9 @@
     #event-time-layout .callout,
     #event-column-layout .callout,
     #entity-layout .callout,
-    #table-cluster-layout .callout { margin: 0.45rem 0 0.65rem; }
+    #table-cluster-layout .callout,
+    #job-access-hint-bq,
+    #job-access-hint-sf { margin: 0.45rem 0 0.65rem; }
     #event-time-layout .callout p,
     #event-column-layout .callout p,
     #entity-layout .callout p,
@@ -164,7 +166,7 @@
   </select>
 
   <div id="bq-conn">
-    <label for="project">GCP project that runs the query (billing)</label>
+    <label for="project">GCP project that runs the query (billing) <span id="job-access-loading-bq" class="loading" hidden aria-label="Checking whether this login can run queries"></span></label>
     <input id="project" name="project" autocomplete="off" value="{{ config.project }}">
     <span class="hint">Pre-filled from ADC, <code>GOOGLE_CLOUD_PROJECT</code>, or <code>gcloud config get-value project</code> when we can read them. Dataset and table are not part of that.</span>
     <div class="callout" id="job-access-hint-bq" role="status" hidden></div>
@@ -193,7 +195,7 @@
       <option value=""></option>
       {% if config.role %}<option value="{{ config.role }}" selected>{{ config.role }}</option>{% endif %}
     </select>
-    <label for="warehouse">Compute warehouse <span id="warehouse-loading" class="loading" hidden aria-label="Loading"></span> <button type="button" class="linkish catalog-refresh" data-catalog="warehouse" hidden>Refresh</button></label>
+    <label for="warehouse">Compute warehouse <span id="warehouse-loading" class="loading" hidden aria-label="Loading"></span> <span id="job-access-loading-sf" class="loading" hidden aria-label="Checking whether this role can run queries here"></span> <button type="button" class="linkish catalog-refresh" data-catalog="warehouse" hidden>Refresh</button></label>
     <select id="warehouse" name="warehouse" disabled>
       <option value=""></option>
       {% if config.warehouse %}<option value="{{ config.warehouse }}" selected>{{ config.warehouse }}</option>{% endif %}
@@ -1440,13 +1442,25 @@ async function requestWriteAccess() {
   }
 }
 // Can this login run queries where the form says they run? Asked of IAM
-// (BigQuery) or a SELECT 1 (Snowflake) when the billing project, or the role
-// and warehouse, settle. Autosave is gated on the answer for the CURRENT
+// (BigQuery) or a session that must bind the warehouse (Snowflake) when the
+// billing project, or the role and warehouse, settle. Autosave is gated on the answer for the CURRENT
 // value: a denial or an unanswered probe blocks it, an answer for another
 // value does not count. Browse rights are separate, so the pickers still fill.
 let jobAccessGen = 0;
 let jobAccessTimer = 0;
 let jobAccess = {key: "", state: "idle"};  // idle | pending | ok | denied | error
+let jobAccessShown = null;  // the verdict the callout paints, for repaints
+function setJobAccess(next) {
+  jobAccess = next;
+  const busy = next.state === "pending";
+  ["job-access-loading-bq", "job-access-loading-sf"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !busy || id !== jobAccessSpinnerId();
+  });
+}
+function jobAccessSpinnerId() {
+  return currentKind() === "snowflake" ? "job-access-loading-sf" : "job-access-loading-bq";
+}
 function jobAccessReady() {
   if (currentKind() === "snowflake") {
     return !!(document.getElementById("account").value.trim() && warehouseEl.value.trim());
@@ -1463,6 +1477,7 @@ function jobAccessEl() {
   return document.getElementById(currentKind() === "snowflake" ? "job-access-hint-sf" : "job-access-hint-bq");
 }
 function paintJobAccess(data) {
+  jobAccessShown = data;
   ["job-access-hint-bq", "job-access-hint-sf"].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -1478,10 +1493,12 @@ function paintJobAccess(data) {
       + " Pick a role with USAGE on it, or another warehouse. Nothing is saved until then.";
   } else if (data.status === "denied") {
     const billing = data.project || projectEl.value.trim();
+    const held = dataProjectEl.value.trim();
+    const split = held && held !== billing ? held : "";
     text = "Cannot run queries in " + billing + ". This Google login has no BigQuery Job User (bigquery.jobs.create) there."
-      + (data.data_project
-        ? " Jobs bill to " + billing + " and the table lives in " + data.data_project
-          + ": put a project that can run jobs in billing, and keep " + data.data_project
+      + (split
+        ? " Jobs bill to " + billing + " and the table lives in " + split
+          + ": put a project that can run jobs in billing, and keep " + split
           + " under \u201cProject that holds the table\u201d."
         : " Put a project that can run jobs in billing, and put the project that holds the table under \u201cProject that holds the table\u201d.")
       + " Nothing is saved until then.";
@@ -1498,12 +1515,12 @@ async function requestJobAccess() {
   clearTimeout(jobAccessTimer);
   const gen = ++jobAccessGen;
   if (!jobAccessReady()) {
-    jobAccess = {key: "", state: "idle"};
+    setJobAccess({key: "", state: "idle"});
     paintJobAccess(null);
     return;
   }
   const key = jobAccessKey();
-  jobAccess = {key, state: "pending"};
+  setJobAccess({key, state: "pending"});
   paintJobAccess(null);
   let data;
   try {
@@ -1514,7 +1531,7 @@ async function requestJobAccess() {
   if (gen !== jobAccessGen) return;
   const state = !data.ok ? "error"
     : (data.status === "ok" || data.status === "denied" || data.status === "error") ? data.status : "idle";
-  jobAccess = {key, state};
+  setJobAccess({key, state});
   paintJobAccess(!data.ok ? {status: "error", error: data.error} : data);
   autosave.schedule();
 }
@@ -1522,11 +1539,18 @@ function scheduleJobAccess() {
   clearTimeout(jobAccessTimer);
   jobAccessGen++;
   if (!jobAccessReady()) {
-    jobAccess = {key: "", state: "idle"};
+    setJobAccess({key: "", state: "idle"});
     paintJobAccess(null);
     return;
   }
-  jobAccess = {key: jobAccessKey(), state: "pending"};
+  const key = jobAccessKey();
+  // A verdict about another billing project, or role and warehouse, is no
+  // longer true of the form: take it down now, not when the probe answers.
+  // Same key (only the data project moved): repaint so the copy names the
+  // project the field now holds.
+  if (key !== jobAccess.key) paintJobAccess(null);
+  else paintJobAccess(jobAccessShown);
+  setJobAccess({key, state: "pending"});
   jobAccessTimer = setTimeout(requestJobAccess, 500);
 }
 function jobAccessGate() {
