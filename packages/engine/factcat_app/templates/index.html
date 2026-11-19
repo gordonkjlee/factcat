@@ -882,10 +882,10 @@
       </optgroup>
       {% set fc_pl = (config.entity_label_plural or "Users") | lower %}
       <optgroup label="{{ filter_ui.chrome.active_group }}">
-        <option value="active_1" title="Daily active {{ fc_pl }} (DAU): distinct {{ fc_pl }} with a row on that day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_1 | sql_plain }}{% else %}{{ filter_ui.chrome.active_1.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
-        <option value="active_7" title="Weekly active {{ fc_pl }} (WAU): distinct {{ fc_pl }} with a row in the 7 days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_7 | sql_plain }}{% else %}{{ filter_ui.chrome.active_7.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
-        <option value="active_30" title="Monthly active {{ fc_pl }} (MAU): distinct {{ fc_pl }} with a row in the 30 days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_30 | sql_plain }}{% else %}{{ filter_ui.chrome.active_30.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
-        <option value="active_n" title="Active {{ fc_pl }} over N days: distinct {{ fc_pl }} with a row in the N days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_n | sql_plain }}{% else %}{{ filter_ui.chrome.active_n.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
+        <option value="active_1" title="Daily active {{ fc_pl }} (DAU): distinct {{ fc_pl }} with a row on that day">{{ filter_ui.chrome.active_1.replace("{plural}", fc_pl) }}</option>
+        <option value="active_7" title="Weekly active {{ fc_pl }} (WAU): distinct {{ fc_pl }} with a row in the 7 days ending each day">{{ filter_ui.chrome.active_7.replace("{plural}", fc_pl) }}</option>
+        <option value="active_30" title="Monthly active {{ fc_pl }} (MAU): distinct {{ fc_pl }} with a row in the 30 days ending each day">{{ filter_ui.chrome.active_30.replace("{plural}", fc_pl) }}</option>
+        <option value="active_n" title="Active {{ fc_pl }} over N days: distinct {{ fc_pl }} with a row in the N days ending each day">{{ filter_ui.chrome.active_n.replace("{plural}", fc_pl) }}</option>
       </optgroup>
       <optgroup label="Property value">
         <option value="sum" title="Sum of a numeric column" {% if config.measure == "sum" %}selected{% endif %}>{{ filter_ui.chrome.property_sum | sql_plain }}</option>
@@ -2705,7 +2705,8 @@ function applyMeasureLabels(sel) {
     else if (o.value === "property_average") { o.textContent = t("property_average"); o.title = "Average of a numeric column"; }
     else if (o.value === "median") { o.textContent = t("property_median"); o.title = "Median of a numeric column"; }
     else if (/^active_/.test(o.value)) {
-      o.textContent = sql ? t(o.value) : t(o.value).replace("{plural}", p.toLowerCase());
+      // Spelled out in both wordings (no single SQL aggregate names a window).
+      o.textContent = t(o.value).replace("{plural}", p.toLowerCase());
     }
     else if (o.value === "distinct") {
       o.textContent = sql ? t("property_distinct") : t("property_distinct").replace("{singular}", w);
