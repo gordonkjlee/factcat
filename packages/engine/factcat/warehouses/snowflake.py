@@ -800,16 +800,10 @@ def can_run_statement(
     private_key_passphrase: str | None = None,
     authenticator: str = "key_pair",
 ) -> dict[str, str]:
-    """Whether this role can run a statement on this warehouse. Zero bytes.
+    """Whether this role can run queries on this warehouse. Zero bytes.
 
-    Snowflake has no single grants call that sees warehouse USAGE. It also
-    does not refuse a connection whose warehouse the role cannot use: the
-    session opens with no current warehouse, and metadata statements such as
-    ``CURRENT_ROLE()`` still answer. So this connects on the chosen warehouse
-    and role and reads ``CURRENT_WAREHOUSE()`` back: NULL, or another
-    warehouse, means this role cannot run queries there. Raises
-    ``AdapterError`` with Snowflake's own message, or a named refusal, when
-    it cannot.
+    A role without USAGE still connects, with no warehouse bound, so the
+    probe reads ``CURRENT_WAREHOUSE()`` back and refuses NULL or another one.
     """
     warehouse = (warehouse or "").strip()
     if not warehouse:
@@ -842,7 +836,7 @@ def can_run_statement(
     first = got[0] if got else {}
     current_role = str(_row_get(first, "fc_role", "CURRENT_ROLE()") or role or "")
     current_wh = str(_row_get(first, "fc_wh", "CURRENT_WAREHOUSE()") or "").strip()
-    if _unquoted_upper(current_wh) != _unquoted_upper(warehouse):
+    if _warehouse_key(current_wh) != _warehouse_key(warehouse):
         raise AdapterError(
             f"Role {current_role or 'the default role'} has no USAGE on warehouse "
             f"{warehouse}: the session opened with "
@@ -851,13 +845,8 @@ def can_run_statement(
     return {"role": current_role, "warehouse": current_wh}
 
 
-def _unquoted_upper(name: str) -> str:
-    """A warehouse name for comparison: quotes off, case folded.
-
-    ``CURRENT_WAREHOUSE()`` reports the stored name without quotes; the
-    picker may hold either form. Two warehouses differing only in case are
-    not worth telling apart here.
-    """
+def _warehouse_key(name: str) -> str:
+    """A warehouse name for comparison: quotes off, case folded."""
     text = (name or "").strip()
     if len(text) >= 2 and text[0] == text[-1] == '"':
         text = text[1:-1].replace('""', '"')
