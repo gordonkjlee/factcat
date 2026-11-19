@@ -17,7 +17,7 @@ from factcat import (
     events_sql,
     shared_top_labels_sql,
 )
-from factcat.spec import BREAKDOWN_AT
+from factcat.spec import BREAKDOWN_AT, MAX_WINDOW_DAYS
 from factcat.warehouses import (
     AdapterError,
     CAP_SCAN_CAP,
@@ -626,10 +626,20 @@ def _anchor_rhs(recipe: tuple[str, Any], form: dict[str, Any]) -> str:
     return f"factcat_current_hour_start({tz}, '{tk}')"
 
 
-def _time_clauses(form: dict[str, Any], event_time: str) -> list[str]:
-    """Sugar on event_time. Window unit is the range filter, not always the grain."""
+def _time_clauses(
+    form: dict[str, Any], event_time: str, *, lookback_days: int = 0
+) -> list[str]:
+    """Sugar on event_time. Window unit is the range filter, not always the grain.
+
+    ``lookback_days`` widens the start earlier by that many days: a rolling
+    active-users value needs the days before the first one it reports.
+    """
     lhs = _window_time_lhs(event_time, form)
     start, end = _window_recipes(form)
+    if lookback_days:
+        if start[0] != "date":
+            raise ValueError("Active users are counted over days. Choose Day, Week or Month.")
+        start = ("date", f"factcat_date_shift({start[1]}, {-lookback_days})")
     clauses = [f"{lhs} >= {_window_rhs(start, form)}"]
     if end is not None:
         clauses.append(f"{lhs} < {_window_rhs(end, form)}")
@@ -709,6 +719,44 @@ def annotate_incomplete(
             bucket is not None and bucket == current and not hide_current
         )
         out.append(item)
+    return out
+
+
+def collapse_active_rows(
+    rows: list[dict[str, Any]],
+    form: dict[str, Any],
+    *,
+    today: date | None = None,
+) -> list[dict[str, Any]]:
+    """Reduce Active users rows from days to Week or Month points.
+
+    The query returns one value per day. A Week or Month point is the value
+    as of that period's last day (as of today for the current period), and
+    carries the period's start as its bucket. Rows of other measures pass
+    through. Day grain changes nothing but drops the ``fc_roll`` flag.
+    """
+    grain = _grain(form)
+    flagged = any("fc_roll" in row for row in rows)
+    if not flagged and not _active_present(form):
+        return rows
+    if today is None:
+        today = _now_in_zone(form).date()
+    week_start = _week_start(form)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = {k: v for k, v in row.items() if k != "fc_roll"}
+        if grain == "day" or (flagged and not row.get("fc_roll")):
+            out.append(item)
+            continue
+        day = _parse_bucket(row.get("bucket"))
+        if day is None:
+            out.append(item)
+            continue
+        start = _grain_start(day, grain, week_start)
+        last = _grain_next(start, grain, week_start) - timedelta(days=1)
+        if day == last or day == today:
+            item["bucket"] = start.isoformat()
+            out.append(item)
     return out
 
 
@@ -1884,7 +1932,51 @@ def _measure_from_form(
         return "property", raw
     if raw in EVENT_MEASURES:
         return "events", raw
-    raise ValueError("measure must be total, uniques, average, sum, median, or distinct")
+    raise ValueError(
+        "measure must be total, uniques, average, active, sum, median, or distinct"
+    )
+
+
+ACTIVE_NAMES = {1: "Daily active", 7: "Weekly active", 30: "Monthly active"}
+ACTIVE_TAGS = {1: "DAU", 7: "WAU", 30: "MAU"}
+ACTIVE_GRAINS = ("day", "week", "month")
+
+
+def _active_window_days(
+    form: dict[str, Any], unit: dict[str, Any] | None = None
+) -> int:
+    """Trailing window length of an Active users measure (1 to 365 days)."""
+    src: dict[str, Any] = unit if isinstance(unit, dict) and unit.get("measure") else form
+    raw = src.get("window_days")
+    if raw in (None, ""):
+        raw = 7
+    try:
+        n = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Days must be a whole number from 1 to 365") from exc
+    if not 1 <= n <= MAX_WINDOW_DAYS:
+        raise ValueError(f"Days must be a whole number from 1 to {MAX_WINDOW_DAYS}")
+    return n
+
+
+def active_name(window_days: int, plural: str = "users") -> str:
+    """Spelled-out label of an Active users series: "Weekly active users (7 days)"."""
+    plural = plural.strip().lower() or "users"
+    head = ACTIVE_NAMES.get(window_days, "Active")
+    days = f"{window_days} day" + ("" if window_days == 1 else "s")
+    return f"{head} {plural} ({days})"
+
+
+def _unit_is_active(form: dict[str, Any], unit: dict[str, Any] | None) -> bool:
+    return _measure_from_form(form, unit)[1] == "active"
+
+
+def _active_present(form: dict[str, Any]) -> bool:
+    """True when any series (or the lone chart-wide measure) is Active users."""
+    units = _series_units(form)
+    if not units:
+        return _unit_is_active(form, None)
+    return any(_unit_is_active(form, u) for u in units)
 
 
 def spec_from_form(
@@ -1903,7 +1995,6 @@ def spec_from_form(
     exact_raw = form.get("exact")
     exact = exact_raw in (True, "true", "on", "1", 1)
 
-    clauses = _time_clauses(form, event_time_col)
     event_column = (form.get("event_column") or "").strip()
     if unit is None:
         units = _series_units(form)
@@ -1912,6 +2003,22 @@ def spec_from_form(
         if len(units) == 1:
             unit = units[0]
     on, measure = _measure_from_form(form, unit)
+    window_days = 1
+    report_from = report_until = None
+    if measure == "active":
+        if grain not in ACTIVE_GRAINS:
+            raise ValueError("Active users are counted over days. Choose Day, Week or Month.")
+        window_days = _active_window_days(form, unit)
+        start, end = _window_recipes(form)
+        if start[0] != "date" or (end is not None and end[0] != "date"):
+            raise ValueError("Active users are counted over days. Choose Day, Week or Month.")
+        report_from = start[1]
+        # Never report days after today: a window that runs to now, or a
+        # custom range ending in the future, would otherwise show the days
+        # while the window empties. Earlier ends stay as they are.
+        tomorrow = f"factcat_date_shift({_today_sql(form)}, 1)"
+        report_until = tomorrow if end is None else f"LEAST({end[1]}, {tomorrow})"
+    clauses = _time_clauses(form, event_time_col, lookback_days=window_days - 1)
     if unit is not None:
         pred, _label = _unit_predicate(unit, event_column, form)
         if pred:
@@ -1967,7 +2074,11 @@ def spec_from_form(
     # single-target CONVERT_TIMEZONE is deliberate and separately tested.
     converted = kind in UNIX_KINDS or "/" in kind
     bucket_kind = "utc" if converted else kind
-    if grain == "hour":
+    if measure == "active":
+        # Days are the unit of an active count; Week and Month reduce to a
+        # point per period afterwards (collapse_active_rows).
+        bucket = f"CAST({_ps('fc_event_ts', 'day', form, 0, bucket_kind)} AS DATE)"
+    elif grain == "hour":
         bucket = f"factcat_hour_trunc(fc_event_ts, {tz}, '{bucket_kind}')"
     elif grain == "hour_of_day":
         bucket = f"factcat_hour_of_day(fc_event_ts, {tz}, '{bucket_kind}')"
@@ -1991,6 +2102,9 @@ def spec_from_form(
         top_n=_top_n(form),
         include_other=_bool(form, "include_other", True),
         event_time_column=event_time_column,
+        window_days=window_days,
+        report_from=report_from,
+        report_until=report_until,
     )
 
 
@@ -2022,8 +2136,13 @@ def _series_arm_sql(
     alias: str,
     dialect: str,
     extra_cols: tuple[str, ...] = (),
+    roll: int | None = None,
 ) -> str:
     """Wrap one Events aggregation so overlay UNION ALL has bucket, series, value.
+
+    ``roll`` (0 or 1) adds the ``fc_roll`` flag column: 1 marks an Active
+    users arm, whose daily rows ``collapse_active_rows`` reduces at Week
+    and Month grain. None leaves the SQL as it was.
 
     With ``extra_cols`` the groups stay their own columns and ``series`` is the
     event label; without them the groups are joined into ``series``.
@@ -2040,6 +2159,8 @@ def _series_arm_sql(
     else:
         series_expr = quoted
     extra = "".join(f", {col}" for col in extra_cols)
+    if roll is not None:
+        extra = f", {int(roll)} AS fc_roll" + extra
     return (
         f"SELECT\n"
         f"  bucket,\n"
@@ -2094,10 +2215,16 @@ def events_sql_from_form(form: dict[str, Any], *, managed: Any = None) -> str:
             else None
         )
         arms: list[str] = []
+        any_active = any(spec.measure == "active" for spec in specs)
+        plural = str(form.get("entity_label_plural") or "users")
         for i, (unit, spec) in enumerate(zip(units, specs)):
             _pred, label = _unit_predicate(
                 unit, (form.get("event_column") or "").strip(), form
             )
+            if spec.measure == "active":
+                # Two cards on one event differ only by window; the name
+                # keeps their lines apart.
+                label = f"{label} · {active_name(spec.window_days, plural)}"
             inner = events_sql(
                 spec,
                 dialect=dialect,
@@ -2105,7 +2232,13 @@ def events_sql_from_form(form: dict[str, Any], *, managed: Any = None) -> str:
             )
             arms.append(
                 _series_arm_sql(
-                    inner, spec, label, f"_fc_arm_{i}", dialect, extra_cols=shared
+                    inner,
+                    spec,
+                    label,
+                    f"_fc_arm_{i}",
+                    dialect,
+                    extra_cols=shared,
+                    roll=(1 if spec.measure == "active" else 0) if any_active else None,
                 )
             )
         sql = "\nUNION ALL\n".join(arms)

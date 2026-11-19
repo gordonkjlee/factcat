@@ -43,6 +43,7 @@ DEFAULTS: dict[str, Any] = {
     "of_column": "",
     "of_expr": "",
     "of_json_key": "",
+    "window_days": 7,
     "grain": "day",
     "exact": False,
     "lookback_days": 30,

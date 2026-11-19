@@ -312,7 +312,10 @@ class EventsSpec:
         report_from: SQL DATE expression; for ``active`` only the days on or
                     after it are reported. Optional.
         report_until: SQL DATE expression; for ``active`` only the days
-                    before it (exclusive) are reported. Optional.
+                    before it (exclusive) are reported. Optional. Without
+                    it the series runs ``window_days - 1`` days past the last
+                    row, while the window empties; pass tomorrow's date to
+                    stop at today.
     """
 
     table: str
