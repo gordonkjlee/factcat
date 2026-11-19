@@ -269,7 +269,11 @@
     .pane-sql .pane-body { padding: 0; }
     .empty { color: var(--fc-slate); font-size: 0.85rem; margin: 0; }
     .empty.fail { color: var(--fc-alert); white-space: pre-wrap; }
-    .chart-body { position: relative; }
+    .chart-body { position: relative; display: flex; flex-direction: column; }
+    /* Chart.js sizes the canvas from its parent: a wrapper of its own lets the
+       notes under the chart take their height instead of pushing the axis out. */
+    .chart-canvas { position: relative; flex: 1 1 0; min-height: 0; }
+    .chart-canvas:has(> canvas[hidden]) { display: none; }
     .chart-body canvas { width: 100% !important; height: 100% !important; }
     .empty-state {
       display: flex;
@@ -306,6 +310,13 @@
     html[data-vocab="sql"] #measure {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       font-size: 0.78rem;
+    }
+    /* Active users labels are words in both wordings, so they keep the
+       text face (the monospace one cuts "Monthly active users"). */
+    html[data-vocab="sql"] .series-measure:has(option[value^="active_"]:checked),
+    html[data-vocab="sql"] .series-measure option[value^="active_"] {
+      font-family: inherit;
+      font-size: 0.8rem;
     }
     .summary { font-size: 0.75rem; color: var(--fc-slate); margin: 0 0 0.75rem; }
     .pane-head { display: flex; align-items: center; justify-content: flex-start; gap: 0.5rem; padding-right: 0.5rem; }
@@ -770,6 +781,13 @@
       font-size: 0.75rem; color: var(--fc-ochre-deep); margin: 0 0 0.5rem;
     }
     .stale-note[hidden] { display: none !important; }
+    .active-note { font-size: 0.75rem; color: var(--fc-slate); margin: 0.35rem 0 0; }
+    .active-note[hidden] { display: none !important; }
+    .series-window { margin: 0.35rem 0 0; }
+    .series-window[hidden] { display: none !important; }
+    .series-window input { width: 5rem; }
+    .series-window .series-window-error { color: var(--fc-ochre-deep); }
+    .series-window-error[hidden] { display: none !important; }
     #result-table tr.incomplete td { color: var(--fc-slate); font-style: italic; }
     #custom-snap-hint { margin: 0.35rem 0 0; }
     .event-card-filters .add-card-filter { margin: 0.2rem 0 0 0; }
@@ -868,6 +886,13 @@
         <option value="total" title="Count of event rows in the bucket" {% if config.measure == "total" %}selected{% endif %}>{{ filter_ui.chrome.volume | sql_plain }}</option>
         <option value="uniques" title="Count distinct of the mapped entity id" {% if (config.on != "property") and (config.measure == "uniques" or not config.measure) %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.unique | sql_plain }}{% else %}{{ filter_ui.chrome.unique.replace("{plural}", config.entity_label_plural or "Users") }}{% endif %}</option>
         <option value="average" title="Volume divided by unique entities" {% if config.on != "property" and config.measure == "average" %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.average_per | sql_plain }}{% else %}{{ filter_ui.chrome.average_per.replace("{singular}", config.entity_label or "User") }}{% endif %}</option>
+      </optgroup>
+      {% set fc_pl = (config.entity_label_plural or "Users") | lower %}
+      <optgroup label="{{ filter_ui.chrome.active_group.replace("{plural}", fc_pl) }}">
+        <option value="active_1" title="Daily active {{ fc_pl }} (DAU): distinct {{ fc_pl }} with a row on that day">{{ filter_ui.chrome.active_1.replace("{plural}", fc_pl) }}</option>
+        <option value="active_7" title="Weekly active {{ fc_pl }} (WAU): distinct {{ fc_pl }} with a row in the 7 days ending each day">{{ filter_ui.chrome.active_7.replace("{plural}", fc_pl) }}</option>
+        <option value="active_30" title="Monthly active {{ fc_pl }} (MAU): distinct {{ fc_pl }} with a row in the 30 days ending each day">{{ filter_ui.chrome.active_30.replace("{plural}", fc_pl) }}</option>
+        <option value="active_n" title="Active {{ fc_pl }} over N days: distinct {{ fc_pl }} with a row in the N days ending each day">{{ filter_ui.chrome.active_n.replace("{plural}", fc_pl) }}</option>
       </optgroup>
       <optgroup label="Property value">
         <option value="sum" title="Sum of a numeric column" {% if config.measure == "sum" %}selected{% endif %}>{{ filter_ui.chrome.property_sum | sql_plain }}</option>
@@ -1113,7 +1138,8 @@
           <img id="waiting-cat" src="/static/waiting.jpg" width="160" height="160" alt="">
           <p id="empty-copy">{% if mapping_ready %}No rows yet. The cat is waiting.{% else %}Map a table on Setup before Events can run.{% endif %}</p>
         </div>
-        <canvas id="chart" hidden></canvas>
+        <div class="chart-canvas"><canvas id="chart" hidden></canvas></div>
+        <p id="active-note" class="active-note" hidden></p>
         <p id="incomplete-note" class="incomplete-note" hidden></p>
       </div>
     </section>
@@ -2061,6 +2087,7 @@ function displayNumberToken(token) {
   return applySeps(canon);
 }
 let filterListSeq = 0;
+let seriesWindowSeq = 0;
 function filterFamilyOf(type, json) {
   if (json) return "string";
   const fam = FILTER_UI.type_family[String(type || "").toUpperCase()];
@@ -2684,6 +2711,10 @@ function applyMeasureLabels(sel) {
     else if (o.value === "sum") { o.textContent = t("property_sum"); o.title = "Sum of a numeric column"; }
     else if (o.value === "property_average") { o.textContent = t("property_average"); o.title = "Average of a numeric column"; }
     else if (o.value === "median") { o.textContent = t("property_median"); o.title = "Median of a numeric column"; }
+    else if (/^active_/.test(o.value)) {
+      // Spelled out in both wordings (no single SQL aggregate names a window).
+      o.textContent = t(o.value).replace("{plural}", p.toLowerCase());
+    }
     else if (o.value === "distinct") {
       o.textContent = sql ? t("property_distinct") : t("property_distinct").replace("{singular}", w);
       o.title = "Mean distinct values of a column per " + w.toLowerCase();
@@ -2697,6 +2728,10 @@ function seriesMeasureSelect(host) {
 function formMeasureValue(unit) {
   const src = unit || {};
   let measure = src.measure || "uniques";
+  if (measure === "active") {
+    const w = parseInt(src.window_days, 10);
+    return w === 1 || w === 7 || w === 30 ? "active_" + w : "active_n";
+  }
   if ((src.on || "") === "property" && measure === "average") return "property_average";
   return measure;
 }
@@ -2718,6 +2753,15 @@ function withMeasure(unit) {
 function syncSeriesMeasure(host) {
   const sel = seriesMeasureSelect(host);
   const ofWrap = host.querySelector(":scope > .series-of");
+  const winWrap = host.querySelector(":scope > .series-window");
+  if (winWrap && sel) {
+    winWrap.hidden = sel.value !== "active_n";
+    const err = winWrap.hidden ? "" : windowDaysError(winWrap.querySelector("input"));
+    const msg = winWrap.querySelector(".series-window-error");
+    msg.textContent = err;
+    msg.hidden = !err;
+    winWrap.querySelector("input").setAttribute("aria-invalid", err ? "true" : "false");
+  }
   if (!sel || !ofWrap) return;
   const prop = isPropertyMeasureValue(sel.value);
   ofWrap.hidden = !prop;
@@ -2731,6 +2775,16 @@ function syncSeriesMeasure(host) {
   ofWrap.querySelector(".series-of-json").hidden = !json;
   ofWrap.querySelector(".series-of-expr").hidden = col !== CUSTOM_OF;
 }
+// The Days field as sent: a whole number, or the raw text so the server
+// refuses it rather than the page guessing a window.
+function windowDaysValue(input) {
+  const raw = ((input && input.value) || "").trim();
+  return /^\d+$/.test(raw) ? parseInt(raw, 10) : raw;
+}
+function windowDaysError(input) {
+  const n = windowDaysValue(input);
+  return Number.isInteger(n) && n >= 1 && n <= 365 ? "" : "Days must be a whole number from 1 to 365.";
+}
 function readSeriesMeasure(host) {
   const sel = seriesMeasureSelect(host);
   const ofWrap = host.querySelector(":scope > .series-of");
@@ -2738,15 +2792,23 @@ function readSeriesMeasure(host) {
   const col = ofWrap ? ofWrap.querySelector(".series-of-column").value : "";
   const exprOn = col === CUSTOM_OF;
   const prop = isPropertyMeasureValue(sel.value);
-  return {
-    measure: sel.value,
+  const active = sel.value.startsWith("active_");
+  const extra = {};
+  if (active) {
+    const win = host.querySelector(":scope > .series-window .series-window-days");
+    extra.window_days = sel.value === "active_n"
+      ? windowDaysValue(win)
+      : parseInt(sel.value.slice(7), 10);
+  }
+  return Object.assign(extra, {
+    measure: active ? "active" : sel.value,
     on: prop ? "property" : "events",
     of_column: !prop || exprOn ? "" : col,
     of_json_key: !prop || exprOn || !ofWrap || ofWrap.querySelector(".series-of-json").hidden
       ? ""
       : (ofWrap.querySelector(".series-of-json").value || "").trim(),
     of_expr: !prop || !exprOn || !ofWrap ? "" : (ofWrap.querySelector(".series-of-expr").value || "").trim(),
-  };
+  });
 }
 function attachSeriesMeasure(host, data) {
   const init = data || {};
@@ -2770,6 +2832,18 @@ function attachSeriesMeasure(host, data) {
   if (before) head.insertBefore(sel, before);
   else head.appendChild(sel);
   head.after(ofWrap);
+  const winWrap = document.createElement("div");
+  winWrap.className = "series-window";
+  winWrap.innerHTML = (
+    '<label for="series-window-' + (++seriesWindowSeq) + '">Days</label>'
+    + '<input type="number" id="series-window-' + seriesWindowSeq + '" class="series-window-days" min="1" max="365" step="1">'
+    + '<span class="hint series-window-error" role="alert" hidden></span>'
+  );
+  winWrap.querySelector("input").value = init.window_days || 7;
+  ofWrap.after(winWrap);
+  winWrap.querySelector("input").addEventListener("input", () => {
+    syncSeriesMeasure(host); syncExact(); scheduleEstimate(); syncStaleNotes();
+  });
   paintOfSelect(
     ofWrap.querySelector(".series-of-column"),
     init.of_expr ? CUSTOM_OF : (init.of_column || ""),
@@ -3035,6 +3109,13 @@ function collectSeries() {
   return units;
 }
 function seriesIncomplete() {
+  for (const host of eventCardsEl.querySelectorAll(":scope > .event-card, :scope > .event-group")) {
+    const win = host.querySelector(":scope > .series-window");
+    if (win && !win.hidden) {
+      const err = windowDaysError(win.querySelector("input"));
+      if (err) return err;
+    }
+  }
   for (const unit of collectSeries()) {
     const cards = unit.kind === "any_of" ? (unit.members || []) : [unit];
     for (const card of cards) {
@@ -3617,7 +3698,8 @@ relUnitSelect.addEventListener("change", () => {
 startDateEl.addEventListener("change", snapCustomDates);
 endDateEl.addEventListener("change", snapCustomDates);
 customKindEl.addEventListener("change", () => { syncCustomKind(); snapCustomDates(); saveRangeForGrain(currentGrain()); });
-grainEl.addEventListener("change", () => {
+grainEl.addEventListener("change", (e) => {
+  if (e.isTrusted) grainSnapNote = "";
   saveRangeForGrain(activeGrain);
   activeGrain = currentGrain();
   const state = rangeByGrain[activeGrain];
@@ -3626,6 +3708,7 @@ grainEl.addEventListener("change", () => {
   if (state.unit) rangeUnitEl.value = state.unit;
   includeCurrentEl.checked = state.includeCurrent;
   applyRangeChoice();
+  syncExact();
 });
 seedRangeChoice();
 activeGrain = currentGrain();
@@ -3665,14 +3748,47 @@ function relabelMeasures() {
     sel.value = v;
   });
 }
+// Active users count days: Hour and the cyclic grains are switched off while
+// a series uses it. The caption itself comes from the server (active_note).
+function syncActive(series) {
+  const ACTIVE_BLOCKED_GRAINS = ["hour", "day_of_week", "hour_of_day"];
+  const ACTIVE_GRAIN_REASON = "Active users are counted over days. Choose Day, Week or Month.";
+  const active = series.some((u) => u.measure === "active");
+  for (const o of grainEl.options) {
+    if (!ACTIVE_BLOCKED_GRAINS.includes(o.value)) continue;
+    o.disabled = active;
+    o.title = active ? ACTIVE_GRAIN_REASON : "";
+  }
+  if (active && ACTIVE_BLOCKED_GRAINS.includes(grainEl.value)) {
+    const was = grainEl.selectedOptions[0] ? grainEl.selectedOptions[0].textContent : grainEl.value;
+    grainEl.value = "day";
+    grainEl.dispatchEvent(new Event("change"));
+    grainSnapNote = "Time grain moved from " + was + " to Day: active users are counted over days.";
+    setRunNote(grainSnapNote, true);
+  }
+}
+// Shown in the run note until the next run or a grain the user picks; the
+// estimate's own line joins it rather than replacing it.
+var grainSnapNote = "";
+// Set by a run's response only, and cleared with the chart, so it always
+// describes the chart on screen rather than the form being edited.
+function setActiveNote(text) {
+  const note = document.getElementById("active-note");
+  note.textContent = text || "";
+  note.hidden = !text;
+}
+function pluralWord() {
+  return (document.getElementById("entity_label_plural").value || "").trim().toLowerCase() || "users";
+}
 function syncExact() {
   const series = (typeof collectSeries === "function") ? collectSeries() : [];
+  if (typeof grainEl !== "undefined") syncActive(series);
   const measures = series.length ? series.map((u) => u.measure) : [form.measure.value];
-  const v = measures.find((m) => m === "uniques" || m === "average" || m === "median" || m === "distinct")
+  const v = measures.find((m) => m === "uniques" || m === "average" || m === "median" || m === "distinct" || m === "active")
     || form.measure.value;
   const hasBreakdown = (typeof anySeriesHasBreakdown === "function" && anySeriesHasBreakdown())
     || !!(breakdownColumnEl && breakdownColumnEl.value);
-  const ndv = v === "uniques" || v === "average" || v === "distinct";
+  const ndv = v === "uniques" || v === "average" || v === "distinct" || v === "active";
   const median = v === "median";
   document.getElementById("exact-wrap").hidden = !(ndv || median || hasBreakdown);
   const label = document.getElementById("exact-label");
@@ -3722,7 +3838,12 @@ function ofTitlePart() {
 function measureTitle() {
   const host = eventCardsEl.querySelector(":scope > .event-series");
   const sel = seriesMeasureSelect(host) || form.measure;
-  const label = (sel.selectedOptions[0] && sel.selectedOptions[0].textContent) || "Events";
+  let label = (sel.selectedOptions[0] && sel.selectedOptions[0].textContent) || "Events";
+  const wins = new Set(collectSeries().filter((u) => u.measure === "active").map((u) => u.window_days));
+  if (sel.value.startsWith("active_") && wins.size > 1) return "Active " + pluralWord();
+  if (sel.value === "active_n") {
+    label = label.replace("N days", ((collectSeries()[0] || {}).window_days || 7) + " days");
+  }
   const of = ofTitlePart();
   if (!of) return label;
   if (sel.value === "distinct" && FILTER_UI.vocab !== "sql") {
@@ -3770,6 +3891,7 @@ function payload() {
   d.series = collectSeries();
   const first = d.series[0] || {};
   d.measure = first.measure || "uniques";
+  d.window_days = first.window_days || 7;
   d.on = first.on || (isPropertyMeasureValue(d.measure) ? "property" : "events");
   d.of_column = first.of_column || "";
   d.of_expr = first.of_expr || "";
@@ -3931,7 +4053,7 @@ async function runEstimate() {
     paintEstimate(data.bytes, data.cap, !!data.over_cap);
     // One short line before the run, in the same right-aligned slot the
     // post-run line uses; the labels feed the running copy as well.
-    setRunNote(data.managed_note || "", false);
+    setRunNote([grainSnapNote, data.managed_note || ""].filter(Boolean).join(" "), !!grainSnapNote);
     managedBuildLabels = Array.isArray(data.managed_build) ? data.managed_build : [];
     // The server's verdict wins where it has one: only it saw the warehouse.
     // An uncapped estimate carries no verdict about the capped query, so it
@@ -4062,11 +4184,14 @@ function draftGrainHeader() {
 }
 function draftValueHeader() {
   const units = collectSeries();
-  const measures = [...new Set(units.map((u) => u.measure || "uniques"))];
-  if (measures.length !== 1) return "Value";
+  const measures = [...new Set(units.map((u) => (u.measure || "uniques") + (u.measure === "active" ? ":" + u.window_days : "")))];
+  if (measures.length !== 1) return units.every((u) => u.measure === "active") ? "Active " + pluralWord() : "Value";
   const host = eventCardsEl.querySelector(":scope > .event-series");
   const sel = seriesMeasureSelect(host);
-  return (sel && sel.selectedOptions[0] && sel.selectedOptions[0].textContent) || "Value";
+  const text = (sel && sel.selectedOptions[0] && sel.selectedOptions[0].textContent) || "Value";
+  return sel && sel.value === "active_n"
+    ? text.replace("N days", (units[0].window_days || 7) + " days")
+    : text;
 }
 function grainHeader() {
   return (lastRun && lastRun.grainHeader) || draftGrainHeader();
@@ -4740,6 +4865,7 @@ function setChartEmpty(kind) {
     catKind = "none";
     return;
   }
+  setActiveNote("");
   empty.hidden = false;
   empty.classList.toggle("fail", kind === "fail");
   img.hidden = false;
@@ -5014,6 +5140,7 @@ form.addEventListener("submit", async (e) => {
     });
     const data = await res.json();
     if (data.sql) showSql(data.sql);
+    setActiveNote(data.ok ? data.active_note : "");
     if (!data.ok) {
       let msg = shortError(data.error || res.statusText || "Query failed.");
       if (data.over_cap) {
@@ -5056,6 +5183,7 @@ form.addEventListener("submit", async (e) => {
     capBlock = null;
     failCopy = null;
     managedBuildLabels = [];
+    grainSnapNote = "";
     if (data.managed_failed) {
       setRunNote(data.managed_failed, true);
     } else if (data.managed_note) {

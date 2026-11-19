@@ -55,9 +55,11 @@ from . import managed as managed_mod
 from . import prefs as prefs_mod
 from .query import (
     REPORTING_TIMEZONES,
+    active_caption,
     annotate_incomplete,
     catalog_event_values,
     catalog_lookback_days,
+    collapse_active_rows,
     connection_from_form,
     event_values_sql,
     ensure_epoch,
@@ -664,6 +666,12 @@ def _estimate_payload(processed: int | None, cap: int | None, *, over_cap: bool)
     }
 
 
+def _pane_sql(sql: str, note: str | None) -> str:
+    """SQL as the pane shows it: the Active users caption as a header comment.
+    The warehouse never receives the header."""
+    return f"-- {' '.join(note.split())}\n{sql}" if note else sql
+
+
 @app.post("/api/sql")
 async def api_sql(request: Request) -> JSONResponse:
     """Compile Events SQL from the form. No warehouse round-trip."""
@@ -676,7 +684,8 @@ async def api_sql(request: Request) -> JSONResponse:
     prefs = prefs_mod.load()
     if prefs.get("vocab") == "sql" and prefs.get("sql_case") == "lower":
         sql = apply_sql_keyword_case(sql, form_kind(form), "lower")
-    return JSONResponse({"ok": True, "sql": sql})
+    note = active_caption(form)
+    return JSONResponse({"ok": True, "sql": _pane_sql(sql, note), "active_note": note})
 
 
 @app.post("/api/estimate")
@@ -910,13 +919,20 @@ async def api_run(request: Request) -> JSONResponse:
         item["bucket"] = str(r.get("bucket", ""))
         item["value"] = r.get("value")
         raw_rows.append(item)
-    rows = fill_cyclic_buckets(annotate_incomplete(raw_rows, form), form)
+    # The fuse counts rows the warehouse returned, before Active users
+    # days are reduced to Week or Month points.
+    fetched = len(raw_rows)
+    rows = fill_cyclic_buckets(
+        annotate_incomplete(collapse_active_rows(raw_rows, form), form), form
+    )
     limit = query_row_limit(form)
+    note = active_caption(form)
     body: dict[str, Any] = {
         "ok": True,
-        "sql": sql,
+        "sql": _pane_sql(sql, note),
+        "active_note": note,
         "rows": rows,
-        "truncated": len(rows) >= limit,
+        "truncated": fetched >= limit,
         "limit": limit,
     }
     if managed_failed:
