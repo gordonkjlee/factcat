@@ -220,6 +220,18 @@ def _active_breakdown(live: Any) -> dict[str, Any]:
     return live.form(measure="active", window_days=7, breakdown_column=col)
 
 
+def _active_overlay_breakdown(live: Any) -> dict[str, Any]:
+    """Weekly and Monthly active users split by one shared group list."""
+    (col,) = _text(live, 1)
+    return live.form(
+        breakdown_column=col,
+        series=[
+            {"event": PROBE_EVENT, "measure": "active", "window_days": 7},
+            {"event": PROBE_EVENT, "measure": "active", "window_days": 30},
+        ],
+    )
+
+
 def _active_overlay_mixed(live: Any) -> dict[str, Any]:
     """Daily and Monthly active users beside Volume: arms of different
     windows and measures in one UNION ALL, with the fc_roll flag column."""
@@ -254,6 +266,7 @@ EVENT_SHAPES: dict[str, Callable[[Any], dict[str, Any]]] = {
     "active_week_future": _active_week_future,
     "active_breakdown": _active_breakdown,
     "active_overlay_mixed": _active_overlay_mixed,
+    "active_overlay_breakdown": _active_overlay_breakdown,
 }
 
 

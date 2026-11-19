@@ -197,6 +197,26 @@ def test_overlay_mixing_active_and_volume_at_week_grain(con):
     assert len(per) == 2
 
 
+def test_overlay_of_active_cards_takes_a_shared_breakdown(con):
+    """A chart-wide group-by ranks one top-N pick over every arm; an Active
+    arm must not carry its window into that volume ranking."""
+    form = _form(
+        event_column="event_name",
+        breakdown_column="event_name",
+        series=[
+            {"event": "view", "measure": "active", "window_days": 7},
+            {"event": "buy", "measure": "active", "window_days": 7},
+        ],
+    )
+    rows = collapse_active_rows(_run(con, form), form)
+    weekly = [r for r in rows if r["series"].startswith("view")]
+    assert {r["event_name"] for r in weekly} == {"view"}
+    assert weekly
+    for r in weekly:
+        d = r["bucket"] if isinstance(r["bucket"], date) else r["bucket"].date()
+        assert r["value"] == _truth(d, 7, "view")
+
+
 def test_hour_and_cyclic_grains_are_refused():
     for grain in ("hour", "hour_of_day", "day_of_week"):
         with pytest.raises(ValueError, match="Choose Day, Week or Month"):

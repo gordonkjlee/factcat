@@ -2217,13 +2217,18 @@ def _shared_pick_sql(
     """The overlay's one top-N pick, ranked by the chart-wide measure.
 
     A card's own measure still sets its values; it does not reorder the axis.
+    An Active card ranks by volume over its scan, lookback included; its
+    window and report days belong to the Active measure only.
     """
     on, measure = _measure_from_form(form)
     of = _of_from_form(form, measure=measure) if on == "property" else ""
     if not (on == "property" and measure == "sum" and of):
         on, measure, of = "events", "total", ""
     rank_specs = [
-        dataclasses.replace(spec, on=on, measure=measure, of=of or None)
+        dataclasses.replace(
+            spec, on=on, measure=measure, of=of or None,
+            window_days=1, report_from=None, report_until=None,
+        )
         for spec in specs
     ]
     return shared_top_labels_sql(rank_specs, dialect)
