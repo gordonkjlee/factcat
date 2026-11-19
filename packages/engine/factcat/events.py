@@ -76,16 +76,8 @@ def _active_tail(
     dims: tuple[str, ...] = (),
     labels: tuple[str, ...] = (),
 ) -> str:
-    """The rolling distinct count, from ``relation`` (rows with ``fc_bucket``,
-    ``fc_entity`` and the ``dims`` columns) to the final SELECT.
-
-    Each distinct (day, entity[, dims]) is repeated for the ``window_days``
-    days it keeps the entity active, by joining the integer period grid, then
-    entities are counted per fanned-out day. That avoids a range join, and its
-    cost grows with the distinct (day, entity) set rather than with raw rows.
-    The first SELECT is the continuation of a CTE list, so it opens with a
-    comma.
-    """
+    """Rolling distinct count: each distinct (day, entity[, dims]) fanned out over
+    the ``window_days`` days it stays active, then counted per day. Continues a CTE list."""
     dim_sel = "".join(f", {d}" for d in dims)
     dim_fan = "".join(f", a.{d}" for d in dims)
     bounds = []

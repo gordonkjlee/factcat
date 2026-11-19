@@ -309,6 +309,13 @@ class EventsSpec:
                     False drops the tail. Ignored when ``breakdowns`` is empty.
         window_days: trailing window in days for ``measure="active"``; any
                     integer from 1 to 365. Must stay 1 for every other measure.
+                    For ``active`` the ``bucket`` must be a day or finer (the
+                    default is right): each bucket is cast to a DATE and
+                    shifted by whole days, so a week or month bucket gives a
+                    wrong count, not an error. The output ``bucket`` is a DATE,
+                    where other measures return a timestamp. A weekly or
+                    monthly figure as of some day is the caller's pick from
+                    the daily series.
         report_from: SQL DATE expression; for ``active`` only the days on or
                     after it are reported. Optional.
         report_until: SQL DATE expression; for ``active`` only the days

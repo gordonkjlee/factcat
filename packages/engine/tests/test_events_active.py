@@ -198,6 +198,20 @@ def test_breakdown_counts_an_entity_in_each_group_it_was_active_in(con):
     assert overall[d(3)] == 3  # u1, u2, u3: the groups overlap, the total does not
 
 
+def test_breakdown_on_first_value_puts_each_entity_in_one_group(con):
+    """``at="first"``: one platform per entity, from its earliest row.
+
+    Same day as the rows-mode test above: u1 started on ios, so its day-3 web
+    row no longer puts it in web, and the groups stop overlapping.
+    """
+    spec = _spec(
+        7, breakdowns=("platform",), breakdown_at="first",
+        report_from=f"DATE '{d(3)}'", report_until=f"DATE '{d(4)}'",
+    )
+    rows = con.execute(events_sql(spec, "duckdb")).fetchall()
+    assert {r[1]: r[2] for r in rows} == {"ios": 2, "web": 1}
+
+
 def test_breakdown_folds_the_tail_into_other(con):
     spec = _spec(
         7, breakdowns=("platform",), top_n=1,

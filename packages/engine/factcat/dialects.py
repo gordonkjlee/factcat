@@ -750,6 +750,9 @@ def date_shift(expr: str, n: str, dialect: str) -> str:
     ``period_index``), so the shift can differ per row. Written per dialect
     because sqlglot transpiles no DuckDB spelling of a per-row day shift
     correctly everywhere (``test_sqlglot_cannot_emit_a_per_row_day_shift``).
+    Building an ``exp.DateAdd`` node is no way out: this pipeline splices SQL
+    text, and sqlglot's own DateAdd output is a timestamp, not a DATE, on
+    Postgres, DuckDB and Redshift.
     """
     if dialect not in SUPPORTED:
         raise ValueError(f"unsupported dialect {dialect!r}")
