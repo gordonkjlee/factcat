@@ -1546,10 +1546,7 @@ function scheduleJobAccess() {
   const key = jobAccessKey();
   // A verdict about another billing project, or role and warehouse, is no
   // longer true of the form: take it down now, not when the probe answers.
-  // Same key (only the data project moved): repaint so the copy names the
-  // project the field now holds.
   if (key !== jobAccess.key) paintJobAccess(null);
-  else paintJobAccess(jobAccessShown);
   setJobAccess({key, state: "pending"});
   jobAccessTimer = setTimeout(requestJobAccess, 500);
 }
@@ -1562,8 +1559,21 @@ function jobAccessGate() {
   return jobAccess.state !== "pending" && jobAccess.state !== "denied";
 }
 const JOB_ACCESS_FIELDS = new Set(["project", "data_project", "credentials", "account", "user", "snowflake_auth", "role", "warehouse", "private_key_path", "kind"]);
-form.addEventListener("input", (e) => { if (JOB_ACCESS_FIELDS.has(e.target && e.target.id)) scheduleJobAccess(); });
-form.addEventListener("change", (e) => { if (JOB_ACCESS_FIELDS.has(e.target && e.target.id)) scheduleJobAccess(); });
+function onJobAccessField(e) {
+  const id = e.target && e.target.id;
+  if (!JOB_ACCESS_FIELDS.has(id)) return;
+  const settled = jobAccess.state !== "pending" && jobAccess.key === jobAccessKey();
+  // The data project only changes the copy, not the verdict: repaint, no probe.
+  // A change event that leaves the key as it was (focus leaving a field the
+  // input events already checked) asks nothing new either.
+  if (settled && (id === "data_project" || e.type === "change")) {
+    paintJobAccess(jobAccessShown);
+    return;
+  }
+  scheduleJobAccess();
+}
+form.addEventListener("input", onJobAccessField);
+form.addEventListener("change", onJobAccessField);
 function syncEventTimeStored() {
   const storage = document.getElementById("event_time_storage_tz");
   const hidden = document.getElementById("event_time_tz");
