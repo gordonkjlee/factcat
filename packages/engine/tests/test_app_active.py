@@ -267,6 +267,10 @@ def test_run_endpoint_reduces_days_to_week_points(monkeypatch, tmp_path):
     assert body["rows"] == [{"bucket": monday.isoformat(), "value": 7, "incomplete": False}]
     sql = warehouse.run.call_args.args[0]
     assert "COUNT(DISTINCT" in sql.upper().replace("APPROX_COUNT_DISTINCT", "COUNT(DISTINCT")
+    # The caption is a header for the pane; the warehouse gets the bare SQL.
+    assert not sql.lstrip().startswith("--")
+    assert body["sql"].startswith("-- Weekly active users (WAU):")
+    assert body["active_note"].endswith("the current week shows today's value.")
 
 
 def test_run_endpoint_truncation_counts_fetched_rows(monkeypatch, tmp_path):
