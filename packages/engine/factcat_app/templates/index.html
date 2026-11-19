@@ -779,7 +779,7 @@
     .series-window { margin: 0.35rem 0 0; }
     .series-window[hidden] { display: none !important; }
     .series-window input { width: 5rem; }
-    .series-window-error { color: var(--fc-ochre-deep); }
+    .series-window .series-window-error { color: var(--fc-ochre-deep); }
     .series-window-error[hidden] { display: none !important; }
     #result-table tr.incomplete td { color: var(--fc-slate); font-style: italic; }
     #custom-snap-hint { margin: 0.35rem 0 0; }
@@ -880,11 +880,12 @@
         <option value="uniques" title="Count distinct of the mapped entity id" {% if (config.on != "property") and (config.measure == "uniques" or not config.measure) %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.unique | sql_plain }}{% else %}{{ filter_ui.chrome.unique.replace("{plural}", config.entity_label_plural or "Users") }}{% endif %}</option>
         <option value="average" title="Volume divided by unique entities" {% if config.on != "property" and config.measure == "average" %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.average_per | sql_plain }}{% else %}{{ filter_ui.chrome.average_per.replace("{singular}", config.entity_label or "User") }}{% endif %}</option>
       </optgroup>
+      {% set fc_pl = (config.entity_label_plural or "Users") | lower %}
       <optgroup label="{{ filter_ui.chrome.active_group }}">
-        <option value="active_1" title="{{ filter_ui.chrome.active_1.replace("{plural}", (config.entity_label_plural or "Users") | lower) }} (DAU): distinct {{ (config.entity_label_plural or "Users") | lower }} with a row on that day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_1 | sql_plain }}{% else %}{{ filter_ui.chrome.active_1.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
-        <option value="active_7" title="{{ filter_ui.chrome.active_7.replace("{plural}", (config.entity_label_plural or "Users") | lower) }} (WAU): distinct {{ (config.entity_label_plural or "Users") | lower }} with a row in the 7 days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_7 | sql_plain }}{% else %}{{ filter_ui.chrome.active_7.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
-        <option value="active_30" title="{{ filter_ui.chrome.active_30.replace("{plural}", (config.entity_label_plural or "Users") | lower) }} (MAU): distinct {{ (config.entity_label_plural or "Users") | lower }} with a row in the 30 days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_30 | sql_plain }}{% else %}{{ filter_ui.chrome.active_30.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
-        <option value="active_n" title="{{ filter_ui.chrome.active_n.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}: distinct {{ (config.entity_label_plural or "Users") | lower }} with a row in the N days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_n | sql_plain }}{% else %}{{ filter_ui.chrome.active_n.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
+        <option value="active_1" title="Daily active {{ fc_pl }} (DAU): distinct {{ fc_pl }} with a row on that day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_1 | sql_plain }}{% else %}{{ filter_ui.chrome.active_1.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
+        <option value="active_7" title="Weekly active {{ fc_pl }} (WAU): distinct {{ fc_pl }} with a row in the 7 days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_7 | sql_plain }}{% else %}{{ filter_ui.chrome.active_7.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
+        <option value="active_30" title="Monthly active {{ fc_pl }} (MAU): distinct {{ fc_pl }} with a row in the 30 days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_30 | sql_plain }}{% else %}{{ filter_ui.chrome.active_30.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
+        <option value="active_n" title="Active {{ fc_pl }} over N days: distinct {{ fc_pl }} with a row in the N days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_n | sql_plain }}{% else %}{{ filter_ui.chrome.active_n.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
       </optgroup>
       <optgroup label="Property value">
         <option value="sum" title="Sum of a numeric column" {% if config.measure == "sum" %}selected{% endif %}>{{ filter_ui.chrome.property_sum | sql_plain }}</option>
@@ -2079,6 +2080,7 @@ function displayNumberToken(token) {
   return applySeps(canon);
 }
 let filterListSeq = 0;
+let seriesWindowSeq = 0;
 function filterFamilyOf(type, json) {
   if (json) return "string";
   const fam = FILTER_UI.type_family[String(type || "").toUpperCase()];
@@ -2825,8 +2827,8 @@ function attachSeriesMeasure(host, data) {
   const winWrap = document.createElement("div");
   winWrap.className = "series-window";
   winWrap.innerHTML = (
-    "<label>Days</label>"
-    + '<input type="number" class="series-window-days" min="1" max="365" step="1" aria-label="Days in the window">'
+    '<label for="series-window-' + (++seriesWindowSeq) + '">Days</label>'
+    + '<input type="number" id="series-window-' + seriesWindowSeq + '" class="series-window-days" min="1" max="365" step="1">'
     + '<span class="hint series-window-error" role="alert" hidden></span>'
   );
   winWrap.querySelector("input").value = init.window_days || 7;
@@ -3760,6 +3762,8 @@ function syncActive(series) {
 // Shown in the run note until the next run or a grain the user picks; the
 // estimate's own line joins it rather than replacing it.
 var grainSnapNote = "";
+// Set by a run's response only, and cleared with the chart, so it always
+// describes the chart on screen rather than the form being edited.
 function setActiveNote(text) {
   const note = document.getElementById("active-note");
   note.textContent = text || "";
@@ -4086,17 +4090,14 @@ async function compileSql() {
   const body = payload();
   if (!body.table || !body.entity || !body.event_time) {
     showSql("");
-    setActiveNote("");
     return;
   }
   if (seriesIncomplete()) {
     showSql("");
-    setActiveNote("");
     return;
   }
   if (!document.getElementById("breakdown-json-wrap").hidden && !(body.breakdown_json_key || "").trim()) {
     showSql("");
-    setActiveNote("");
     return;
   }
   try {
@@ -4104,7 +4105,6 @@ async function compileSql() {
     if (gen !== sqlGen) return;
     if (data.ok && data.sql) showSql(data.sql);
     else showSql("");
-    setActiveNote(data.ok ? data.active_note : "");
   } catch (err) {
     if (gen !== sqlGen) return;
   }
@@ -4857,6 +4857,7 @@ function setChartEmpty(kind) {
     catKind = "none";
     return;
   }
+  setActiveNote("");
   empty.hidden = false;
   empty.classList.toggle("fail", kind === "fail");
   img.hidden = false;
@@ -5131,7 +5132,7 @@ form.addEventListener("submit", async (e) => {
     });
     const data = await res.json();
     if (data.sql) showSql(data.sql);
-    if (data.ok) setActiveNote(data.active_note);
+    setActiveNote(data.ok ? data.active_note : "");
     if (!data.ok) {
       let msg = shortError(data.error || res.statusText || "Query failed.");
       if (data.over_cap) {

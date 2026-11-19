@@ -327,6 +327,28 @@ def test_events_page_offers_the_active_options(monkeypatch, tmp_path):
     assert 'id="active-note"' in html
 
 
+def test_sql_wording_keeps_the_tooltips_spelled_out(monkeypatch, tmp_path):
+    import re
+
+    from fastapi.testclient import TestClient
+
+    from factcat_app.main import app
+    from factcat_app.prefs import save as save_prefs
+
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    (tmp_path / "cfg.json").write_text(
+        '{"project":"p","location":"EU","table":"a.events","dataset":"a",'
+        '"table_name":"events","entity":"id","event_time":"t"}',
+        encoding="utf-8",
+    )
+    save_prefs({"vocab": "sql"})
+    html = TestClient(app).get("/events").text
+    titles = dict(re.findall(r'<option value="(active_\w+)" title="([^"]*)"', html))
+    assert set(titles) == {"active_1", "active_7", "active_30", "active_n"}
+    assert titles["active_7"].startswith("Weekly active users (WAU): ")
+    assert not any("`" in t for t in titles.values())
+
+
 def test_caption_names_the_window_in_words_and_the_tag():
     from factcat_app.query import active_caption
 
