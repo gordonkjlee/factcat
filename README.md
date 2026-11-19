@@ -101,7 +101,12 @@ spec = FunnelSpec(
 
 The everyday report is a time series. **Total**, **Uniques**, and **Average**
 (Total / Uniques: events per unique entity). Uniques is `COUNT DISTINCT` of your
-entity, not of users. On a numeric column: **Sum**, **Average**, **Median**, and
+entity, not of users. **Active** is a rolling count: on each day, the distinct
+entities with a row in the trailing `window_days` days ending that day, so
+`window_days=1`, `7` and `30` are daily, weekly and monthly active users. Keep
+the default day bucket for Active: the series is one value per day (a DATE), and a
+weekly or monthly figure is the value on the day you pick. On a
+numeric column: **Sum**, **Average**, **Median**, and
 **Distinct** (mean distinct values per entity). Not min/max.
 
 ```python

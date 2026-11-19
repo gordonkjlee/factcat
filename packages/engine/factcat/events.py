@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 
-from ._emit import transpile
+from ._emit import GRID_RELATION, transpile, transpile_with_grid
 from .dialects import (
     bucket_out,
     count_distinct,
@@ -61,6 +61,57 @@ def _splice_ndv(sql: str, dialect: str) -> str:
 
 def _finish(sql: str, dialect: str) -> str:
     return splice_placeholders(_splice_ndv(transpile(sql, dialect), dialect), dialect)
+
+
+def _finish_grid(sql: str, dialect: str, n_periods: int) -> str:
+    """``_finish`` for a query that joins the integer period grid."""
+    return splice_placeholders(
+        _splice_ndv(transpile_with_grid(sql, dialect, n_periods), dialect), dialect
+    )
+
+
+def _active_tail(
+    spec: EventsSpec,
+    relation: str,
+    dims: tuple[str, ...] = (),
+    labels: tuple[str, ...] = (),
+) -> str:
+    """Rolling distinct count: each distinct (day, entity[, dims]) fanned out over
+    the ``window_days`` days it stays active, then counted per day. Continues a CTE list."""
+    dim_sel = "".join(f", {d}" for d in dims)
+    dim_fan = "".join(f", a.{d}" for d in dims)
+    bounds = []
+    if spec.report_from:
+        bounds.append(f"fc_day >= {spec.report_from}")
+    if spec.report_until:
+        bounds.append(f"fc_day < {spec.report_until}")
+    where = f"WHERE {' AND '.join(bounds)}" if bounds else ""
+    out_dims = "".join(f", {d} AS {lab}" for d, lab in zip(dims, labels))
+    n_group = 1 + len(dims)
+    group_by = ", ".join(str(i) for i in range(1, n_group + 1))
+    return f"""
+    , active_days AS (
+        SELECT DISTINCT
+            fc_bucket AS fc_day,
+            fc_entity{dim_sel}
+        FROM {relation}
+        WHERE fc_entity IS NOT NULL
+    ),
+    fanned AS (
+        SELECT
+            factcat_date_shift(a.fc_day, p.period_index) AS fc_day,
+            a.fc_entity{dim_fan}
+        FROM active_days a
+        CROSS JOIN {GRID_RELATION} p
+    )
+    SELECT
+        fc_day AS bucket{out_dims},
+        {_ndv("fc_entity", spec)} AS value
+    FROM fanned
+    {where}
+    GROUP BY {group_by}
+    ORDER BY {group_by}
+    """
 
 
 def _rank_sql(spec: EventsSpec) -> str:
@@ -129,6 +180,9 @@ def _agg(spec: EventsSpec) -> str:
 
 def _plain_sql(spec: EventsSpec, dialect: str) -> str:
     base = _base_cte(spec)
+    if spec.measure == "active":
+        sql = base.rstrip() + _active_tail(spec, "base")
+        return _finish_grid(sql, dialect, spec.window_days - 1)
     if spec.on == "property" and spec.measure == "distinct":
         sql = f"""
         {base},
@@ -643,6 +697,12 @@ def _breakdown_sql(
             + ["value"]
         )
         return f"SELECT {rename} FROM ({finished}) _fc_med"
+
+    if spec.measure == "active":
+        sql = ctes.rstrip() + _active_tail(spec, "folded", tuple(fold_cols), labels)
+        return _inject_top_labels(
+            _finish_grid(sql, dialect, spec.window_days - 1), spec, dialect, top_labels_sql
+        )
 
     sql = f"""
     {ctes}

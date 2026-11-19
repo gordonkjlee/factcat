@@ -491,6 +491,48 @@ def test_events_emits_without_warnings(dialect, sqlglot_warnings):
     )
 
 
+EVENTS_ACTIVE = EventsSpec(
+    table="events",
+    entity="entity_id",
+    event_time="occurred_at",
+    measure="active",
+    window_days=7,
+    where="event_name = 'view'",
+    report_from="DATE '2026-03-01'",
+    report_until="DATE '2026-04-01'",
+)
+
+
+@pytest.mark.parametrize("dialect", SUPPORTED)
+@pytest.mark.parametrize(
+    "spec",
+    [
+        EVENTS_ACTIVE,
+        dataclasses.replace(EVENTS_ACTIVE, window_days=30, exact=True),
+        dataclasses.replace(EVENTS_ACTIVE, window_days=1, report_from=None, report_until=None),
+        dataclasses.replace(
+            EVENTS_ACTIVE, breakdowns=("country",), breakdown_labels=("country",), top_n=8
+        ),
+        dataclasses.replace(
+            EVENTS_ACTIVE,
+            exact=True,
+            breakdowns=("country", "platform"),
+            breakdown_labels=("country", "platform"),
+            top_n=5,
+        ),
+    ],
+    ids=["approx-7", "exact-30", "unbounded-1", "breakdown", "breakdown-pair"],
+)
+def test_active_users_emits_without_warnings(dialect, spec, sqlglot_warnings):
+    """The rolling window joins the period grid and splices a day shift; both
+    pass through sqlglot, so a warning there is broken SQL in waiting."""
+    sql = events_sql(spec, dialect=dialect)
+    assert sqlglot_warnings.messages == [], (
+        f"sqlglot warned while emitting for {dialect}: {sqlglot_warnings.messages}"
+    )
+    assert GRID_RELATION in sql
+
+
 @pytest.mark.parametrize("dialect", SUPPORTED)
 @pytest.mark.parametrize(
     "spec", [EVENTS_BREAKDOWN, EVENTS_BREAKDOWN_APPROX, EVENTS_BREAKDOWN_SUM_APPROX,

@@ -11,15 +11,18 @@ from dataclasses import dataclass
 from typing import Literal
 
 On = Literal["events", "property"]
-Measure = Literal["total", "uniques", "average", "sum", "median", "distinct"]
+Measure = Literal[
+    "total", "uniques", "average", "active", "sum", "median", "distinct"
+]
 BreakdownAt = Literal["rows", "first", "last", "carried"]
 BREAKDOWN_AT: tuple[BreakdownAt, ...] = ("rows", "first", "last", "carried")
 OTHER_LABEL = "(other)"
 
 # UI labels live in the README. Two families so "Average" is not two APIs.
-EVENT_MEASURES: tuple[Measure, ...] = ("total", "uniques", "average")
+EVENT_MEASURES: tuple[Measure, ...] = ("total", "uniques", "average", "active")
 PROPERTY_MEASURES: tuple[Measure, ...] = ("sum", "average", "median", "distinct")
 ONS: tuple[On, ...] = ("events", "property")
+MAX_WINDOW_DAYS = 365
 
 
 @dataclass(frozen=True)
@@ -254,7 +257,9 @@ class EventsSpec:
     Two families, because "Average" is two different questions:
 
     * ``on="events"`` — Total (``COUNT(*)``), Uniques (``COUNT DISTINCT``
-      of ``entity``), Average (Total / Uniques: events per unique entity).
+      of ``entity``), Average (Total / Uniques: events per unique entity),
+      Active (``COUNT DISTINCT`` of ``entity`` over the trailing
+      ``window_days`` days ending on each reported day; see below).
     * ``on="property"`` — Sum / Average / Median of ``of``, or Distinct:
       mean number of distinct ``of`` values per entity.
 
@@ -302,6 +307,22 @@ class EventsSpec:
                     Default 8. Ignored when ``breakdowns`` is empty.
         include_other: True (default) emits an ``(other)`` series for the tail.
                     False drops the tail. Ignored when ``breakdowns`` is empty.
+        window_days: trailing window in days for ``measure="active"``; any
+                    integer from 1 to 365. Must stay 1 for every other measure.
+                    For ``active`` the ``bucket`` must be a day or finer (the
+                    default is right): each bucket is cast to a DATE and
+                    shifted by whole days, so a week or month bucket gives a
+                    wrong count, not an error. The output ``bucket`` is a DATE,
+                    where other measures return a timestamp. A weekly or
+                    monthly figure as of some day is the caller's pick from
+                    the daily series.
+        report_from: SQL DATE expression; for ``active`` only the days on or
+                    after it are reported. Optional.
+        report_until: SQL DATE expression; for ``active`` only the days
+                    before it (exclusive) are reported. Optional. Without
+                    it the series runs ``window_days - 1`` days past the last
+                    row, while the window empties; pass tomorrow's date to
+                    stop at today.
     """
 
     table: str
@@ -319,6 +340,9 @@ class EventsSpec:
     top_n: int = 8
     include_other: bool = True
     event_time_column: str | None = None
+    window_days: int = 1
+    report_from: str | None = None
+    report_until: str | None = None
 
     def __post_init__(self) -> None:
         if self.on not in ONS:
@@ -350,6 +374,17 @@ class EventsSpec:
             raise ValueError("breakdown_labels must match breakdowns in length")
         if self.top_n < 1:
             raise ValueError("top_n must be >= 1")
+        if type(self.window_days) is not int or not 1 <= self.window_days <= MAX_WINDOW_DAYS:
+            raise ValueError(f"window_days must be an integer from 1 to {MAX_WINDOW_DAYS}")
+        if self.measure != "active":
+            if self.window_days != 1:
+                raise ValueError("window_days applies only to measure='active'")
+            if self.report_from is not None or self.report_until is not None:
+                raise ValueError("report_from / report_until apply only to measure='active'")
+        for name in ("report_from", "report_until"):
+            value = getattr(self, name)
+            if value is not None and not value.strip():
+                raise ValueError(f"{name} must be a SQL date expression if set")
         for entry in self.breakdowns:
             if isinstance(entry, Breakdown):
                 continue  # Breakdown validates itself
