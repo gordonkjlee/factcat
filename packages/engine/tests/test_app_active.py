@@ -302,7 +302,8 @@ def test_events_page_offers_the_active_options(monkeypatch, tmp_path):
     html = TestClient(app).get("/events").text
     for value in ("active_1", "active_7", "active_30", "active_n"):
         assert f'value="{value}"' in html
-    assert "Weekly active users (7 days)" in html
+    assert ">Weekly active users</option>" in html
+    assert 'title="Weekly active users (WAU): distinct users with a row in the 7 days' in html
     assert 'id="active-note"' in html
 
 
