@@ -1441,11 +1441,8 @@ async function requestWriteAccess() {
     if (gen !== writeAccessGen) return;
   }
 }
-// Can this login run queries where the form says they run? Asked of IAM
-// (BigQuery) or a session that must bind the warehouse (Snowflake) when the
-// billing project, or the role and warehouse, settle. Autosave is gated on the answer for the CURRENT
-// value: a denial or an unanswered probe blocks it, an answer for another
-// value does not count. Browse rights are separate, so the pickers still fill.
+// Autosave waits on the job-access verdict for the current value; a denial blocks it,
+// and a verdict for another value does not count. The pickers need only browse rights.
 let jobAccessGen = 0;
 let jobAccessTimer = 0;
 let jobAccess = {key: "", state: "idle"};  // idle | pending | ok | denied | error

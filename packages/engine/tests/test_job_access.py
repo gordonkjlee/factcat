@@ -273,7 +273,7 @@ def test_snowflake_denial_blocks_save_with_role_and_warehouse_named(monkeypatch,
     monkeypatch.setattr(main_mod, "job_access_from_form", lambda form: {"status": "denied", "role": "R", "warehouse": "WH"})
     client.post("/api/job_access", json=body)
     res = client.post("/api/save", json=body).json()
-    assert res["ok"] is False and "R cannot run queries on WH" in res["error"]
+    assert res["ok"] is False and "R has no USAGE on WH, so it cannot run queries there." in res["error"]
 
 
 def test_key_separates_billing_projects_and_credentials():

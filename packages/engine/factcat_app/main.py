@@ -371,7 +371,10 @@ def _job_refusal(form: dict[str, Any]) -> str:
         return ""
     if payload.get("warehouse"):
         who = payload.get("role") or "The default role"
-        return f"{who} cannot run queries on {payload['warehouse']}. Nothing was saved."
+        return (
+            f"{who} has no USAGE on {payload['warehouse']}, so it cannot run queries there. "
+            "Nothing was saved."
+        )
     return (
         f"This login cannot run queries in {payload.get('project') or 'this project'}. "
         "Nothing was saved."
