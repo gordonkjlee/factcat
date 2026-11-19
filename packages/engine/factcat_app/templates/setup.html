@@ -1470,7 +1470,7 @@ function jobAccessReady() {
 function jobAccessKey() {
   const b = authBody();
   return currentKind() === "snowflake"
-    ? ["snowflake", b.account, b.user, b.snowflake_auth, b.role, b.warehouse].join("|")
+    ? ["snowflake", b.account, b.user, b.snowflake_auth, b.private_key_path, b.role, b.warehouse].join("|")
     : ["bigquery", b.project, b.credentials].join("|");
 }
 function jobAccessEl() {

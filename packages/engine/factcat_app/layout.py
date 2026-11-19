@@ -764,13 +764,14 @@ def is_job_denial(exc: BaseException) -> bool:
 
 def job_access_key(form: dict[str, Any]) -> str:
     """What a job-rights verdict is about: the billing project (BigQuery) or
-    the role and warehouse (Snowflake), plus how the login is chosen."""
+    the role and warehouse (Snowflake), plus the login and its key file."""
     if form_kind(form) == "snowflake":
         parts = (
             "snowflake",
             form.get("account"),
             form.get("user"),
             form.get("snowflake_auth"),
+            form.get("private_key_path"),
             form.get("role"),
             form.get("warehouse"),
         )

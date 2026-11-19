@@ -261,6 +261,8 @@ def test_key_separates_billing_projects_and_credentials():
     assert job_access_key(_bq()) != job_access_key(_bq(project="q"))
     assert job_access_key(_bq()) != job_access_key(_bq(credentials="k.json"))
     assert job_access_key(_bq(data_project="x")) == job_access_key(_bq())  # data project is not billed
+    sf = {"kind": "snowflake", "account": "a", "user": "u", "role": "R", "warehouse": "WH"}
+    assert job_access_key(sf) != job_access_key({**sf, "private_key_path": "other.p8"})
 
 
 def test_setup_page_carries_the_callouts_and_the_gate():
