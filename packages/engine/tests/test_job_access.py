@@ -1,6 +1,4 @@
-"""Setup refuses a billing project (or role + warehouse) that cannot run jobs.
-
-"""
+"""Setup refuses a billing project (or role + warehouse) that cannot run jobs."""
 
 from __future__ import annotations
 
@@ -216,6 +214,26 @@ def test_job_denial_is_told_apart_from_a_missing_table():
     assert not is_job_denial(AdapterError("Not found: Table p:d.t"))
 
 
+# A table-read 403 from a query job, as google-cloud-bigquery words it.
+TABLE_READ_403 = (
+    "403 Access Denied: Table data-proj:region-eu.INFORMATION_SCHEMA.PARTITIONS: "
+    "User does not have permission to query table "
+    "data-proj:region-eu.INFORMATION_SCHEMA.PARTITIONS.\n\n"
+    "Location: EU\nJob ID: abc123"
+)
+
+
+def test_a_table_read_denial_from_a_job_is_not_a_job_denial():
+    """Mutation: match "access denied" plus "job" again and this goes red."""
+    assert not is_job_denial(AdapterError(TABLE_READ_403))
+
+
+def test_a_new_kind_is_skipped_not_probed_as_bigquery(monkeypatch):
+    """A kind added to ADAPTERS later gets no verdict until it has its own probe."""
+    monkeypatch.setattr("factcat_app.layout.form_kind", lambda form: "duckdb")
+    assert job_access_from_form({"kind": "duckdb", "project": "p"})["status"] == "skipped"
+
+
 # --- Save gate (server side) -------------------------------------------------
 
 
@@ -361,4 +379,14 @@ def test_layout_probe_still_swallows_a_table_without_stats(monkeypatch):
         raise AdapterError("Not found: Table data-proj:analytics.events")
 
     monkeypatch.setattr("factcat_app.layout.partition_avg_bytes", missing)
+    assert _partition_avg(_avg_form(), {"partition": "occurred_at", "name": "events"}) is None
+
+
+def test_layout_probe_still_swallows_a_table_read_denial(monkeypatch):
+    """A 403 on the stats table leaves the hint out; it is not a job denial."""
+
+    def table_403(**kw):
+        raise AdapterError(TABLE_READ_403)
+
+    monkeypatch.setattr("factcat_app.layout.partition_avg_bytes", table_403)
     assert _partition_avg(_avg_form(), {"partition": "occurred_at", "name": "events"}) is None

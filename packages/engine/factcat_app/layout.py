@@ -755,11 +755,10 @@ def _cluster_ok(
 
 
 def is_job_denial(exc: BaseException) -> bool:
-    """True when ``exc`` is a refusal to create a job, not a missing table."""
-    message = str(exc).lower()
-    return JOBS_CREATE in message or (
-        "access denied" in message and "job" in message
-    )
+    """True when ``exc`` is a refusal to create a job. A 403 on reading a table
+    also says "Access Denied" and, from a query job, "Job ID", so only the
+    ``bigquery.jobs.create`` permission name counts."""
+    return JOBS_CREATE in str(exc).lower()
 
 
 def job_access_key(form: dict[str, Any]) -> str:
@@ -790,7 +789,10 @@ def job_access_from_form(form: dict[str, Any]) -> dict[str, Any]:
     driver failure (key, network, account) is a failure to check, as on
     BigQuery. ``denied`` blocks Setup's save; ``error`` does not.
     """
-    if form_kind(form) == "snowflake":
+    kind = form_kind(form)
+    if kind not in ("bigquery", "snowflake"):
+        return {"status": "skipped"}
+    if kind == "snowflake":
         warehouse = str(form.get("warehouse") or "").strip()
         if not warehouse or not str(form.get("account") or "").strip():
             return {"status": "skipped"}
