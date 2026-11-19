@@ -468,8 +468,14 @@ def partition_avg_bytes(
     table: str,
     location: str,
     credentials: object | None = None,
+    billing_project: str | None = None,
 ) -> int | None:
-    """Average logical bytes per partition. Metadata query, not a catalog list."""
+    """Average logical bytes per partition. Metadata query, not a catalog list.
+
+    ``project`` qualifies the table (where the data lives); the job is billed
+    to ``billing_project`` when given, else to ``project``. They differ when
+    the data project grants read but no ``bigquery.jobs.create``.
+    """
     dataset = (dataset or "").strip()
     table = (table or "").strip()
     if not dataset or not table:
@@ -484,7 +490,7 @@ def partition_avg_bytes(
         f"WHERE table_name = '{table}'"
     )
     try:
-        client = _make_client(project, credentials)
+        client = _make_client((billing_project or "").strip() or project, credentials)
         bigquery, _service_account = _load_google()
         job_config = bigquery.QueryJobConfig()
         job_config.use_query_cache = False
@@ -537,6 +543,57 @@ def test_dataset_iam(
             data={"permissions": wanted},
         )
         granted = list(payload.get("permissions") or [])
+    except (ValueError, AdapterError, ImportError):
+        raise
+    except Exception as exc:
+        raise _wrap_google_error(
+            exc, maximum_bytes_billed=None, timeout=DEFAULT_TIMEOUT
+        ) from exc
+    return granted
+
+
+JOBS_CREATE = "bigquery.jobs.create"
+_RESOURCE_MANAGER = "https://cloudresourcemanager.googleapis.com/v1/projects"
+
+
+def test_project_iam(
+    *,
+    project: str,
+    credentials: object | None = None,
+    permissions: list[str] | None = None,
+) -> list[str]:
+    """Permissions this identity has on ``project``. IAM API, no query job.
+
+    The project-scoped sibling of ``test_dataset_iam``: ``bigquery.jobs.create``
+    is a project permission, so a dataset check cannot see it. Uses the
+    client's own authorised session against Resource Manager's
+    ``testIamPermissions``, which needs no permission of its own.
+    """
+    project = (project or "").strip()
+    if not project:
+        raise ValueError("project is required")
+    wanted = permissions or [JOBS_CREATE]
+    try:
+        client = _make_client(project, credentials)
+        http = getattr(client, "_http", None)
+        if http is None:
+            raise AdapterError("could not check project permissions")
+        resp = http.post(
+            f"{_RESOURCE_MANAGER}/{project}:testIamPermissions",
+            json={"permissions": wanted},
+            timeout=DEFAULT_TIMEOUT,
+        )
+        status = getattr(resp, "status_code", 200)
+        if status != 200:
+            detail = ""
+            try:
+                detail = str((resp.json().get("error") or {}).get("message") or "")
+            except Exception:
+                detail = str(getattr(resp, "text", "") or "")[:200]
+            raise AdapterError(
+                f"could not check permissions on {project} (HTTP {status}): {detail}".rstrip(": ")
+            )
+        granted = list(resp.json().get("permissions") or [])
     except (ValueError, AdapterError, ImportError):
         raise
     except Exception as exc:
