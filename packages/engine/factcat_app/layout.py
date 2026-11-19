@@ -786,8 +786,9 @@ def job_access_from_form(form: dict[str, Any]) -> dict[str, Any]:
     BigQuery: ``bigquery.jobs.create`` on the billing project, asked of IAM
     (no job, no bytes). If IAM itself cannot be asked, a dry-run ``SELECT 1``
     answers the same question for free. Snowflake: a session on the chosen
-    role and warehouse that must come up with that warehouse bound. ``denied`` blocks Setup's save;
-    ``error`` names a failure to check and does not.
+    role and warehouse that must come up with that warehouse bound; any other
+    driver failure (key, network, account) is a failure to check, as on
+    BigQuery. ``denied`` blocks Setup's save; ``error`` does not.
     """
     if form_kind(form) == "snowflake":
         warehouse = str(form.get("warehouse") or "").strip()
@@ -800,7 +801,7 @@ def job_access_from_form(form: dict[str, Any]) -> dict[str, Any]:
         except WarehouseNotUsable as exc:
             return {"status": "denied", "reason": "no_usage", "error": str(exc), **base}
         except AdapterError as exc:
-            return {"status": "denied", "error": str(exc), **base}
+            return {"status": "error", "error": str(exc), **base}
         return {"status": "ok", **base, **{k: v for k, v in got.items() if v}}
     project = str(form.get("project") or "").strip()
     if not project:

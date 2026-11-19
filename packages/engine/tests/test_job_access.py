@@ -142,20 +142,39 @@ def test_a_failed_check_is_an_error_not_a_silent_pass(monkeypatch):
     assert out["status"] == "error" and "API not enabled" in out["error"]
 
 
-def test_snowflake_role_or_warehouse_denial_is_denied(monkeypatch):
-    def refuse(**kw):
-        raise AdapterError("No active warehouse selected / USAGE denied")
+def test_snowflake_driver_failure_is_a_failure_to_check_not_a_denial(monkeypatch):
+    """A bad key, a network failure or an account typo is not a missing grant.
 
-    monkeypatch.setattr("factcat_app.layout.can_run_statement", refuse)
+    As on BigQuery, a check that cannot run is ``error`` and does not block
+    saving; only a session that comes up without the warehouse is ``denied``.
+
+    Mutation: map every ``AdapterError`` to ``denied`` again; this goes red.
+    """
+    def broken(**kw):
+        raise AdapterError("250001: Failed to connect: JWT token is invalid.")
+
+    monkeypatch.setattr("factcat_app.layout.can_run_statement", broken)
     form = {"kind": "snowflake", "account": "xy12345", "user": "U", "warehouse": "WH", "role": "R"}
     out = job_access_from_form(form)
-    assert out["status"] == "denied"
+    assert out["status"] == "error" and "JWT" in out["error"]
     assert out["warehouse"] == "WH" and out["role"] == "R"
     monkeypatch.setattr(
         "factcat_app.layout.can_run_statement",
         lambda **kw: {"role": "R", "warehouse": "WH"},
     )
     assert job_access_from_form(form)["status"] == "ok"
+
+
+def test_snowflake_driver_failure_does_not_block_save(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    body = {"kind": "snowflake", "account": "xy", "user": "U", "role": "R", "warehouse": "WH"}
+
+    def broken(**kw):
+        raise AdapterError("could not connect")
+
+    monkeypatch.setattr("factcat_app.layout.can_run_statement", broken)
+    assert client.post("/api/job_access", json=body).json()["status"] == "error"
+    assert client.post("/api/save", json=body).json()["ok"] is True
 
 
 def test_snowflake_role_without_warehouse_usage_is_denied_end_to_end(monkeypatch, tmp_path):

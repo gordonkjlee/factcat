@@ -14,6 +14,12 @@ from factcat_app.layout import job_access_from_form
 pytestmark = pytest.mark.live
 
 
+@pytest.fixture(autouse=True)
+def _bigquery_only(live):
+    if live.kind != "bigquery":
+        pytest.skip(f"the mapping is {live.kind}, not bigquery")
+
+
 def test_sandbox_billing_project_can_run_jobs(live):
     form = live.form()
     out = job_access_from_form(

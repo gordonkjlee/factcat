@@ -1488,11 +1488,9 @@ function paintJobAccess(data) {
   if (!el || !data) return;
   let text = "";
   if (data.status === "denied" && data.warehouse !== undefined) {
-    const who = data.role || "The default role";
-    text = (data.reason === "no_usage"
-      ? who + " has no USAGE on " + data.warehouse + ", so it cannot run queries there."
-      : who + " cannot run queries on " + data.warehouse + ". Snowflake said: " + (data.error || "the connection failed"))
-      + " Pick a role with USAGE on it, or another warehouse. Nothing is saved until then.";
+    text = (data.role || "The default role") + " has no USAGE on " + data.warehouse
+      + ", so it cannot run queries there. Pick a role with USAGE on it, or another warehouse."
+      + " Nothing is saved until then.";
   } else if (data.status === "denied") {
     const billing = data.project || projectEl.value.trim();
     const held = dataProjectEl.value.trim();
