@@ -1948,15 +1948,11 @@ def _active_window_days(
     """Trailing window length of an Active users measure (1 to 365 days)."""
     src: dict[str, Any] = unit if isinstance(unit, dict) and unit.get("measure") else form
     raw = src.get("window_days")
-    if raw in (None, ""):
-        raw = 7
-    try:
-        n = int(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Days must be a whole number from 1 to 365") from exc
-    if not 1 <= n <= MAX_WINDOW_DAYS:
+    if isinstance(raw, str) and raw.strip().isdigit():
+        raw = int(raw.strip())
+    if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= MAX_WINDOW_DAYS:
         raise ValueError(f"Days must be a whole number from 1 to {MAX_WINDOW_DAYS}")
-    return n
+    return raw
 
 
 def active_name(window_days: int, plural: str = "users") -> str:
@@ -1965,6 +1961,48 @@ def active_name(window_days: int, plural: str = "users") -> str:
     head = ACTIVE_NAMES.get(window_days, "Active")
     days = f"{window_days} day" + ("" if window_days == 1 else "s")
     return f"{head} {plural} ({days})"
+
+
+def _active_windows(form: dict[str, Any]) -> list[int]:
+    """Window lengths of every Active users series, smallest first, no repeats."""
+    units = _series_units(form) or [None]
+    wins = {_active_window_days(form, u) for u in units if _unit_is_active(form, u)}
+    return sorted(wins)
+
+
+def active_caption(form: dict[str, Any]) -> str | None:
+    """What an Active users point means, or None when no series counts one.
+
+    The one definition: the chart caption and the SQL pane header both show it.
+    """
+    wins = _active_windows(form)
+    if not wins:
+        return None
+    plural = str(form.get("entity_label_plural") or "").strip().lower() or "users"
+
+    def name(w: int) -> str:
+        if w in ACTIVE_NAMES:
+            return f"{ACTIVE_NAMES[w]} {plural} ({ACTIVE_TAGS[w]})"
+        return f"Active {plural} over {w} days"
+
+    def span(w: int) -> str:
+        return "on that day" if w == 1 else f"in the {w} days ending that day"
+
+    if len(wins) == 1:
+        text = f"{name(wins[0])}: each point counts distinct {plural} active {span(wins[0])}."
+    else:
+        days = ", ".join(str(w) for w in wins[:-1]) + f" or {wins[-1]}"
+        text = (
+            f"{', '.join(name(w) for w in wins)}: each point counts distinct {plural} "
+            f"active in that series' window ({days} days) ending that day."
+        )
+    grain = _grain(form)
+    if grain in ("week", "month"):
+        text += (
+            f" A {grain} shows the value on its last day; the current {grain} "
+            "shows today's value."
+        )
+    return text
 
 
 def _unit_is_active(form: dict[str, Any], unit: dict[str, Any] | None) -> bool:

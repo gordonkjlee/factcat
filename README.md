@@ -109,6 +109,12 @@ weekly or monthly figure is the value on the day you pick. On a
 numeric column: **Sum**, **Average**, **Median**, and
 **Distinct** (mean distinct values per entity). Not min/max.
 
+In the app, the Measure menu's **Active users** group offers Daily active users
+(1 day), Weekly (7 days), Monthly (30 days) and Over N days (1 to 365). The scan
+reaches N − 1 days before the date range so the first points count in full, a
+Week or Month point is the value on that period's last day (today's value for
+the current one), and Hour, Day of week and Hour of day are off for it.
+
 ```python
 from factcat import EventsSpec, events_sql
 

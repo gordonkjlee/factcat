@@ -775,6 +775,8 @@
     .series-window { margin: 0.35rem 0 0; }
     .series-window[hidden] { display: none !important; }
     .series-window input { width: 5rem; }
+    .series-window-error { color: var(--fc-ochre-deep); }
+    .series-window-error[hidden] { display: none !important; }
     #result-table tr.incomplete td { color: var(--fc-slate); font-style: italic; }
     #custom-snap-hint { margin: 0.35rem 0 0; }
     .event-card-filters .add-card-filter { margin: 0.2rem 0 0 0; }
@@ -874,11 +876,11 @@
         <option value="uniques" title="Count distinct of the mapped entity id" {% if (config.on != "property") and (config.measure == "uniques" or not config.measure) %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.unique | sql_plain }}{% else %}{{ filter_ui.chrome.unique.replace("{plural}", config.entity_label_plural or "Users") }}{% endif %}</option>
         <option value="average" title="Volume divided by unique entities" {% if config.on != "property" and config.measure == "average" %}selected{% endif %}>{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.average_per | sql_plain }}{% else %}{{ filter_ui.chrome.average_per.replace("{singular}", config.entity_label or "User") }}{% endif %}</option>
       </optgroup>
-      <optgroup label="Active users">
-        <option value="active_1" title="DAU: distinct entities with a row on the day">Daily active users (1 day)</option>
-        <option value="active_7" title="WAU: distinct entities with a row in the 7 days ending each day">Weekly active users (7 days)</option>
-        <option value="active_30" title="MAU: distinct entities with a row in the 30 days ending each day">Monthly active users (30 days)</option>
-        <option value="active_n" title="Distinct entities with a row in the N days ending each day">Active users over N days</option>
+      <optgroup label="{{ filter_ui.chrome.active_group }}">
+        <option value="active_1" title="DAU: distinct entities with a row on the day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_1 | sql_plain }}{% else %}{{ filter_ui.chrome.active_1.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
+        <option value="active_7" title="WAU: distinct entities with a row in the 7 days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_7 | sql_plain }}{% else %}{{ filter_ui.chrome.active_7.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
+        <option value="active_30" title="MAU: distinct entities with a row in the 30 days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_30 | sql_plain }}{% else %}{{ filter_ui.chrome.active_30.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
+        <option value="active_n" title="Distinct entities with a row in the N days ending each day">{% if filter_ui.vocab == "sql" %}{{ filter_ui.chrome.active_n | sql_plain }}{% else %}{{ filter_ui.chrome.active_n.replace("{plural}", (config.entity_label_plural or "Users") | lower) }}{% endif %}</option>
       </optgroup>
       <optgroup label="Property value">
         <option value="sum" title="Sum of a numeric column" {% if config.measure == "sum" %}selected{% endif %}>{{ filter_ui.chrome.property_sum | sql_plain }}</option>
@@ -2738,7 +2740,14 @@ function syncSeriesMeasure(host) {
   const sel = seriesMeasureSelect(host);
   const ofWrap = host.querySelector(":scope > .series-of");
   const winWrap = host.querySelector(":scope > .series-window");
-  if (winWrap && sel) winWrap.hidden = sel.value !== "active_n";
+  if (winWrap && sel) {
+    winWrap.hidden = sel.value !== "active_n";
+    const err = winWrap.hidden ? "" : windowDaysError(winWrap.querySelector("input"));
+    const msg = winWrap.querySelector(".series-window-error");
+    msg.textContent = err;
+    msg.hidden = !err;
+    winWrap.querySelector("input").setAttribute("aria-invalid", err ? "true" : "false");
+  }
   if (!sel || !ofWrap) return;
   const prop = isPropertyMeasureValue(sel.value);
   ofWrap.hidden = !prop;
@@ -2752,6 +2761,16 @@ function syncSeriesMeasure(host) {
   ofWrap.querySelector(".series-of-json").hidden = !json;
   ofWrap.querySelector(".series-of-expr").hidden = col !== CUSTOM_OF;
 }
+// The Days field as sent: a whole number, or the raw text so the server
+// refuses it rather than the page guessing a window.
+function windowDaysValue(input) {
+  const raw = ((input && input.value) || "").trim();
+  return /^\d+$/.test(raw) ? parseInt(raw, 10) : raw;
+}
+function windowDaysError(input) {
+  const n = windowDaysValue(input);
+  return Number.isInteger(n) && n >= 1 && n <= 365 ? "" : "Days must be a whole number from 1 to 365.";
+}
 function readSeriesMeasure(host) {
   const sel = seriesMeasureSelect(host);
   const ofWrap = host.querySelector(":scope > .series-of");
@@ -2764,7 +2783,7 @@ function readSeriesMeasure(host) {
   if (active) {
     const win = host.querySelector(":scope > .series-window .series-window-days");
     extra.window_days = sel.value === "active_n"
-      ? (parseInt(win && win.value, 10) || 7)
+      ? windowDaysValue(win)
       : parseInt(sel.value.slice(7), 10);
   }
   return Object.assign(extra, {
@@ -2804,11 +2823,12 @@ function attachSeriesMeasure(host, data) {
   winWrap.innerHTML = (
     "<label>Days</label>"
     + '<input type="number" class="series-window-days" min="1" max="365" step="1" aria-label="Days in the window">'
+    + '<span class="hint series-window-error" role="alert" hidden></span>'
   );
   winWrap.querySelector("input").value = init.window_days || 7;
   ofWrap.after(winWrap);
   winWrap.querySelector("input").addEventListener("input", () => {
-    syncExact(); scheduleEstimate(); syncStaleNotes();
+    syncSeriesMeasure(host); syncExact(); scheduleEstimate(); syncStaleNotes();
   });
   paintOfSelect(
     ofWrap.querySelector(".series-of-column"),
@@ -3075,6 +3095,13 @@ function collectSeries() {
   return units;
 }
 function seriesIncomplete() {
+  for (const host of eventCardsEl.querySelectorAll(":scope > .event-card, :scope > .event-group")) {
+    const win = host.querySelector(":scope > .series-window");
+    if (win && !win.hidden) {
+      const err = windowDaysError(win.querySelector("input"));
+      if (err) return err;
+    }
+  }
   for (const unit of collectSeries()) {
     const cards = unit.kind === "any_of" ? (unit.members || []) : [unit];
     for (const card of cards) {
@@ -3706,33 +3733,28 @@ function relabelMeasures() {
     sel.value = v;
   });
 }
-// Active users count days. Hour and cyclic grains are switched off while a
-// series uses it, and the chart says what the number is.
+// Active users count days: Hour and the cyclic grains are switched off while
+// a series uses it. The caption itself comes from the server (active_note).
 function syncActive(series) {
   const ACTIVE_BLOCKED_GRAINS = ["hour", "day_of_week", "hour_of_day"];
-  const ACTIVE_TAGS = { 1: "Daily active {p} (DAU)", 7: "Weekly active {p} (WAU)", 30: "Monthly active {p} (MAU)" };
-  const active = series.filter((u) => u.measure === "active");
+  const ACTIVE_GRAIN_REASON = "Active users are counted over days. Choose Day, Week or Month.";
+  const active = series.some((u) => u.measure === "active");
   for (const o of grainEl.options) {
     if (!ACTIVE_BLOCKED_GRAINS.includes(o.value)) continue;
-    o.disabled = active.length > 0;
-    o.title = active.length ? "Active users are counted over days. Choose Day, Week or Month." : "";
+    o.disabled = active;
+    o.title = active ? ACTIVE_GRAIN_REASON : "";
   }
-  if (active.length && ACTIVE_BLOCKED_GRAINS.includes(grainEl.value)) {
+  if (active && ACTIVE_BLOCKED_GRAINS.includes(grainEl.value)) {
+    const was = grainEl.selectedOptions[0] ? grainEl.selectedOptions[0].textContent : grainEl.value;
     grainEl.value = "day";
     grainEl.dispatchEvent(new Event("change"));
+    setRunNote("Time grain moved from " + was + " to Day: active users are counted over days.", true);
   }
+}
+function setActiveNote(text) {
   const note = document.getElementById("active-note");
-  if (!active.length) { note.hidden = true; note.textContent = ""; return; }
-  const plural = (document.getElementById("entity_label_plural").value || "").trim().toLowerCase() || "users";
-  const wins = [...new Set(active.map((u) => u.window_days || 7))].sort((a, b) => a - b);
-  const names = wins.map((w) => ACTIVE_TAGS[w] ? ACTIVE_TAGS[w].replace("{p}", plural) : "Active " + plural + " (" + w + " days)");
-  let text = names.join(", ") + ": distinct " + plural + " with a row in the trailing window ending on each day.";
-  const g = currentGrain();
-  if (g === "week" || g === "month") {
-    text += " Each " + g + " shows the value as of its last day; the current " + g + " is as of today.";
-  }
-  note.textContent = text;
-  note.hidden = false;
+  note.textContent = text || "";
+  note.hidden = !text;
 }
 function pluralWord() {
   return (document.getElementById("entity_label_plural").value || "").trim().toLowerCase() || "users";
@@ -4055,14 +4077,17 @@ async function compileSql() {
   const body = payload();
   if (!body.table || !body.entity || !body.event_time) {
     showSql("");
+    setActiveNote("");
     return;
   }
   if (seriesIncomplete()) {
     showSql("");
+    setActiveNote("");
     return;
   }
   if (!document.getElementById("breakdown-json-wrap").hidden && !(body.breakdown_json_key || "").trim()) {
     showSql("");
+    setActiveNote("");
     return;
   }
   try {
@@ -4070,6 +4095,7 @@ async function compileSql() {
     if (gen !== sqlGen) return;
     if (data.ok && data.sql) showSql(data.sql);
     else showSql("");
+    setActiveNote(data.ok ? data.active_note : "");
   } catch (err) {
     if (gen !== sqlGen) return;
   }
@@ -5096,6 +5122,7 @@ form.addEventListener("submit", async (e) => {
     });
     const data = await res.json();
     if (data.sql) showSql(data.sql);
+    if (data.ok) setActiveNote(data.active_note);
     if (!data.ok) {
       let msg = shortError(data.error || res.statusText || "Query failed.");
       if (data.over_cap) {

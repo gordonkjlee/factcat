@@ -203,7 +203,7 @@ def test_hour_and_cyclic_grains_are_refused():
             spec_from_form(_form(grain=grain, kind="bigquery"))
 
 
-@pytest.mark.parametrize("n", [0, 366, "x"])
+@pytest.mark.parametrize("n", [0, 366, "x", "", None, 1.5, True])
 def test_window_days_is_validated(n):
     with pytest.raises(ValueError, match="Days must be a whole number from 1 to 365"):
         spec_from_form(_form(window_days=n, kind="bigquery"))
@@ -300,3 +300,102 @@ def test_events_page_offers_the_active_options(monkeypatch, tmp_path):
         assert f'value="{value}"' in html
     assert "Weekly active users (7 days)" in html
     assert 'id="active-note"' in html
+
+
+def test_caption_names_the_window_in_words_and_the_tag():
+    from factcat_app.query import active_caption
+
+    assert active_caption(_form(window_days=7, kind="bigquery")) == (
+        "Weekly active users (WAU): each point counts distinct users active "
+        "in the 7 days ending that day."
+    )
+    assert active_caption(_form(window_days=1, kind="bigquery")) == (
+        "Daily active users (DAU): each point counts distinct users active on that day."
+    )
+    custom = active_caption(_form(window_days=14, entity_label_plural="Accounts", kind="bigquery"))
+    assert custom == (
+        "Active accounts over 14 days: each point counts distinct accounts active "
+        "in the 14 days ending that day."
+    )
+    assert active_caption(_form(measure="uniques", kind="bigquery")) is None
+
+
+def test_caption_lists_every_window_and_the_as_of_rule():
+    from factcat_app.query import active_caption
+
+    form = _form(
+        kind="bigquery",
+        grain="month",
+        series=[
+            {"measure": "active", "window_days": 30},
+            {"measure": "active", "window_days": 1},
+            {"measure": "total"},
+            {"measure": "active", "window_days": 30},
+        ],
+    )
+    assert active_caption(form) == (
+        "Daily active users (DAU), Monthly active users (MAU): each point counts "
+        "distinct users active in that series' window (1 or 30 days) ending that day. "
+        "A month shows the value on its last day; the current month shows today's value."
+    )
+
+
+def test_sql_pane_carries_the_caption_but_the_warehouse_does_not(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from factcat_app.main import app
+
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    body = {
+        "project": "p", "location": "EU", "table": "analytics.events",
+        "entity": "account_id", "event_time": "occurred_at", "measure": "active",
+        "window_days": 7, "grain": "day", "range_mode": "last", "range_unit": "day",
+        "range_n": 30,
+    }
+    res = TestClient(app).post("/api/sql", json=body).json()
+    assert res["ok"] is True
+    assert res["active_note"].startswith("Weekly active users (WAU):")
+    first, rest = res["sql"].split("\n", 1)
+    assert first == "-- " + res["active_note"]
+    assert rest == events_sql_from_form(body)
+    assert not events_sql_from_form(body).lstrip().startswith("--")
+    plain = TestClient(app).post("/api/sql", json={**body, "measure": "uniques"}).json()
+    assert plain["active_note"] is None
+    assert not plain["sql"].startswith("--")
+
+
+def test_caption_header_cannot_break_out_of_the_comment(monkeypatch, tmp_path):
+    from factcat_app.main import _pane_sql
+
+    out = _pane_sql("SELECT 1", "Weekly active a\nDROP TABLE x: ...")
+    assert out.count("\n") == 1
+    assert out.endswith("\nSELECT 1")
+
+
+def test_estimate_prices_the_lookback(monkeypatch, tmp_path):
+    """The estimate is a dry run of the same SQL, so it scans N - 1 extra days."""
+    from unittest.mock import MagicMock
+
+    from fastapi.testclient import TestClient
+
+    from factcat.warehouses import QueryResult
+    from factcat_app.main import app
+
+    monkeypatch.setenv("FACTCAT_CONFIG", str(tmp_path / "cfg.json"))
+    warehouse = MagicMock()
+    warehouse.run.return_value = QueryResult(rows=[], bytes_processed=10)
+    monkeypatch.setattr("factcat_app.main.connect", lambda kind, **kw: warehouse)
+    body = {
+        "project": "p", "location": "EU", "table": "analytics.events",
+        "entity": "account_id", "event_time": "occurred_at", "measure": "active",
+        "window_days": 30, "grain": "day", "range_mode": "last", "range_unit": "day",
+        "range_n": 30, "credentials": "/tmp/sa.json",
+    }
+    res = TestClient(app).post("/api/estimate", json=body).json()
+    assert res["ok"] is True
+    priced = [c for c in warehouse.run.call_args_list if c.kwargs.get("dry_run")]
+    assert priced and "INTERVAL (-29) DAY" in priced[-1].args[0]
+    warehouse.run.reset_mock()
+    TestClient(app).post("/api/estimate", json={**body, "window_days": 1})
+    priced = [c for c in warehouse.run.call_args_list if c.kwargs.get("dry_run")]
+    assert priced and "INTERVAL (-" not in priced[-1].args[0]

@@ -194,6 +194,48 @@ def _named_zone(live: Any) -> dict[str, Any]:
     return live.form(event_time=cols[0], event_time_epoch="", event_time_tz="Europe/Berlin")
 
 
+def _active_day(live: Any) -> dict[str, Any]:
+    """Weekly active users by day: the lookback widens the scan, the fan-out
+    joins the period grid, and the report bounds are DATEs."""
+    return live.form(measure="active", window_days=7)
+
+
+def _active_week_future(live: Any) -> dict[str, Any]:
+    """A custom range ending in the future, at Week grain: the reported end
+    is LEAST(range end, tomorrow)."""
+    end = date.today().replace(day=1).replace(year=date.today().year + 1)
+    return live.form(
+        measure="active",
+        window_days=30,
+        grain="week",
+        range_mode="custom",
+        custom_kind="absolute",
+        start_date="2026-01-05",
+        end_date=end.isoformat(),
+    )
+
+
+def _active_breakdown(live: Any) -> dict[str, Any]:
+    (col,) = _text(live, 1)
+    return live.form(measure="active", window_days=7, breakdown_column=col)
+
+
+def _active_overlay_mixed(live: Any) -> dict[str, Any]:
+    """Daily and Monthly active users beside Volume: arms of different
+    windows and measures in one UNION ALL, with the fc_roll flag column."""
+    return live.form(
+        grain="week",
+        range_mode="last",
+        range_n=6,
+        range_unit="week",
+        series=[
+            {"event": PROBE_EVENT, "measure": "active", "window_days": 1},
+            {"event": PROBE_EVENT, "measure": "active", "window_days": 30},
+            {"event": PROBE_EVENT + "_b", "measure": "total"},
+        ],
+    )
+
+
 EVENT_SHAPES: dict[str, Callable[[Any], dict[str, Any]]] = {
     "base": _base,
     "week": _week,
@@ -208,6 +250,10 @@ EVENT_SHAPES: dict[str, Callable[[Any], dict[str, Any]]] = {
     "numeric_fold": _numeric_fold,
     "epoch_millis": _epoch_millis,
     "named_zone": _named_zone,
+    "active_day": _active_day,
+    "active_week_future": _active_week_future,
+    "active_breakdown": _active_breakdown,
+    "active_overlay_mixed": _active_overlay_mixed,
 }
 
 
