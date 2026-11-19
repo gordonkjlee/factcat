@@ -287,3 +287,27 @@ def test_can_run_statement_matches_a_quoted_or_lower_case_pick(snowflake_stack):
             private_key_path=snowflake_stack.key,
         )
         assert got["warehouse"] == "COMPUTE_WH"
+
+
+def test_can_run_statement_keeps_a_quoted_name_case_sensitive(snowflake_stack):
+    """``"my_wh"`` and ``MY_WH`` are two warehouses; a fallback to one is not the other.
+
+    Mutation: fold the case of quoted names again; this goes green-to-red.
+    """
+    snowflake_stack.cur.description = [("FC_ROLE",), ("FC_WH",)]
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", "MY_WH")]
+    with pytest.raises(WarehouseNotUsable, match="warehouse MY_WH"):
+        can_run_statement(
+            account="xy12345",
+            user="ANALYST",
+            warehouse='"my_wh"',
+            private_key_path=snowflake_stack.key,
+        )
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", "my_wh")]
+    got = can_run_statement(
+        account="xy12345",
+        user="ANALYST",
+        warehouse='"my_wh"',
+        private_key_path=snowflake_stack.key,
+    )
+    assert got["warehouse"] == "my_wh"

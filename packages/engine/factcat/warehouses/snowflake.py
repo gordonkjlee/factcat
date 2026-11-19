@@ -840,7 +840,7 @@ def can_run_statement(
     first = got[0] if got else {}
     current_role = str(_row_get(first, "fc_role", "CURRENT_ROLE()") or role or "")
     current_wh = str(_row_get(first, "fc_wh", "CURRENT_WAREHOUSE()") or "").strip()
-    if _warehouse_key(current_wh) != _warehouse_key(warehouse):
+    if current_wh != _warehouse_key(warehouse):
         raise WarehouseNotUsable(
             f"Role {current_role or 'the default role'} has no USAGE on warehouse "
             f"{warehouse}: the session opened with "
@@ -850,10 +850,10 @@ def can_run_statement(
 
 
 def _warehouse_key(name: str) -> str:
-    """A warehouse name for comparison: quotes off, case folded."""
+    """The name Snowflake resolves a pick to: quoted kept exact, unquoted upper-cased."""
     text = (name or "").strip()
     if len(text) >= 2 and text[0] == text[-1] == '"':
-        text = text[1:-1].replace('""', '"')
+        return text[1:-1].replace('""', '"')
     return text.upper()
 
 
