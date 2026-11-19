@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/gordonkjlee/factcat/compare/v0.6.1...v0.7.0) (2026-11-19)
+
+
+### Features
+
+* **engine:** rolling active-users measure (library) ([#111](https://github.com/gordonkjlee/factcat/issues/111)) ([193b2eb](https://github.com/gordonkjlee/factcat/commit/193b2eba67d971a1dab29bf8bc5c4bcc711a45aa))
+
+
+### Bug Fixes
+
+* **app:** refuse a billing project that cannot run jobs in Setup ([#110](https://github.com/gordonkjlee/factcat/issues/110)) ([5fb7c64](https://github.com/gordonkjlee/factcat/commit/5fb7c640e535ec506c4a1045b2550a13a08a3198))
+
 ## [0.6.1](https://github.com/gordonkjlee/factcat/compare/v0.6.0...v0.6.1) (2026-10-04)
 
 
