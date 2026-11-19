@@ -18,7 +18,11 @@ from factcat.warehouses.bigquery import (
     test_dataset_iam,
     test_project_iam,
 )
-from factcat.warehouses.snowflake import can_run_statement, schema_write_privileges
+from factcat.warehouses.snowflake import (
+    WarehouseNotUsable,
+    can_run_statement,
+    schema_write_privileges,
+)
 from factcat_app.catalog import _sf_auth, columns_from_form, form_kind
 from factcat_app.query import (
     _ident_column,
@@ -792,6 +796,8 @@ def job_access_from_form(form: dict[str, Any]) -> dict[str, Any]:
         base = {"warehouse": warehouse, "role": str(form.get("role") or "").strip()}
         try:
             got = can_run_statement(**auth)
+        except WarehouseNotUsable as exc:
+            return {"status": "denied", "reason": "no_usage", "error": str(exc), **base}
         except AdapterError as exc:
             return {"status": "denied", "error": str(exc), **base}
         return {"status": "ok", **base, **{k: v for k, v in got.items() if v}}

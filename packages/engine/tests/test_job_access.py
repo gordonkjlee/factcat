@@ -181,7 +181,7 @@ def test_snowflake_role_without_warehouse_usage_is_denied_end_to_end(monkeypatch
         "private_key_path": str(key),
     }
     out = job_access_from_form(form)
-    assert out["status"] == "denied"
+    assert out["status"] == "denied" and out["reason"] == "no_usage"
     assert "no USAGE on warehouse WH" in out["error"]
     cur.fetchall.return_value = [("R", "WH")]
     assert job_access_from_form(form)["status"] == "ok"

@@ -11,6 +11,7 @@ from factcat.warehouses import AdapterError, DryRunNotSupported, connect
 from factcat.warehouses.snowflake import (
     SnowflakeAdapter,
     _load_snowflake,
+    WarehouseNotUsable,
     can_run_statement,
     list_roles,
     list_warehouses,
@@ -252,7 +253,7 @@ def test_can_run_statement_refuses_a_session_with_no_warehouse(snowflake_stack):
     """
     snowflake_stack.cur.description = [("FC_ROLE",), ("FC_WH",)]
     snowflake_stack.cur.fetchall.return_value = [("ANALYST", None)]
-    with pytest.raises(AdapterError, match="no USAGE on warehouse COMPUTE_WH"):
+    with pytest.raises(WarehouseNotUsable, match="no USAGE on warehouse COMPUTE_WH"):
         can_run_statement(
             account="xy12345",
             user="ANALYST",
@@ -266,7 +267,7 @@ def test_can_run_statement_refuses_a_fallback_to_another_warehouse(snowflake_sta
     """A user DEFAULT_WAREHOUSE that binds instead is not the chosen one."""
     snowflake_stack.cur.description = [("FC_ROLE",), ("FC_WH",)]
     snowflake_stack.cur.fetchall.return_value = [("ANALYST", "DEFAULT_WH")]
-    with pytest.raises(AdapterError, match="warehouse DEFAULT_WH"):
+    with pytest.raises(WarehouseNotUsable, match="warehouse DEFAULT_WH"):
         can_run_statement(
             account="xy12345",
             user="ANALYST",

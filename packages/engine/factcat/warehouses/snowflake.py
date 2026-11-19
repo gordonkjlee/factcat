@@ -790,6 +790,10 @@ def _schema_privileges_from_grants(
     return privileges
 
 
+class WarehouseNotUsable(AdapterError):
+    """The session opened, but not on the chosen warehouse."""
+
+
 def can_run_statement(
     *,
     account: str,
@@ -837,7 +841,7 @@ def can_run_statement(
     current_role = str(_row_get(first, "fc_role", "CURRENT_ROLE()") or role or "")
     current_wh = str(_row_get(first, "fc_wh", "CURRENT_WAREHOUSE()") or "").strip()
     if _warehouse_key(current_wh) != _warehouse_key(warehouse):
-        raise AdapterError(
+        raise WarehouseNotUsable(
             f"Role {current_role or 'the default role'} has no USAGE on warehouse "
             f"{warehouse}: the session opened with "
             f"{'no current warehouse' if not current_wh else 'warehouse ' + current_wh}."
