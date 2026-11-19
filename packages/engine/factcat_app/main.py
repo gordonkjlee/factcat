@@ -57,6 +57,7 @@ from .query import (
     REPORTING_TIMEZONES,
     annotate_incomplete,
     catalog_event_values,
+    collapse_active_rows,
     catalog_lookback_days,
     connection_from_form,
     event_values_sql,
@@ -910,13 +911,18 @@ async def api_run(request: Request) -> JSONResponse:
         item["bucket"] = str(r.get("bucket", ""))
         item["value"] = r.get("value")
         raw_rows.append(item)
-    rows = fill_cyclic_buckets(annotate_incomplete(raw_rows, form), form)
+    # The fuse counts rows the warehouse returned, before Active users
+    # days are reduced to Week or Month points.
+    fetched = len(raw_rows)
+    rows = fill_cyclic_buckets(
+        annotate_incomplete(collapse_active_rows(raw_rows, form), form), form
+    )
     limit = query_row_limit(form)
     body: dict[str, Any] = {
         "ok": True,
         "sql": sql,
         "rows": rows,
-        "truncated": len(rows) >= limit,
+        "truncated": fetched >= limit,
         "limit": limit,
     }
     if managed_failed:
