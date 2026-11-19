@@ -239,3 +239,50 @@ def test_can_run_statement_refusal_is_an_adapter_error(snowflake_stack):
 def test_can_run_statement_needs_a_warehouse(snowflake_stack):
     with pytest.raises(ValueError, match="warehouse"):
         can_run_statement(account="xy12345", user="U", private_key_path=snowflake_stack.key)
+
+
+def test_can_run_statement_refuses_a_session_with_no_warehouse(snowflake_stack):
+    """A role without USAGE still connects; the warehouse just never binds.
+
+    Snowflake opens the session with ``CURRENT_WAREHOUSE()`` NULL and still
+    answers ``CURRENT_ROLE()``, so a probe that only checks the statement ran
+    would say ok for a role that cannot run a single query.
+
+    Mutation: drop the warehouse read-back; this goes green-to-red.
+    """
+    snowflake_stack.cur.description = [("FC_ROLE",), ("FC_WH",)]
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", None)]
+    with pytest.raises(AdapterError, match="no USAGE on warehouse COMPUTE_WH"):
+        can_run_statement(
+            account="xy12345",
+            user="ANALYST",
+            warehouse="COMPUTE_WH",
+            private_key_path=snowflake_stack.key,
+            role="ANALYST",
+        )
+
+
+def test_can_run_statement_refuses_a_fallback_to_another_warehouse(snowflake_stack):
+    """A user DEFAULT_WAREHOUSE that binds instead is not the chosen one."""
+    snowflake_stack.cur.description = [("FC_ROLE",), ("FC_WH",)]
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", "DEFAULT_WH")]
+    with pytest.raises(AdapterError, match="warehouse DEFAULT_WH"):
+        can_run_statement(
+            account="xy12345",
+            user="ANALYST",
+            warehouse="COMPUTE_WH",
+            private_key_path=snowflake_stack.key,
+        )
+
+
+def test_can_run_statement_matches_a_quoted_or_lower_case_pick(snowflake_stack):
+    snowflake_stack.cur.description = [("FC_ROLE",), ("FC_WH",)]
+    snowflake_stack.cur.fetchall.return_value = [("ANALYST", "COMPUTE_WH")]
+    for picked in ('"COMPUTE_WH"', "compute_wh"):
+        got = can_run_statement(
+            account="xy12345",
+            user="ANALYST",
+            warehouse=picked,
+            private_key_path=snowflake_stack.key,
+        )
+        assert got["warehouse"] == "COMPUTE_WH"

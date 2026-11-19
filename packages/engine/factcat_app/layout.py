@@ -780,8 +780,8 @@ def job_access_from_form(form: dict[str, Any]) -> dict[str, Any]:
 
     BigQuery: ``bigquery.jobs.create`` on the billing project, asked of IAM
     (no job, no bytes). If IAM itself cannot be asked, a dry-run ``SELECT 1``
-    answers the same question for free. Snowflake: ``SELECT 1`` under the
-    chosen role on the chosen warehouse. ``denied`` blocks Setup's save;
+    answers the same question for free. Snowflake: a session on the chosen
+    role and warehouse that must come up with that warehouse bound. ``denied`` blocks Setup's save;
     ``error`` names a failure to check and does not.
     """
     if form_kind(form) == "snowflake":

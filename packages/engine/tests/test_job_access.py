@@ -158,6 +158,35 @@ def test_snowflake_role_or_warehouse_denial_is_denied(monkeypatch):
     assert job_access_from_form(form)["status"] == "ok"
 
 
+def test_snowflake_role_without_warehouse_usage_is_denied_end_to_end(monkeypatch, tmp_path):
+    """The real probe, a stubbed driver: the session binds no warehouse.
+
+    The connection and ``CURRENT_ROLE()`` succeed, as they do on Snowflake
+    for a role with no USAGE on the warehouse; Setup must still say denied.
+    """
+    key = tmp_path / "rsa_key.p8"
+    key.write_text("-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n", encoding="utf-8")
+    cur = MagicMock()
+    cur.description = [("FC_ROLE",), ("FC_WH",)]
+    cur.fetchall.return_value = [("R", None)]
+    connector = MagicMock()
+    connector.connect.return_value.cursor.return_value = cur
+    monkeypatch.setattr("factcat.warehouses.snowflake._load_snowflake", lambda: connector)
+    form = {
+        "kind": "snowflake",
+        "account": "xy12345",
+        "user": "U",
+        "warehouse": "WH",
+        "role": "R",
+        "private_key_path": str(key),
+    }
+    out = job_access_from_form(form)
+    assert out["status"] == "denied"
+    assert "no USAGE on warehouse WH" in out["error"]
+    cur.fetchall.return_value = [("R", "WH")]
+    assert job_access_from_form(form)["status"] == "ok"
+
+
 def test_snowflake_without_a_warehouse_is_skipped():
     form = {"kind": "snowflake", "account": "xy12345", "user": "U"}
     assert job_access_from_form(form)["status"] == "skipped"
